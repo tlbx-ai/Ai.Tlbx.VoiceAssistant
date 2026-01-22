@@ -25,9 +25,10 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi.Extensions
             builder.Services.AddScoped<IVoiceProvider>(provider =>
             {
                 var logAction = provider.GetService<Action<LogLevel, string>>();
+                var httpClient = provider.GetService<System.Net.Http.HttpClient>();
                 var tools = provider.GetServices<IVoiceTool>().ToList();
-                
-                var voiceProvider = new OpenAiVoiceProvider(apiKey, logAction);
+
+                var voiceProvider = new OpenAiVoiceProvider(apiKey, logAction, httpClient);
                 
                 // Pre-configure with tools if any are registered
                 if (tools.Any())

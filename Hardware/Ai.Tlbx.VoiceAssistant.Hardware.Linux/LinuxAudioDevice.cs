@@ -650,9 +650,18 @@ namespace Ai.Tlbx.VoiceAssistant.Hardware.Linux
                         // Recording loop
                         while (!_recordingCts.Token.IsCancellationRequested)
                         {
-                            // Read audio data
-                            long framesRead = AlsaNative.snd_pcm_readi(_captureHandle, buffer, (ulong)framesPerBuffer);
-                            
+                            // Pin buffer during P/Invoke to prevent GC from moving it
+                            var handle = GCHandle.Alloc(buffer, GCHandleType.Pinned);
+                            long framesRead;
+                            try
+                            {
+                                framesRead = AlsaNative.snd_pcm_readi(_captureHandle, buffer, (ulong)framesPerBuffer);
+                            }
+                            finally
+                            {
+                                handle.Free();
+                            }
+
                             // Handle errors
                             if (framesRead < 0)
                             {

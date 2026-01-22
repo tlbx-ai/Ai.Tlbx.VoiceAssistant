@@ -126,10 +126,11 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.XAi
                 _webSocket = new ClientWebSocket();
                 _webSocket.Options.SetRequestHeader("Authorization", $"Bearer {_apiKey}");
 
-                _cts = new CancellationTokenSource(CONNECTION_TIMEOUT_MS);
+                var connectionCts = new CancellationTokenSource(CONNECTION_TIMEOUT_MS);
 
                 var uri = new Uri(REALTIME_WEBSOCKET_ENDPOINT);
-                await _webSocket.ConnectAsync(uri, _cts.Token);
+                await _webSocket.ConnectAsync(uri, connectionCts.Token);
+                connectionCts.Dispose();
 
                 OnStatusChanged?.Invoke("Connected to xAI");
 
@@ -366,11 +367,22 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.XAi
 
         private async Task SendMessageAsync(string message)
         {
-            if (_webSocket?.State != WebSocketState.Open)
-                return;
+            try
+            {
+                if (_webSocket?.State != WebSocketState.Open)
+                    return;
 
-            var buffer = Encoding.UTF8.GetBytes(message);
-            await _webSocket.SendAsync(new ArraySegment<byte>(buffer), WebSocketMessageType.Text, true, CancellationToken.None);
+                var buffer = Encoding.UTF8.GetBytes(message);
+                await _webSocket.SendAsync(new ArraySegment<byte>(buffer), WebSocketMessageType.Text, true, CancellationToken.None);
+            }
+            catch (ObjectDisposedException)
+            {
+                // WebSocket closed during send - expected during disconnect
+            }
+            catch (WebSocketException ex)
+            {
+                _logAction(LogLevel.Warn, $"WebSocket send failed: {ex.Message}");
+            }
         }
 
         private async Task ReceiveMessagesAsync(CancellationToken cancellationToken)
@@ -714,17 +726,29 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.XAi
             await Task.CompletedTask;
         }
 
-        private async void HandleInterruption()
+        private void HandleInterruption()
         {
-            _logAction(LogLevel.Info, "Speech detected - user interruption");
+            _ = HandleInterruptionSafeAsync();
+        }
 
-            OnInterruptDetected?.Invoke();
-
-            if (_hasActiveResponse)
+        private async Task HandleInterruptionSafeAsync()
+        {
+            try
             {
-                _logAction(LogLevel.Info, "Interrupting active AI response");
-                await SendInterruptAsync();
-                _hasActiveResponse = false;
+                _logAction(LogLevel.Info, "Speech detected - user interruption");
+
+                OnInterruptDetected?.Invoke();
+
+                if (_hasActiveResponse)
+                {
+                    _logAction(LogLevel.Info, "Interrupting active AI response");
+                    await SendInterruptAsync();
+                    _hasActiveResponse = false;
+                }
+            }
+            catch (Exception ex)
+            {
+                _logAction(LogLevel.Error, $"Error handling interruption: {ex.Message}");
             }
         }
 

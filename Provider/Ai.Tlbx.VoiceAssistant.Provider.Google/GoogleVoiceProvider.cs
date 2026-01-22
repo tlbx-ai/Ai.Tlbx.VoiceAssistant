@@ -126,13 +126,14 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.Google
                 OnStatusChanged?.Invoke("Connecting to Google Gemini...");
 
                 _webSocket = new ClientWebSocket();
-                _cts = new CancellationTokenSource(CONNECTION_TIMEOUT_MS);
+                var connectionCts = new CancellationTokenSource(CONNECTION_TIMEOUT_MS);
 
                 var uri = new Uri($"{LIVE_API_ENDPOINT}?key={_apiKey}");
                 _logAction(LogLevel.Info, $"Connecting to: {LIVE_API_ENDPOINT}");
                 _logAction(LogLevel.Info, $"API Key present: {!string.IsNullOrEmpty(_apiKey)}, Length: {_apiKey?.Length ?? 0}");
 
-                await _webSocket.ConnectAsync(uri, _cts.Token);
+                await _webSocket.ConnectAsync(uri, connectionCts.Token);
+                connectionCts.Dispose();
 
                 OnStatusChanged?.Invoke("Connected to Google Gemini");
                 _logAction(LogLevel.Info, $"WebSocket connected, State: {_webSocket.State}");
@@ -469,19 +470,30 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.Google
 
         private async Task SendJsonAsync(string json, string? messageType)
         {
-            if (_webSocket?.State != WebSocketState.Open)
-                return;
-
-            if (messageType != null)
+            try
             {
-                var logMessage = json.Length > MESSAGE_LOG_TRUNCATE_LENGTH
-                    ? json.Substring(0, MESSAGE_LOG_TRUNCATE_LENGTH) + "..."
-                    : json;
-                _logAction(LogLevel.Info, $"[MSG-TX] {messageType}: {logMessage}");
-            }
+                if (_webSocket?.State != WebSocketState.Open)
+                    return;
 
-            var buffer = Encoding.UTF8.GetBytes(json);
-            await _webSocket.SendAsync(new ArraySegment<byte>(buffer), WebSocketMessageType.Text, true, CancellationToken.None);
+                if (messageType != null)
+                {
+                    var logMessage = json.Length > MESSAGE_LOG_TRUNCATE_LENGTH
+                        ? json.Substring(0, MESSAGE_LOG_TRUNCATE_LENGTH) + "..."
+                        : json;
+                    _logAction(LogLevel.Info, $"[MSG-TX] {messageType}: {logMessage}");
+                }
+
+                var buffer = Encoding.UTF8.GetBytes(json);
+                await _webSocket.SendAsync(new ArraySegment<byte>(buffer), WebSocketMessageType.Text, true, CancellationToken.None);
+            }
+            catch (ObjectDisposedException)
+            {
+                // WebSocket closed during send - expected during disconnect
+            }
+            catch (WebSocketException ex)
+            {
+                _logAction(LogLevel.Warn, $"WebSocket send failed: {ex.Message}");
+            }
         }
 
         private async Task ReceiveMessagesAsync(CancellationToken cancellationToken)

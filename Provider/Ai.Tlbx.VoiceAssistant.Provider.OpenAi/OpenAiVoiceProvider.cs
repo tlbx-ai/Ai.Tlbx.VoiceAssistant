@@ -31,6 +31,8 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi
         private readonly string _apiKey;
         private readonly Action<LogLevel, string> _logAction;
         private readonly OpenAiToolTranslator _toolTranslator = new();
+        private readonly HttpClient _httpClient;
+        private readonly bool _ownsHttpClient;
         private ClientWebSocket? _webSocket;
         private Task? _receiveTask;
         private CancellationTokenSource? _cts;
@@ -99,11 +101,14 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi
         /// </summary>
         /// <param name="apiKey">The OpenAI API key. If null, will try to get from environment variable OPENAI_API_KEY.</param>
         /// <param name="logAction">Optional logging action.</param>
-        public OpenAiVoiceProvider(string? apiKey = null, Action<LogLevel, string>? logAction = null)
+        /// <param name="httpClient">Optional HttpClient for session creation. If not provided, a new instance will be created and owned by this provider.</param>
+        public OpenAiVoiceProvider(string? apiKey = null, Action<LogLevel, string>? logAction = null, HttpClient? httpClient = null)
         {
-            _apiKey = apiKey ?? Environment.GetEnvironmentVariable("OPENAI_API_KEY") 
+            _apiKey = apiKey ?? Environment.GetEnvironmentVariable("OPENAI_API_KEY")
                 ?? throw new InvalidOperationException("OpenAI API key must be provided or set in OPENAI_API_KEY environment variable");
             _logAction = logAction ?? ((level, message) => { /* no-op */ });
+            _httpClient = httpClient ?? new HttpClient();
+            _ownsHttpClient = httpClient == null;
         }
 
         /// <summary>
@@ -116,10 +121,7 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi
                 throw new InvalidOperationException("Settings must be configured before creating session");
 
             // Creating client secret for ephemeral key
-            
-            using var httpClient = new HttpClient();
-            httpClient.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", _apiKey);
-            
+
             // Create request with session configuration
             var request = new ClientSecretRequest
             {
@@ -137,9 +139,12 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi
             };
 
             var json = JsonSerializer.Serialize(request, OpenAiJsonContext.Default.ClientSecretRequest);
-            var content = new StringContent(json, Encoding.UTF8, "application/json");
-            
-            var response = await httpClient.PostAsync(REALTIME_SESSION_ENDPOINT, content);
+
+            using var httpRequest = new HttpRequestMessage(HttpMethod.Post, REALTIME_SESSION_ENDPOINT);
+            httpRequest.Headers.Authorization = new AuthenticationHeaderValue("Bearer", _apiKey);
+            httpRequest.Content = new StringContent(json, Encoding.UTF8, "application/json");
+
+            var response = await _httpClient.SendAsync(httpRequest);
             
             if (!response.IsSuccessStatusCode)
             {
@@ -210,10 +215,11 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi
                 _webSocket.Options.SetRequestHeader("Authorization", $"Bearer {ephemeralKey}");
                 // Beta header removed for production API
 
-                _cts = new CancellationTokenSource(CONNECTION_TIMEOUT_MS);
+                var connectionCts = new CancellationTokenSource(CONNECTION_TIMEOUT_MS);
 
                 var uri = new Uri($"{REALTIME_WEBSOCKET_ENDPOINT}?model={_settings.Model.ToApiString()}");
-                await _webSocket.ConnectAsync(uri, _cts.Token);
+                await _webSocket.ConnectAsync(uri, connectionCts.Token);
+                connectionCts.Dispose();
 
                 OnStatusChanged?.Invoke("Connected to OpenAI");
 
@@ -452,11 +458,22 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi
 
         private async Task SendMessageAsync(string message)
         {
-            if (_webSocket?.State != WebSocketState.Open)
-                return;
+            try
+            {
+                if (_webSocket?.State != WebSocketState.Open)
+                    return;
 
-            var buffer = Encoding.UTF8.GetBytes(message);
-            await _webSocket.SendAsync(new ArraySegment<byte>(buffer), WebSocketMessageType.Text, true, CancellationToken.None);
+                var buffer = Encoding.UTF8.GetBytes(message);
+                await _webSocket.SendAsync(new ArraySegment<byte>(buffer), WebSocketMessageType.Text, true, CancellationToken.None);
+            }
+            catch (ObjectDisposedException)
+            {
+                // WebSocket closed during send - expected during disconnect
+            }
+            catch (WebSocketException ex)
+            {
+                _logAction(LogLevel.Warn, $"WebSocket send failed: {ex.Message}");
+            }
         }
 
         private async Task ReceiveMessagesAsync(CancellationToken cancellationToken)
@@ -860,23 +877,31 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi
             await Task.CompletedTask;
         }
         
-        private async void HandleInterruption()
+        private void HandleInterruption()
         {
-            _logAction(LogLevel.Info, "Speech detected - user interruption");
-            
-            // Always clear audio queue when speech is detected (like in the old code)
-            OnInterruptDetected?.Invoke();
-            
-            // Only cancel if there's an active response
-            if (_hasActiveResponse)
+            _ = HandleInterruptionSafeAsync();
+        }
+
+        private async Task HandleInterruptionSafeAsync()
+        {
+            try
             {
-                _logAction(LogLevel.Info, "Interrupting active AI response");
-                await SendInterruptAsync();
-                _hasActiveResponse = false;
+                _logAction(LogLevel.Info, "Speech detected - user interruption");
+
+                // Always clear audio queue when speech is detected (like in the old code)
+                OnInterruptDetected?.Invoke();
+
+                // Only cancel if there's an active response
+                if (_hasActiveResponse)
+                {
+                    _logAction(LogLevel.Info, "Interrupting active AI response");
+                    await SendInterruptAsync();
+                    _hasActiveResponse = false;
+                }
             }
-            else
+            catch (Exception ex)
             {
-                // No response to interrupt - this is normal
+                _logAction(LogLevel.Error, $"Error handling interruption: {ex.Message}");
             }
         }
 
@@ -924,10 +949,15 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi
             try
             {
                 await DisconnectAsync();
-                
+
                 _webSocket?.Dispose();
                 _cts?.Dispose();
-                
+
+                if (_ownsHttpClient)
+                {
+                    _httpClient.Dispose();
+                }
+
                 _isDisposed = true;
                 _logAction(LogLevel.Info, "OpenAI voice provider disposed");
             }

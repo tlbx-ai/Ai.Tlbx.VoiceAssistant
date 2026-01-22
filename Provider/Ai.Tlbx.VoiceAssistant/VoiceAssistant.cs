@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Concurrent;
 using System.Linq;
 using System.Threading.Tasks;
 using Ai.Tlbx.VoiceAssistant.Interfaces;
@@ -29,8 +30,8 @@ namespace Ai.Tlbx.VoiceAssistant
         private DateTime? _sessionStartTime = null;
         private DateTime _lastUsageUpdateTime = DateTime.MinValue;
         
-        // Static cache for generated beeps (lazy-initialized)
-        private static readonly Dictionary<(int frequency, int duration, int sampleRate), string> _beepCache = new();
+        // Static cache for generated beeps (thread-safe)
+        private static readonly ConcurrentDictionary<(int frequency, int duration, int sampleRate), string> _beepCache = new();
 
         // UI Callbacks - Direct actions for simple 1:1 communication
         /// <summary>
@@ -638,7 +639,12 @@ namespace Ai.Tlbx.VoiceAssistant
 
         private int _audioReceivedCount = 0;
 
-        private async void OnAudioDataReceived(object sender, MicrophoneAudioReceivedEventArgs e)
+        private void OnAudioDataReceived(object sender, MicrophoneAudioReceivedEventArgs e)
+        {
+            _ = ProcessAudioDataSafeAsync(e);
+        }
+
+        private async Task ProcessAudioDataSafeAsync(MicrophoneAudioReceivedEventArgs e)
         {
             try
             {
@@ -706,6 +712,12 @@ namespace Ai.Tlbx.VoiceAssistant
                 
                 if (_provider != null)
                 {
+                    _provider.OnMessageReceived = null;
+                    _provider.OnAudioReceived = null;
+                    _provider.OnStatusChanged = null;
+                    _provider.OnError = null;
+                    _provider.OnInterruptDetected = null;
+                    _provider.OnUsageReceived = null;
                     await _provider.DisposeAsync();
                 }
                 await _hardwareAccess.DisposeAsync();

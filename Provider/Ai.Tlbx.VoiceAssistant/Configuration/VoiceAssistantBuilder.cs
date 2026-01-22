@@ -1,4 +1,5 @@
 using System.Diagnostics.CodeAnalysis;
+using System.Net.Http;
 using Ai.Tlbx.VoiceAssistant.Interfaces;
 using Ai.Tlbx.VoiceAssistant.Models;
 using Microsoft.Extensions.DependencyInjection;
@@ -66,6 +67,18 @@ namespace Ai.Tlbx.VoiceAssistant.Configuration
         public VoiceAssistantBuilder WithLogging(Action<LogLevel, string> logAction)
         {
             _services.AddSingleton(logAction);
+            return this;
+        }
+
+        /// <summary>
+        /// Configures an HttpClient for providers that need HTTP communication.
+        /// If not configured, providers will create and manage their own HttpClient instances.
+        /// </summary>
+        /// <param name="httpClient">The HttpClient to use for HTTP requests.</param>
+        /// <returns>The builder instance for method chaining.</returns>
+        public VoiceAssistantBuilder WithHttpClient(HttpClient httpClient)
+        {
+            _services.AddSingleton(httpClient);
             return this;
         }
 
