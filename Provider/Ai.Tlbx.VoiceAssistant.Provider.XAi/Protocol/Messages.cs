@@ -185,6 +185,15 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.XAi.Protocol
 
         [JsonPropertyName("turn_detection")]
         public XaiTurnDetectionConfig? TurnDetection { get; set; }
+
+        [JsonPropertyName("input_audio_transcription")]
+        public XaiInputAudioTranscriptionConfig? InputAudioTranscription { get; set; }
+    }
+
+    public class XaiInputAudioTranscriptionConfig
+    {
+        [JsonPropertyName("language")]
+        public string? Language { get; set; }
     }
 
     public class XaiAudioConfig
@@ -218,6 +227,21 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.XAi.Protocol
     {
         [JsonPropertyName("type")]
         public string? Type { get; set; }
+
+        [JsonPropertyName("threshold")]
+        public double? Threshold { get; set; }
+
+        [JsonPropertyName("prefix_padding_ms")]
+        public int? PrefixPaddingMs { get; set; }
+
+        [JsonPropertyName("silence_duration_ms")]
+        public int? SilenceDurationMs { get; set; }
+
+        [JsonPropertyName("create_response")]
+        public bool? CreateResponse { get; set; }
+
+        [JsonPropertyName("interrupt_response")]
+        public bool? InterruptResponse { get; set; }
     }
 
     #endregion

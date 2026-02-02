@@ -55,6 +55,12 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.XAi.Models
         /// Enable xAI's built-in X (Twitter) search tool for posts, trends, and discussions.
         /// </summary>
         public bool EnableXSearch { get; set; } = false;
+
+        /// <summary>
+        /// ISO-639-1 language code hint for input audio recognition (e.g. "de", "en").
+        /// Improves accuracy and latency when the expected language is known.
+        /// </summary>
+        public string? InputAudioLanguage { get; set; }
     }
 
     /// <summary>
@@ -62,9 +68,11 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.XAi.Models
     /// </summary>
     public class XaiTurnDetection
     {
-        /// <summary>
-        /// Type of turn detection. Use "server_vad" for server-side voice activity detection.
-        /// </summary>
         public string Type { get; set; } = "server_vad";
+        public double Threshold { get; set; } = 0.5;
+        public int PrefixPaddingMs { get; set; } = 300;
+        public int SilenceDurationMs { get; set; } = 200;
+        public bool CreateResponse { get; set; } = true;
+        public bool InterruptResponse { get; set; } = true;
     }
 }

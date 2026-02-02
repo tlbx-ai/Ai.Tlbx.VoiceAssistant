@@ -17,6 +17,7 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.XAi.Protocol
     [JsonSerializable(typeof(XaiAudioEndpointConfig))]
     [JsonSerializable(typeof(XaiAudioFormatConfig))]
     [JsonSerializable(typeof(XaiTurnDetectionConfig))]
+    [JsonSerializable(typeof(XaiInputAudioTranscriptionConfig))]
     [JsonSerializable(typeof(XaiToolDefinition))]
     [JsonSerializable(typeof(XaiToolParameters))]
     [JsonSerializable(typeof(XaiToolProperty))]

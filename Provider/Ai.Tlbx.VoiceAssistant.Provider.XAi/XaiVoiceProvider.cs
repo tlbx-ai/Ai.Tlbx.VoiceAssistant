@@ -353,8 +353,19 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.XAi
                             Speed = _settings.TalkingSpeed
                         }
                     },
+                    InputAudioTranscription = _settings.InputAudioLanguage != null
+                        ? new XaiInputAudioTranscriptionConfig { Language = _settings.InputAudioLanguage }
+                        : null,
                     TurnDetection = _settings.TurnDetection != null
-                        ? new XaiTurnDetectionConfig { Type = _settings.TurnDetection.Type }
+                        ? new XaiTurnDetectionConfig
+                        {
+                            Type = _settings.TurnDetection.Type,
+                            Threshold = _settings.TurnDetection.Threshold,
+                            PrefixPaddingMs = _settings.TurnDetection.PrefixPaddingMs,
+                            SilenceDurationMs = _settings.TurnDetection.SilenceDurationMs,
+                            CreateResponse = _settings.TurnDetection.CreateResponse,
+                            InterruptResponse = _settings.TurnDetection.InterruptResponse
+                        }
                         : null
                 }
             };
