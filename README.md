@@ -17,30 +17,23 @@ dotnet add package Ai.Tlbx.VoiceAssistant.Provider.OpenAi   # and/or .Google, .X
 dotnet add package Ai.Tlbx.VoiceAssistant.Hardware.Web
 ```
 
-**2. Add API keys** (`appsettings.json`):
-```json
-{
-  "VoiceProviders": {
-    "OpenAI": "sk-...",
-    "Google": "AIza...",
-    "xAI": "xai-..."
-  }
-}
+**2. Set API keys** (environment variables or pass directly to provider constructors):
+```
+OPENAI_API_KEY=sk-...
+GOOGLE_API_KEY=AIza...
+XAI_API_KEY=xai-...
 ```
 
 **3. Configure services** (`Program.cs`):
 ```csharp
-// Register provider factory and audio hardware
-builder.Services.AddSingleton<IVoiceProviderFactory, VoiceProviderFactory>();
+// Register audio hardware for Blazor
 builder.Services.AddScoped<IAudioHardwareAccess, WebAudioAccess>();
 ```
 
 **4. Create a voice page** (`Voice.razor`):
 ```razor
 @page "/voice"
-@inject IVoiceProviderFactory ProviderFactory
 @inject IAudioHardwareAccess AudioHardware
-@inject IConfiguration Config
 
 <select @bind="_selectedProvider">
     <option value="openai">OpenAI</option>
@@ -68,26 +61,26 @@ builder.Services.AddScoped<IAudioHardwareAccess, WebAudioAccess>();
             return;
         }
 
-        // Create provider based on selection
+        // Create provider and settings based on selection
         var (provider, settings) = _selectedProvider switch
         {
             "openai" => (
-                ProviderFactory.CreateOpenAi(Config["VoiceProviders:OpenAI"]!),
+                (IVoiceProvider)new OpenAiVoiceProvider("sk-..."),
                 (IVoiceSettings)new OpenAiVoiceSettings { Instructions = "You are helpful." }
             ),
             "google" => (
-                ProviderFactory.CreateGoogle(Config["VoiceProviders:Google"]!),
+                (IVoiceProvider)new GoogleVoiceProvider("AIza..."),
                 (IVoiceSettings)new GoogleVoiceSettings { Instructions = "You are helpful." }
             ),
             "xai" => (
-                ProviderFactory.CreateXai(Config["VoiceProviders:xAI"]!),
+                (IVoiceProvider)new XaiVoiceProvider("xai-..."),
                 (IVoiceSettings)new XaiVoiceSettings { Instructions = "You are helpful." }
             ),
             _ => throw new InvalidOperationException()
         };
 
-        _assistant = new VoiceAssistant(provider, AudioHardware);
-        _assistant.OnMessageReceived = msg => InvokeAsync(() => { _messages.Add(msg); StateHasChanged(); });
+        _assistant = new VoiceAssistant(AudioHardware, provider);
+        _assistant.OnMessageAdded = msg => InvokeAsync(() => { _messages.Add(msg); StateHasChanged(); });
 
         await _assistant.StartAsync(settings);
     }
@@ -116,20 +109,64 @@ builder.Services.AddScoped<IAudioHardwareAccess, WebAudioAccess>();
 ## Switch Providers in One Line
 
 ```csharp
-// OpenAI
-var provider = factory.CreateOpenAi(apiKey);
+// OpenAI — voices: Alloy, Ash, Ballad, Coral, Echo, Sage, Shimmer, Verse, Marin, Cedar
+var provider = new OpenAiVoiceProvider(apiKey);
 var settings = new OpenAiVoiceSettings { Voice = AssistantVoice.Alloy };
 
-// Google Gemini
-var provider = factory.CreateGoogle(apiKey);
-var settings = new GoogleVoiceSettings { Voice = GeminiVoice.Puck };
+// Google Gemini — voices: Puck, Charon, Kore, Fenrir, Aoede, Leda, Orus, Zephyr
+var provider = new GoogleVoiceProvider(apiKey);
+var settings = new GoogleVoiceSettings { Voice = GoogleVoice.Puck };
 
-// xAI Grok
-var provider = factory.CreateXai(apiKey);
+// xAI Grok — voices: Ara, Rex, Sal, Eve, Leo
+var provider = new XaiVoiceProvider(apiKey);
 var settings = new XaiVoiceSettings { Voice = XaiVoice.Ara };
 ```
 
 Same `VoiceAssistant` API, same tool definitions — just swap the provider.
+
+### Provider-Specific Settings
+
+Each provider has its own settings class with shared and provider-specific options:
+
+**Shared (`IVoiceSettings`):** `Instructions`, `Tools`, `TalkingSpeed`
+
+```csharp
+// OpenAI — full TalkingSpeed support (0.25–1.5), turn detection, eagerness, transcription
+new OpenAiVoiceSettings
+{
+    Voice = AssistantVoice.Coral,
+    TalkingSpeed = 1.2,
+    Eagerness = Eagerness.auto,
+    TurnDetection = new TurnDetection { SilenceDurationMs = 200 },
+    MostLikelySpokenLanguage = "en"
+};
+
+// Google — temperature, voice activity detection, context compression
+new GoogleVoiceSettings
+{
+    Voice = GoogleVoice.Puck,
+    LanguageCode = "en",
+    Temperature = 0.8,
+    AutomaticContextCompression = true
+};
+
+// xAI — VAD turn detection, language hint, web/X search
+new XaiVoiceSettings
+{
+    Voice = XaiVoice.Ara,
+    InputAudioLanguage = "en",
+    TurnDetection = new XaiTurnDetection { SilenceDurationMs = 200, Threshold = 0.5 },
+    EnableWebSearch = true
+};
+```
+
+| Setting | OpenAI | Google | xAI |
+|---------|--------|--------|-----|
+| TalkingSpeed | 0.25–1.5 | interface only | interface only |
+| Turn detection / VAD | `TurnDetection` | `VoiceActivityDetection` | `XaiTurnDetection` |
+| Language hint | `MostLikelySpokenLanguage` | `LanguageCode` | `InputAudioLanguage` |
+| Context management | `AutomaticContextTruncation` | `AutomaticContextCompression` | — |
+| Web search | — | — | `EnableWebSearch`, `EnableXSearch` |
 
 ---
 
@@ -351,10 +388,10 @@ dotnet add package Ai.Tlbx.VoiceAssistant.Hardware.Linux
 ```
 
 ```csharp
-var provider = new OpenAiVoiceProvider(apiKey, logger);
 var hardware = new WindowsAudioHardware(); // or LinuxAudioDevice
+var provider = new OpenAiVoiceProvider(apiKey);
 
-var assistant = new VoiceAssistant(provider, hardware);
+var assistant = new VoiceAssistant(hardware, provider);
 await assistant.StartAsync(settings);
 
 Console.ReadKey(); // Talk now
