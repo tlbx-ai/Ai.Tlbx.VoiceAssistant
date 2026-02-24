@@ -64,7 +64,7 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi.Extensions
             {
                 Instructions = instructions,
                 Voice = voice,
-                Model = OpenAiRealtimeModel.Gpt4oRealtimePreview20250603,
+                Model = OpenAiRealtimeModel.GptRealtime15,
                 TurnDetection = new TurnDetection
                 {
                     Type = "server_vad",
@@ -76,7 +76,6 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi.Extensions
                 },
                 InputAudioTranscription = new InputAudioTranscription
                 {
-                    Model = "gpt-4o-transcribe",
                     Enabled = true
                 },
                 OutputAudioFormat = "pcm16"

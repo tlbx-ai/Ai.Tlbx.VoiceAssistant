@@ -22,7 +22,7 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi.Models
         /// <summary>
         /// The OpenAI model to use for the conversation.
         /// </summary>
-        public OpenAiRealtimeModel Model { get; set; } = OpenAiRealtimeModel.Gpt4oRealtimePreview20250603;
+        public OpenAiRealtimeModel Model { get; set; } = OpenAiRealtimeModel.GptRealtime15;
 
         /// <summary>
         /// The voice to use for AI responses.
@@ -66,8 +66,6 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi.Models
         public string MostLikelySpokenLanguage { get; set; } = "de";
 
         public string TranscriptionHint { get; set; } = "expect german business/IT/Contstruction and Tender law terms";
-
-        public string TransscribeModel { get; set; } = "gpt-4o-transcribe-latest";
 
         /// <summary>
         /// Input audio transcription settings.
@@ -144,10 +142,7 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi.Models
     /// </summary>
     public class InputAudioTranscription
     {
-        /// <summary>
-        /// Model to use for transcription. (whisper-1, gpt-4o-transcribe-latest, gpt-4o-mini-transcribe, and gpt-4o-transcribe)
-        /// </summary>
-        public string Model { get; set; } = "whisper-1";
+        public OpenAiTranscriptionModel Model { get; set; } = OpenAiTranscriptionModel.Gpt4oMiniTranscribe;
 
         /// <summary>
         /// Whether to enable transcription.

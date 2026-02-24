@@ -57,6 +57,20 @@
                                     <VoiceSelect AvailableVoices="@availableVoices" @bind-SelectedVoice="@currentVoiceString" Disabled="@((voiceAssistant?.IsConnecting ?? false) || (voiceAssistant?.IsRecording ?? false))" />
                                 </div>
 
+                                <!-- Model Selection -->
+                                <div>
+                                    <label class="block text-xs font-medium text-gray-600 mb-1">Model</label>
+                                    <select class="w-full p-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-sm"
+                                            value="@_currentModelString"
+                                            @onchange="OnModelChanged"
+                                            disabled="@((voiceAssistant?.IsConnecting ?? false) || (voiceAssistant?.IsRecording ?? false))">
+                                        @foreach (var model in availableModels)
+                                        {
+                                            <option value="@model">@model</option>
+                                        }
+                                    </select>
+                                </div>
+
                                 <!-- Voice Speed -->
                                 <VoiceSpeedSlider SelectedSpeed="@currentVoiceSpeed" SelectedSpeedChanged="OnVoiceSpeedChanged" Disabled="@((voiceAssistant?.IsConnecting ?? false) || (voiceAssistant?.IsRecording ?? false))" />
 
@@ -185,6 +199,16 @@
     private double currentVoiceSpeed = 1.0;
     private List<string> availableVoices = Enum.GetValues<AssistantVoice>().Select(v => v.ToString()).ToList();
 
+    // Model management (provider-specific)
+    private string _currentModelString = nameof(OpenAiRealtimeModel.GptRealtime15);
+    private List<string> availableModels = Enum.GetValues<OpenAiRealtimeModel>().Select(v => v.ToString()).ToList();
+
+    private void OnModelChanged(ChangeEventArgs e)
+    {
+        _currentModelString = e.Value?.ToString() ?? _currentModelString;
+        Log(LogLevel.Info, $"Model changed to: {_currentModelString}");
+    }
+
     // Tool management
     private List<IVoiceTool> availableTools = new();
     private List<IVoiceTool> enabledTools = new();
@@ -256,16 +280,22 @@
         {
             availableVoices = Enum.GetValues<AssistantVoice>().Select(v => v.ToString()).ToList();
             _currentVoiceString = "Alloy";
+            availableModels = Enum.GetValues<OpenAiRealtimeModel>().Select(v => v.ToString()).ToList();
+            _currentModelString = nameof(OpenAiRealtimeModel.GptRealtime15);
         }
         else if (_selectedProviderString == "Google")
         {
             availableVoices = Enum.GetValues<GoogleVoice>().Select(v => v.ToString()).ToList();
             _currentVoiceString = "Aoede";
+            availableModels = Enum.GetValues<GoogleModel>().Select(v => v.ToString()).ToList();
+            _currentModelString = nameof(GoogleModel.Gemini25FlashNativeAudio);
         }
         else if (_selectedProviderString == "xAI")
         {
             availableVoices = Enum.GetValues<XaiVoice>().Select(v => v.ToString()).ToList();
             _currentVoiceString = "Ara";
+            availableModels = new() { "Default" };
+            _currentModelString = "Default";
         }
     }
 
@@ -545,18 +575,23 @@
                     openAiVoice = AssistantVoice.Alloy;
                 }
 
+                if (!Enum.TryParse<OpenAiRealtimeModel>(_currentModelString, out var openAiModel))
+                {
+                    openAiModel = OpenAiRealtimeModel.GptRealtime15;
+                }
+
                 settings = new OpenAiVoiceSettings
                 {
                     Instructions = instructions,
                     Voice = openAiVoice,
                     InputAudioTranscription = new InputAudioTranscription
                     {
-                        Model = "gpt-4o-transcribe",
+                        Model = OpenAiTranscriptionModel.Gpt4oTranscribe,
                         Prompt = "Expect German with slight accent",
                         Enabled = true,
                     },
                     TalkingSpeed = currentVoiceSpeed,
-                    Model = OpenAiRealtimeModel.Gpt520250828,
+                    Model = openAiModel,
                     Tools = enabledTools.ToList()
                 };
 
@@ -569,12 +604,17 @@
                     googleVoice = GoogleVoice.Aoede;
                 }
 
+                if (!Enum.TryParse<GoogleModel>(_currentModelString, out var googleModel))
+                {
+                    googleModel = GoogleModel.Gemini25FlashNativeAudio;
+                }
+
                 settings = new GoogleVoiceSettings
                 {
                     Instructions = instructions,
                     Voice = googleVoice,
                     TalkingSpeed = currentVoiceSpeed,
-                    Model = GoogleModel.Gemini25FlashNativeAudio,
+                    Model = googleModel,
                     ResponseModality = "AUDIO",
                     LanguageCode = "de-DE", // Set to German - change to "en-US" for English or null for auto-detect
                     Tools = enabledTools.ToList(),

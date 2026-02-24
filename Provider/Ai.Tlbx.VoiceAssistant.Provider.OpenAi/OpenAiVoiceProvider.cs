@@ -426,7 +426,7 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi
                             Transcription = _settings.InputAudioTranscription.Enabled
                                 ? new TranscriptionConfig
                                 {
-                                    Model = _settings.InputAudioTranscription.Model,
+                                    Model = _settings.InputAudioTranscription.Model.ToApiString(),
                                     Prompt = _settings.InputAudioTranscription.Prompt
                                 }
                                 : null,

@@ -14,9 +14,14 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi.Models
         GptRealtime,
 
         /// <summary>
+        /// GPT Realtime 1.5 - improved reasoning, transcription accuracy, and instruction following.
+        /// </summary>
+        GptRealtime15,
+
+        /// <summary>
         /// First full release based on GPT5
         /// </summary>
-        Gpt520250828, 
+        Gpt520250828,
 
         /// <summary>
         /// GPT-4 Omni Realtime Preview - Latest version (June 2025).
@@ -62,6 +67,7 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi.Models
             return model switch
             {
                 OpenAiRealtimeModel.GptRealtime => "gpt-realtime",
+                OpenAiRealtimeModel.GptRealtime15 => "gpt-realtime-1.5",
                 OpenAiRealtimeModel.Gpt520250828 => "gpt-realtime-2025-08-28",
                 OpenAiRealtimeModel.Gpt4oRealtimePreview20250603 => "gpt-4o-realtime-preview-2025-06-03",
                 OpenAiRealtimeModel.Gpt4oRealtimePreview20241217 => "gpt-4o-realtime-preview-2024-12-17",
