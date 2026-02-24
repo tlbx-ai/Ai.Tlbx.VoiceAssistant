@@ -696,6 +696,53 @@ namespace Ai.Tlbx.VoiceAssistant.Hardware.Web
         }
 
         /// <summary>
+        /// Sets the playback EQ preset. Available presets:
+        /// flat, clarity (default), presence, brightness, warm, broadcast, demud, bathtub, loudness
+        /// </summary>
+        public async Task<bool> SetPlaybackEqPresetAsync(string presetName)
+        {
+            if (_audioModule == null)
+            {
+                Log(LogLevel.Warn, "Cannot set EQ preset: audio module is null");
+                return false;
+            }
+
+            try
+            {
+                var result = await _audioModule.InvokeAsync<bool>("setPlaybackEqPreset", presetName);
+                Log(LogLevel.Info, $"Playback EQ preset set to: {presetName} (success: {result})");
+                return result;
+            }
+            catch (Exception ex)
+            {
+                Log(LogLevel.Error, $"Error setting playback EQ preset: {ex.Message}");
+                return false;
+            }
+        }
+
+        /// <summary>
+        /// Gets the available playback EQ presets as a JSON string.
+        /// </summary>
+        public async Task<string?> GetPlaybackEqPresetsAsync()
+        {
+            if (_audioModule == null)
+            {
+                Log(LogLevel.Warn, "Cannot get EQ presets: audio module is null");
+                return null;
+            }
+
+            try
+            {
+                return await _audioModule.InvokeAsync<string>("getPlaybackEqPresets");
+            }
+            catch (Exception ex)
+            {
+                Log(LogLevel.Error, $"Error getting playback EQ presets: {ex.Message}");
+                return null;
+            }
+        }
+
+        /// <summary>
         /// Waits until all queued audio has been played back.
         /// </summary>
         /// <param name="timeout">Maximum time to wait.</param>

@@ -16,7 +16,92 @@ let isPlayingAudio = false; // Track if assistant is currently speaking
 let deEsserNode = null;    // High-shelf EQ to tame sibilance before compression
 let compressorNode = null; // Audio compressor for voice enhancement
 let makeupGainNode = null; // Input gain before compression
+let playbackEqNodes = [];  // BiquadFilterNode chain for playback EQ
+let currentEqPreset = 'clarity'; // Default EQ preset
 // Note: We properly stop streams when done - don't hog the microphone!
+
+// --- Playback EQ Presets ---
+// Each preset defines an array of BiquadFilterNode configurations.
+// Voice/Audio Engineer presets target specific frequency issues.
+// Consumer presets shape overall tonal balance.
+const EQ_PRESETS = {
+    flat: {
+        name: 'Flat',
+        description: 'No EQ processing, original signal',
+        bands: []
+    },
+    clarity: {
+        name: 'Clarity',
+        description: 'Gentle high-frequency lift to counter muffled AI voice output',
+        bands: [
+            { type: 'highshelf', frequency: 3000, gain: 3.5, Q: 0.707 }
+        ]
+    },
+    presence: {
+        name: 'Presence',
+        description: 'Emphasizes vocal articulation and detail (2-8kHz)',
+        bands: [
+            { type: 'peaking', frequency: 2500, gain: 3, Q: 1.0 },
+            { type: 'peaking', frequency: 5000, gain: 4, Q: 0.8 },
+            { type: 'highshelf', frequency: 8000, gain: 2, Q: 0.707 }
+        ]
+    },
+    brightness: {
+        name: 'Brightness',
+        description: 'Opens up the top end for air and sparkle',
+        bands: [
+            { type: 'highshelf', frequency: 3500, gain: 5, Q: 0.707 },
+            { type: 'peaking', frequency: 10000, gain: 3, Q: 0.7 }
+        ]
+    },
+    warm: {
+        name: 'Warm',
+        description: 'Full, rich, intimate voice with smooth highs',
+        bands: [
+            { type: 'lowshelf', frequency: 200, gain: 3, Q: 0.707 },
+            { type: 'peaking', frequency: 500, gain: 1.5, Q: 0.8 },
+            { type: 'peaking', frequency: 3500, gain: -1.5, Q: 0.8 }
+        ]
+    },
+    broadcast: {
+        name: 'Broadcast',
+        description: 'Professional radio/podcast voice: clean low-end, forward presence',
+        bands: [
+            { type: 'highpass', frequency: 80, gain: 0, Q: 0.707 },
+            { type: 'peaking', frequency: 250, gain: -3, Q: 1.0 },
+            { type: 'peaking', frequency: 3000, gain: 4, Q: 1.2 },
+            { type: 'highshelf', frequency: 10000, gain: 2, Q: 0.707 }
+        ]
+    },
+    demud: {
+        name: 'De-Mud',
+        description: 'Cleans up muddy low-mids, opens upper frequencies',
+        bands: [
+            { type: 'highpass', frequency: 80, gain: 0, Q: 0.707 },
+            { type: 'peaking', frequency: 300, gain: -4, Q: 1.2 },
+            { type: 'peaking', frequency: 800, gain: -2, Q: 0.8 },
+            { type: 'highshelf', frequency: 4000, gain: 3, Q: 0.707 }
+        ]
+    },
+    bathtub: {
+        name: 'Bathtub',
+        description: 'V-shaped curve: boosted lows and highs, scooped mids',
+        bands: [
+            { type: 'lowshelf', frequency: 150, gain: 5, Q: 0.707 },
+            { type: 'peaking', frequency: 800, gain: -4, Q: 0.6 },
+            { type: 'highshelf', frequency: 4000, gain: 5, Q: 0.707 }
+        ]
+    },
+    loudness: {
+        name: 'Loudness',
+        description: 'Fletcher-Munson compensation: bass and treble boost for low-volume listening',
+        bands: [
+            { type: 'lowshelf', frequency: 100, gain: 6, Q: 0.707 },
+            { type: 'peaking', frequency: 1000, gain: -1, Q: 0.5 },
+            { type: 'highshelf', frequency: 5000, gain: 5, Q: 0.707 }
+        ]
+    }
+};
 
 // Diagnostic logging levels
 const DiagnosticLevel = {
@@ -245,9 +330,8 @@ async function initAudioWithUserInteraction() {
                  console.error('PlaybackProcessor error:', event);
                  dotNetReference?.invokeMethodAsync('OnAudioError', 'Playback processor error occurred.');
              };
-             // Connect playback node to destination
-             playbackWorkletNode.connect(audioContext.destination);
-             playbackNodeConnected = true;
+             // Connect playback node through EQ chain to destination
+             connectPlaybackChain();
              console.log("PlaybackProcessor node created and connected.");
          } catch (nodeError) {
               console.error("Failed to create or connect PlaybackProcessor node:", nodeError);
@@ -383,7 +467,7 @@ async function ensureAudioContextResumed() {
              // Setup playback node again if missing
               if (!playbackWorkletNode && audioContext.state !== 'closed') {
                    playbackWorkletNode = new AudioWorkletNode(audioContext, 'playback-processor');
-                   playbackWorkletNode.connect(audioContext.destination);
+                   connectPlaybackChain();
               }
               logVerbose('AudioContext created/reinitialized in ensure function', {
                   state: audioContext.state,
@@ -408,13 +492,12 @@ async function ensureAudioContextResumed() {
             return false;
         }
     }
-     // Ensure playback node is connected
+     // Ensure playback node is connected (through EQ chain)
      if (playbackWorkletNode && playbackWorkletNode.context.state === 'running' && !playbackNodeConnected) {
           try {
-              playbackWorkletNode.connect(audioContext.destination);
-              playbackNodeConnected = true;
+              connectPlaybackChain();
               logVerbose('Reconnected playback node in ensure function');
-          } catch(e){ 
+          } catch(e){
               logNormal('Failed to reconnect playback node in ensure function', e);
           }
       }
@@ -914,6 +997,70 @@ function pcm16Base64ToFloat32(base64Audio) {
     }
 }
 
+// --- Playback EQ Chain Management ---
+
+function disconnectPlaybackChain() {
+    try { playbackWorkletNode?.disconnect(); } catch (e) { }
+    for (const node of playbackEqNodes) {
+        try { node.disconnect(); } catch (e) { }
+    }
+    playbackEqNodes = [];
+    playbackNodeConnected = false;
+}
+
+function connectPlaybackChain() {
+    disconnectPlaybackChain();
+    if (!playbackWorkletNode || !audioContext) return;
+
+    const preset = EQ_PRESETS[currentEqPreset];
+    if (!preset || preset.bands.length === 0) {
+        playbackWorkletNode.connect(audioContext.destination);
+        playbackNodeConnected = true;
+        return;
+    }
+
+    playbackEqNodes = preset.bands.map(band => {
+        const node = audioContext.createBiquadFilter();
+        node.type = band.type;
+        node.frequency.value = band.frequency;
+        if (band.gain !== undefined) node.gain.value = band.gain;
+        if (band.Q !== undefined) node.Q.value = band.Q;
+        return node;
+    });
+
+    let prev = playbackWorkletNode;
+    for (const node of playbackEqNodes) {
+        prev.connect(node);
+        prev = node;
+    }
+    prev.connect(audioContext.destination);
+    playbackNodeConnected = true;
+    logNormal(`EQ chain connected: ${preset.name} (${playbackEqNodes.length} bands)`);
+}
+
+function setPlaybackEqPreset(presetName) {
+    const key = presetName.toLowerCase();
+    if (!EQ_PRESETS[key]) {
+        console.warn(`[EQ] Unknown preset: ${presetName}. Available: ${Object.keys(EQ_PRESETS).join(', ')}`);
+        return false;
+    }
+    currentEqPreset = key;
+    if (playbackWorkletNode && audioContext && audioContext.state === 'running') {
+        connectPlaybackChain();
+    }
+    logNormal(`EQ preset set to: ${EQ_PRESETS[key].name}`);
+    return true;
+}
+
+function getPlaybackEqPresets() {
+    return JSON.stringify(Object.entries(EQ_PRESETS).map(([key, val]) => ({
+        key,
+        name: val.name,
+        description: val.description,
+        bandCount: val.bands.length
+    })));
+}
+
 // Main function to play audio using the worklet
 async function playAudio(base64Audio, sampleRate = 24000) {
      // console.log(`[js] Received playAudio request, sampleRate: ${sampleRate}, data: ${base64Audio.substring(0,30)}...`);
@@ -980,16 +1127,14 @@ async function stopAudioPlayback() {
         console.log("Sending 'clear' command to PlaybackProcessor.");
         playbackWorkletNode.port.postMessage({ command: 'clear' });
         
-        // Disconnect and reconnect to immediately stop any audio in the pipeline
-        playbackWorkletNode.disconnect();
-        playbackNodeConnected = false;
-        
+        // Disconnect EQ chain and worklet to immediately stop any audio in the pipeline
+        disconnectPlaybackChain();
+
         // Reconnect after a small delay to be ready for next playback
         setTimeout(() => {
             if (playbackWorkletNode && audioContext && audioContext.state === 'running') {
                 try {
-                    playbackWorkletNode.connect(audioContext.destination);
-                    playbackNodeConnected = true;
+                    connectPlaybackChain();
                     console.log("PlaybackProcessor reconnected after stop.");
                 } catch (e) {
                     console.error("Error reconnecting playback node:", e);
@@ -1107,6 +1252,10 @@ function cleanupAudio() {
      stopAudioPlayback();
      stopMicTest(); // Ensure mic test is stopped
 
+     for (const node of playbackEqNodes) {
+         try { node.disconnect(); } catch (e) { }
+     }
+     playbackEqNodes = [];
      if (playbackWorkletNode) {
          playbackWorkletNode.disconnect();
          playbackWorkletNode = null;
@@ -1164,7 +1313,9 @@ window.audioInterop = {
     stopMicTest,
     cleanupAudio,
     getDiagnostics,
-    setDiagnosticLevel
+    setDiagnosticLevel,
+    setPlaybackEqPreset,
+    getPlaybackEqPresets
 };
 
 // Add cleanup on page unload to prevent error tones
@@ -1191,5 +1342,7 @@ export {
     stopMicTest,
     cleanupAudio,
     getDiagnostics,
-    setDiagnosticLevel
+    setDiagnosticLevel,
+    setPlaybackEqPreset,
+    getPlaybackEqPresets
 };
