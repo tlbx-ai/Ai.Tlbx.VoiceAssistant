@@ -2,7 +2,9 @@ using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.ComponentModel;
+using System.ComponentModel.DataAnnotations;
 using System.Diagnostics.CodeAnalysis;
+using System.Globalization;
 using System.Linq;
 using System.Reflection;
 using System.Text.RegularExpressions;
@@ -22,8 +24,10 @@ namespace Ai.Tlbx.VoiceAssistant.Reflection
     {
         private const DynamicallyAccessedMemberTypes RequiredMembers =
             DynamicallyAccessedMemberTypes.PublicConstructors |
-            DynamicallyAccessedMemberTypes.PublicProperties;
+            DynamicallyAccessedMemberTypes.PublicProperties |
+            DynamicallyAccessedMemberTypes.Interfaces;
         private static readonly ConcurrentDictionary<Type, ToolSchema> _cache = new();
+        private static readonly NullabilityInfoContext _nullabilityContext = new();
 
         /// <summary>
         /// Infers a ToolSchema from the given type.
@@ -51,43 +55,45 @@ namespace Ai.Tlbx.VoiceAssistant.Reflection
         {
             var schema = new ToolSchema();
 
-            // Check if it's a record with a primary constructor
             var constructor = type.GetConstructors()
                 .OrderByDescending(c => c.GetParameters().Length)
                 .FirstOrDefault();
 
             if (constructor != null && constructor.GetParameters().Length > 0)
             {
-                // Use constructor parameters (common for records)
-                foreach (var param in constructor.GetParameters())
+                var writableProperties = type.GetProperties(BindingFlags.Public | BindingFlags.Instance)
+                    .Where(p => p.CanWrite)
+                    .ToArray();
+
+                foreach (var constructorParameter in constructor.GetParameters())
                 {
-                    var paramName = ToSnakeCase(param.Name ?? "unknown");
-                    var toolParam = BuildParameter(param.ParameterType, param);
+                    var parameterName = ToSnakeCase(constructorParameter.Name ?? "unknown");
+                    var matchingProperty = FindMatchingProperty(writableProperties, constructorParameter);
+                    var toolParam = BuildParameter(constructorParameter.ParameterType, constructorParameter, matchingProperty);
 
-                    schema.Parameters[paramName] = toolParam;
+                    schema.Parameters[parameterName] = toolParam;
 
-                    if (IsRequired(param))
+                    if (IsRequired(constructorParameter, matchingProperty))
                     {
-                        schema.Required.Add(paramName);
+                        schema.Required.Add(parameterName);
                     }
                 }
             }
             else
             {
-                // Fall back to public properties with init/set
                 var properties = type.GetProperties(BindingFlags.Public | BindingFlags.Instance)
                     .Where(p => p.CanWrite);
 
-                foreach (var prop in properties)
+                foreach (var property in properties)
                 {
-                    var propName = ToSnakeCase(prop.Name);
-                    var toolParam = BuildParameter(prop.PropertyType, prop);
+                    var propertyName = ToSnakeCase(property.Name);
+                    var toolParam = BuildParameter(property.PropertyType, null, property);
 
-                    schema.Parameters[propName] = toolParam;
+                    schema.Parameters[propertyName] = toolParam;
 
-                    if (IsRequired(prop))
+                    if (IsRequired(property, null))
                     {
-                        schema.Required.Add(propName);
+                        schema.Required.Add(propertyName);
                     }
                 }
             }
@@ -95,14 +101,16 @@ namespace Ai.Tlbx.VoiceAssistant.Reflection
             return schema;
         }
 
-        private static ToolParameter BuildParameter([DynamicallyAccessedMembers(RequiredMembers)] Type type, object? memberInfo)
+        private static ToolParameter BuildParameter(
+            [DynamicallyAccessedMembers(RequiredMembers)] Type type,
+            ParameterInfo? parameterInfo,
+            PropertyInfo? propertyInfo)
         {
             var param = new ToolParameter
             {
-                Description = GetDescription(memberInfo)
+                Description = GetDescription(parameterInfo, propertyInfo)
             };
 
-            // Handle nullable types
             var underlyingType = Nullable.GetUnderlyingType(type);
             if (underlyingType != null)
             {
@@ -110,39 +118,26 @@ namespace Ai.Tlbx.VoiceAssistant.Reflection
                 type = underlyingType;
             }
 
-            // Handle nullable reference types via NullabilityInfo
-            if (!type.IsValueType && IsNullableReferenceType(memberInfo))
+            if (!type.IsValueType &&
+                (IsNullableReferenceType(parameterInfo) || IsNullableReferenceType(propertyInfo)))
             {
                 param.Nullable = true;
             }
 
-            // Map type
             param.Type = TypeMapper.MapType(type);
 
-            // Handle enums
             if (type.IsEnum)
             {
                 param.Type = ToolParameterType.String;
                 param.Enum = Enum.GetNames(type).Select(ToSnakeCase).ToList();
             }
 
-            // Handle arrays and lists
-            if (type.IsArray)
+            if (TryGetCollectionElementType(type, out var elementType))
             {
                 param.Type = ToolParameterType.Array;
-                var elementType = type.GetElementType();
-                if (elementType != null)
-                {
-                    param.Items = BuildParameter(elementType, null);
-                }
-            }
-            else if (type.IsGenericType && IsListType(type))
-            {
-                param.Type = ToolParameterType.Array;
-                param.Items = BuildParameter(type.GetGenericArguments()[0], null);
+                param.Items = BuildParameter(elementType, null, null);
             }
 
-            // Handle nested objects
             if (param.Type == ToolParameterType.Object && !type.IsEnum && type != typeof(object))
             {
                 param.Properties = new Dictionary<string, ToolParameter>();
@@ -151,67 +146,57 @@ namespace Ai.Tlbx.VoiceAssistant.Reflection
                 var nestedProps = type.GetProperties(BindingFlags.Public | BindingFlags.Instance)
                     .Where(p => p.CanWrite);
 
-                foreach (var prop in nestedProps)
+                foreach (var nestedProp in nestedProps)
                 {
-                    var propName = ToSnakeCase(prop.Name);
-                    param.Properties[propName] = BuildParameter(prop.PropertyType, prop);
+                    var propName = ToSnakeCase(nestedProp.Name);
+                    param.Properties[propName] = BuildParameter(nestedProp.PropertyType, null, nestedProp);
 
-                    if (IsRequired(prop))
+                    if (IsRequired(nestedProp, null))
                     {
                         param.RequiredProperties.Add(propName);
                     }
                 }
             }
 
-            // Handle format hints
             param.Format = TypeMapper.GetFormat(type);
-
-            // Handle default values from parameter info
-            if (memberInfo is ParameterInfo pi && pi.HasDefaultValue && pi.DefaultValue != null)
-            {
-                param.Default = ConvertDefaultValue(pi.DefaultValue, type);
-            }
+            param.Default = GetDefaultValue(parameterInfo, propertyInfo, type);
+            ApplyValidationAttributes(param, parameterInfo, propertyInfo);
 
             return param;
         }
 
-        private static bool IsRequired(ParameterInfo param)
+        private static bool IsRequired(ParameterInfo parameter, PropertyInfo? matchingProperty)
         {
-            // Required if:
-            // 1. Not nullable value type
-            // 2. Not nullable reference type
-            // 3. No default value
-
-            if (param.HasDefaultValue)
+            if (HasDefaultValue(parameter, matchingProperty))
                 return false;
 
-            if (Nullable.GetUnderlyingType(param.ParameterType) != null)
+            if (HasExplicitRequiredAttribute(parameter, matchingProperty))
+                return true;
+
+            if (Nullable.GetUnderlyingType(parameter.ParameterType) != null)
                 return false;
 
-            if (IsNullableReferenceType(param))
+            if (IsNullableReferenceType(parameter) || IsNullableReferenceType(matchingProperty))
                 return false;
 
             return true;
         }
 
-        private static bool IsRequired(PropertyInfo prop)
+        private static bool IsRequired(PropertyInfo property, ParameterInfo? matchingParameter)
         {
-            // Required if non-nullable and has 'required' keyword
-            // In practice, we check for nullability
-
-            if (Nullable.GetUnderlyingType(prop.PropertyType) != null)
+            if (HasDefaultValue(matchingParameter, property))
                 return false;
 
-            if (IsNullableReferenceType(prop))
-                return false;
-
-            // Check for required keyword (via attribute)
-            var requiredAttr = prop.GetCustomAttribute<System.Runtime.CompilerServices.RequiredMemberAttribute>();
-            if (requiredAttr != null)
+            if (HasExplicitRequiredAttribute(matchingParameter, property))
                 return true;
 
-            // For non-nullable reference types without required, we still consider them required
-            return !prop.PropertyType.IsValueType;
+            if (Nullable.GetUnderlyingType(property.PropertyType) != null)
+                return false;
+
+            if (IsNullableReferenceType(property) || IsNullableReferenceType(matchingParameter))
+                return false;
+
+            return true;
         }
 
         private static bool IsNullableReferenceType(object? memberInfo)
@@ -219,14 +204,12 @@ namespace Ai.Tlbx.VoiceAssistant.Reflection
             if (memberInfo == null)
                 return false;
 
-            NullabilityInfoContext context = new();
-
             try
             {
                 NullabilityInfo? nullabilityInfo = memberInfo switch
                 {
-                    ParameterInfo pi => context.Create(pi),
-                    PropertyInfo prop => context.Create(prop),
+                    ParameterInfo pi => _nullabilityContext.Create(pi),
+                    PropertyInfo prop => _nullabilityContext.Create(prop),
                     _ => null
                 };
 
@@ -248,30 +231,259 @@ namespace Ai.Tlbx.VoiceAssistant.Reflection
             return genericDef == typeof(List<>) ||
                    genericDef == typeof(IList<>) ||
                    genericDef == typeof(ICollection<>) ||
-                   genericDef == typeof(IEnumerable<>);
+                   genericDef == typeof(IEnumerable<>) ||
+                   genericDef == typeof(IReadOnlyList<>) ||
+                   genericDef == typeof(IReadOnlyCollection<>) ||
+                   genericDef == typeof(HashSet<>) ||
+                   genericDef == typeof(ISet<>);
         }
 
-        private static string? GetDescription(object? memberInfo)
+        private static bool IsDictionaryType([DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.Interfaces)] Type type)
         {
-            if (memberInfo == null)
+            if (!type.IsGenericType)
+                return false;
+
+            var genericDef = type.GetGenericTypeDefinition();
+            if (genericDef == typeof(Dictionary<,>) ||
+                genericDef == typeof(IDictionary<,>) ||
+                genericDef == typeof(IReadOnlyDictionary<,>))
+            {
+                return true;
+            }
+
+            return type.GetInterfaces().Any(i =>
+                i.IsGenericType &&
+                i.GetGenericTypeDefinition() == typeof(IDictionary<,>));
+        }
+
+        private static bool TryGetCollectionElementType(
+            [DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.Interfaces)] Type type,
+            out Type elementType)
+        {
+            if (type == typeof(string) || IsDictionaryType(type))
+            {
+                elementType = typeof(object);
+                return false;
+            }
+
+            if (type.IsArray)
+            {
+                var arrayElementType = type.GetElementType();
+                if (arrayElementType != null)
+                {
+                    elementType = arrayElementType;
+                    return true;
+                }
+            }
+
+            if (type.IsGenericType && IsListType(type))
+            {
+                elementType = type.GetGenericArguments()[0];
+                return true;
+            }
+
+            var enumerableInterface = type.GetInterfaces()
+                .FirstOrDefault(i => i.IsGenericType && i.GetGenericTypeDefinition() == typeof(IEnumerable<>));
+
+            if (enumerableInterface != null)
+            {
+                var candidate = enumerableInterface.GetGenericArguments()[0];
+                if (candidate != typeof(char))
+                {
+                    elementType = candidate;
+                    return true;
+                }
+            }
+
+            elementType = typeof(object);
+            return false;
+        }
+
+        private static PropertyInfo? FindMatchingProperty(IEnumerable<PropertyInfo> properties, ParameterInfo parameter)
+        {
+            var parameterName = parameter.Name ?? string.Empty;
+            if (string.IsNullOrEmpty(parameterName))
                 return null;
 
-            DescriptionAttribute? attr = memberInfo switch
+            var exactMatch = properties.FirstOrDefault(p =>
+                string.Equals(p.Name, parameterName, StringComparison.OrdinalIgnoreCase));
+            if (exactMatch != null)
             {
-                ParameterInfo pi => pi.GetCustomAttribute<DescriptionAttribute>(),
-                PropertyInfo prop => prop.GetCustomAttribute<DescriptionAttribute>(),
-                _ => null
-            };
+                return exactMatch;
+            }
 
-            return attr?.Description;
+            var normalized = NormalizeName(parameterName);
+            return properties.FirstOrDefault(p => NormalizeName(p.Name) == normalized);
+        }
+
+        private static string NormalizeName(string value)
+        {
+            if (string.IsNullOrWhiteSpace(value))
+                return string.Empty;
+
+            return new string(value.Where(char.IsLetterOrDigit).ToArray()).ToLowerInvariant();
+        }
+
+        private static bool HasDefaultValue(ParameterInfo? parameterInfo, PropertyInfo? propertyInfo)
+        {
+            if (parameterInfo?.HasDefaultValue == true)
+                return true;
+
+            return GetAttribute<DefaultValueAttribute>(parameterInfo, propertyInfo) != null;
+        }
+
+        private static bool HasExplicitRequiredAttribute(ParameterInfo? parameterInfo, PropertyInfo? propertyInfo)
+        {
+            return GetAttribute<RequiredAttribute>(parameterInfo, propertyInfo) != null ||
+                   propertyInfo?.GetCustomAttribute<System.Runtime.CompilerServices.RequiredMemberAttribute>() != null;
+        }
+
+        private static string? GetDescription(ParameterInfo? parameterInfo, PropertyInfo? propertyInfo)
+        {
+            var parameterDescription = parameterInfo?.GetCustomAttribute<DescriptionAttribute>()?.Description;
+            if (!string.IsNullOrWhiteSpace(parameterDescription))
+            {
+                return parameterDescription;
+            }
+
+            return propertyInfo?.GetCustomAttribute<DescriptionAttribute>()?.Description;
+        }
+
+        private static TAttribute? GetAttribute<TAttribute>(ParameterInfo? parameterInfo, PropertyInfo? propertyInfo)
+            where TAttribute : Attribute
+        {
+            return parameterInfo?.GetCustomAttribute<TAttribute>() ??
+                   propertyInfo?.GetCustomAttribute<TAttribute>();
+        }
+
+        private static object? GetDefaultValue(ParameterInfo? parameterInfo, PropertyInfo? propertyInfo, Type type)
+        {
+            if (parameterInfo is { HasDefaultValue: true } &&
+                parameterInfo.DefaultValue != null &&
+                parameterInfo.DefaultValue != DBNull.Value)
+            {
+                return ConvertDefaultValue(parameterInfo.DefaultValue, type);
+            }
+
+            var defaultAttribute = GetAttribute<DefaultValueAttribute>(parameterInfo, propertyInfo);
+            if (defaultAttribute?.Value != null)
+            {
+                return ConvertDefaultValue(defaultAttribute.Value, type);
+            }
+
+            return null;
+        }
+
+        private static void ApplyValidationAttributes(
+            ToolParameter parameter,
+            ParameterInfo? parameterInfo,
+            PropertyInfo? propertyInfo)
+        {
+            var range = GetAttribute<RangeAttribute>(parameterInfo, propertyInfo);
+            if (range != null)
+            {
+                if (TryConvertToDouble(range.Minimum, out var minimum))
+                {
+                    parameter.Minimum = minimum;
+                }
+
+                if (TryConvertToDouble(range.Maximum, out var maximum))
+                {
+                    parameter.Maximum = maximum;
+                }
+            }
+
+            var stringLength = GetAttribute<StringLengthAttribute>(parameterInfo, propertyInfo);
+            if (stringLength != null)
+            {
+                if (stringLength.MaximumLength > 0)
+                {
+                    parameter.MaxLength = stringLength.MaximumLength;
+                }
+
+                if (stringLength.MinimumLength > 0)
+                {
+                    parameter.MinLength = stringLength.MinimumLength;
+                }
+            }
+
+            var minLength = GetAttribute<MinLengthAttribute>(parameterInfo, propertyInfo);
+            if (minLength != null)
+            {
+                parameter.MinLength = parameter.MinLength.HasValue
+                    ? Math.Max(parameter.MinLength.Value, minLength.Length)
+                    : minLength.Length;
+            }
+
+            var maxLength = GetAttribute<MaxLengthAttribute>(parameterInfo, propertyInfo);
+            if (maxLength != null)
+            {
+                parameter.MaxLength = parameter.MaxLength.HasValue
+                    ? Math.Min(parameter.MaxLength.Value, maxLength.Length)
+                    : maxLength.Length;
+            }
+
+            var regex = GetAttribute<RegularExpressionAttribute>(parameterInfo, propertyInfo);
+            if (!string.IsNullOrWhiteSpace(regex?.Pattern))
+            {
+                parameter.Pattern = regex.Pattern;
+            }
+        }
+
+        private static bool TryConvertToDouble(object? value, out double result)
+        {
+            switch (value)
+            {
+                case null:
+                    result = default;
+                    return false;
+                case double d:
+                    result = d;
+                    return true;
+                case float f:
+                    result = f;
+                    return true;
+                case decimal m:
+                    result = (double)m;
+                    return true;
+                case int i:
+                    result = i;
+                    return true;
+                case long l:
+                    result = l;
+                    return true;
+                case string s when double.TryParse(s, NumberStyles.Float, CultureInfo.InvariantCulture, out var parsed):
+                    result = parsed;
+                    return true;
+                default:
+                    try
+                    {
+                        result = Convert.ToDouble(value, CultureInfo.InvariantCulture);
+                        return true;
+                    }
+                    catch
+                    {
+                        result = default;
+                        return false;
+                    }
+            }
         }
 
         private static object? ConvertDefaultValue(object defaultValue, Type type)
         {
-            // For enums, convert to snake_case string
             if (type.IsEnum)
             {
-                return ToSnakeCase(defaultValue.ToString() ?? "");
+                try
+                {
+                    var enumValue = defaultValue is string enumString
+                        ? Enum.Parse(type, enumString, ignoreCase: true)
+                        : Enum.ToObject(type, defaultValue);
+                    return ToSnakeCase(enumValue.ToString() ?? string.Empty);
+                }
+                catch
+                {
+                    return ToSnakeCase(defaultValue.ToString() ?? string.Empty);
+                }
             }
 
             return defaultValue;
