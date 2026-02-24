@@ -24,8 +24,7 @@ namespace Ai.Tlbx.VoiceAssistant.Reflection
     {
         private const DynamicallyAccessedMemberTypes RequiredMembers =
             DynamicallyAccessedMemberTypes.PublicConstructors |
-            DynamicallyAccessedMemberTypes.PublicProperties |
-            DynamicallyAccessedMemberTypes.Interfaces;
+            DynamicallyAccessedMemberTypes.PublicProperties;
         private static readonly ConcurrentDictionary<Type, ToolSchema> _cache = new();
         private static readonly NullabilityInfoContext _nullabilityContext = new();
 
@@ -238,7 +237,7 @@ namespace Ai.Tlbx.VoiceAssistant.Reflection
                    genericDef == typeof(ISet<>);
         }
 
-        private static bool IsDictionaryType([DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.Interfaces)] Type type)
+        private static bool IsDictionaryType(Type type)
         {
             if (!type.IsGenericType)
                 return false;
@@ -250,15 +249,11 @@ namespace Ai.Tlbx.VoiceAssistant.Reflection
             {
                 return true;
             }
-
-            return type.GetInterfaces().Any(i =>
-                i.IsGenericType &&
-                i.GetGenericTypeDefinition() == typeof(IDictionary<,>));
+            
+            return false;
         }
 
-        private static bool TryGetCollectionElementType(
-            [DynamicallyAccessedMembers(DynamicallyAccessedMemberTypes.Interfaces)] Type type,
-            out Type elementType)
+        private static bool TryGetCollectionElementType(Type type, out Type elementType)
         {
             if (type == typeof(string) || IsDictionaryType(type))
             {
@@ -280,19 +275,6 @@ namespace Ai.Tlbx.VoiceAssistant.Reflection
             {
                 elementType = type.GetGenericArguments()[0];
                 return true;
-            }
-
-            var enumerableInterface = type.GetInterfaces()
-                .FirstOrDefault(i => i.IsGenericType && i.GetGenericTypeDefinition() == typeof(IEnumerable<>));
-
-            if (enumerableInterface != null)
-            {
-                var candidate = enumerableInterface.GetGenericArguments()[0];
-                if (candidate != typeof(char))
-                {
-                    elementType = candidate;
-                    return true;
-                }
             }
 
             elementType = typeof(object);
