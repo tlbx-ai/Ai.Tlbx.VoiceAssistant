@@ -20,6 +20,9 @@ namespace Ai.Tlbx.VoiceAssistant
         private readonly UsageManager _usageManager;
         private readonly Action<LogLevel, string> _logAction;
         
+        // Pre-connect audio buffer
+        private ConcurrentQueue<string>? _preConnectBuffer;
+
         // State management
         private bool _isInitialized = false;
         private bool _isConnecting = false;
@@ -61,6 +64,16 @@ namespace Ai.Tlbx.VoiceAssistant
         /// Subscribe to this single callback for unified usage tracking.
         /// </summary>
         public Action<SessionUsageUpdate>? OnSessionUsageUpdated { get; set; }
+
+        /// <summary>
+        /// Callback that fires with partial transcription text as the user speaks.
+        /// </summary>
+        public Action<string>? OnTranscriptionDelta { get; set; }
+
+        /// <summary>
+        /// Callback that fires with the finalized transcript when an utterance completes.
+        /// </summary>
+        public Action<string>? OnTranscriptionCompleted { get; set; }
 
         // Public properties
         /// <summary>
@@ -122,6 +135,11 @@ namespace Ai.Tlbx.VoiceAssistant
         /// Gets a value indicating whether a session is currently active.
         /// </summary>
         public bool IsSessionActive => _sessionStartTime.HasValue;
+
+        /// <summary>
+        /// Gets a value indicating whether the provider is connected and ready for audio.
+        /// </summary>
+        public bool IsProviderConnected => _isInitialized && (_provider?.IsConnected ?? false);
 
         /// <summary>
         /// Gets the session start time (UTC) measured locally, or null if no session is active.
@@ -191,40 +209,59 @@ namespace Ai.Tlbx.VoiceAssistant
             {
                 _lastErrorMessage = null;
 
+                // Initialize hardware and start recording early so audio is captured during connection
+                await _hardwareAccess.InitAudioAsync();
+
                 if (!_isInitialized || !_provider.IsConnected)
                 {
                     cancellationToken.ThrowIfCancellationRequested();
+
+                    // Start pre-connect buffer and recording before connecting
+                    _preConnectBuffer = new ConcurrentQueue<string>();
+                    bool recordingStarted = await _hardwareAccess.StartRecordingAudio(OnAudioDataReceived, _provider.RequiredInputSampleRate);
+                    if (!recordingStarted)
+                    {
+                        _preConnectBuffer = null;
+                        throw new InvalidOperationException("Failed to start audio recording");
+                    }
+                    IsRecording = true;
+
                     _isConnecting = true;
                     ReportStatus("Connecting to AI provider...");
                     await _provider.ConnectAsync(settings);
                     _isInitialized = true;
                     _isConnecting = false;
-                    
+
+                    // Flush pre-connect buffer
+                    var buffer = _preConnectBuffer;
+                    _preConnectBuffer = null;
+                    if (buffer != null)
+                    {
+                        int flushed = 0;
+                        while (buffer.TryDequeue(out var audio))
+                        {
+                            await _provider.ProcessAudioAsync(audio);
+                            flushed++;
+                        }
+                        _logAction(LogLevel.Info, $"Flushed {flushed} pre-connect audio chunks");
+                    }
+
                     // Inject conversation history if available
                     var history = _chatHistory.GetMessages();
                     if (history.Any())
                     {
-                        // Only inject messages up to pairs (user + assistant responses)
-                        // This prevents the AI from continuing the last assistant message
                         var messagesToInject = new List<ChatMessage>();
                         for (int i = 0; i < history.Count; i++)
                         {
                             messagesToInject.Add(history[i]);
-                            // Stop if we've added a complete pair (user + assistant)
-                            if (i > 0 && i % 2 == 1)
-                            {
-                                // We've added a user and assistant message pair
-                            }
                         }
-                        
-                        // If the last message is from the assistant, exclude it
-                        // This prevents the AI from continuing where it left off
-                        if (messagesToInject.Count > 0 && 
+
+                        if (messagesToInject.Count > 0 &&
                             messagesToInject[messagesToInject.Count - 1].Role == ChatMessage.AssistantRole)
                         {
                             messagesToInject.RemoveAt(messagesToInject.Count - 1);
                         }
-                        
+
                         if (messagesToInject.Any())
                         {
                             _logAction(LogLevel.Info, $"Injecting {messagesToInject.Count} messages from conversation history (excluded last assistant message if any)");
@@ -237,22 +274,14 @@ namespace Ai.Tlbx.VoiceAssistant
                     // Provider is already connected, just update the settings
                     _logAction(LogLevel.Info, "Provider already connected, updating settings");
                     await _provider.UpdateSettingsAsync(settings);
+
+                    bool recordingStarted = await _hardwareAccess.StartRecordingAudio(OnAudioDataReceived, _provider.RequiredInputSampleRate);
+                    if (!recordingStarted)
+                    {
+                        throw new InvalidOperationException("Failed to start audio recording");
+                    }
+                    IsRecording = true;
                 }
-                
-                cancellationToken.ThrowIfCancellationRequested();
-                
-                // Initialize hardware
-                await _hardwareAccess.InitAudioAsync();
-                
-                // Start recording with audio callback handler, using provider's required sample rate
-                bool recordingStarted = await _hardwareAccess.StartRecordingAudio(OnAudioDataReceived, _provider.RequiredInputSampleRate);
-                
-                if (!recordingStarted)
-                {
-                    throw new InvalidOperationException("Failed to start audio recording");
-                }
-                
-                IsRecording = true;
 
                 // Start session timing
                 _sessionStartTime = DateTime.UtcNow;
@@ -308,6 +337,82 @@ namespace Ai.Tlbx.VoiceAssistant
                 _logAction(LogLevel.Error, $"Error stopping voice assistant: {ex.Message}");
                 throw;
             }
+        }
+
+        /// <summary>
+        /// Connects the provider without starting audio recording.
+        /// Use with <see cref="StartRecordingOnlyAsync"/> for push-to-talk workflows.
+        /// </summary>
+        public async Task ConnectProviderAsync(IVoiceSettings settings)
+        {
+            if (_provider == null)
+                throw new InvalidOperationException("Cannot connect: no provider configured.");
+
+            try
+            {
+                _lastErrorMessage = null;
+                await _hardwareAccess.InitAudioAsync();
+
+                if (!_isInitialized || !_provider.IsConnected)
+                {
+                    _isConnecting = true;
+                    ReportStatus("Connecting...");
+                    await _provider.ConnectAsync(settings);
+                    _isInitialized = true;
+                    _isConnecting = false;
+                    ReportStatus("Connected (idle)");
+                    _logAction(LogLevel.Info, "Provider connected (idle, not recording)");
+                }
+                else
+                {
+                    await _provider.UpdateSettingsAsync(settings);
+                    _logAction(LogLevel.Info, "Provider settings updated");
+                }
+            }
+            catch (Exception ex)
+            {
+                _lastErrorMessage = ex.Message;
+                _isConnecting = false;
+                ReportStatus($"Error: {ex.Message}");
+                _logAction(LogLevel.Error, $"Failed to connect provider: {ex.Message}");
+                throw;
+            }
+        }
+
+        /// <summary>
+        /// Starts audio recording when the provider is already connected.
+        /// Use after <see cref="ConnectProviderAsync"/> for push-to-talk workflows.
+        /// </summary>
+        public async Task StartRecordingOnlyAsync()
+        {
+            if (_provider == null || !_provider.IsConnected)
+                throw new InvalidOperationException("Provider not connected. Call ConnectProviderAsync first.");
+
+            if (IsRecording) return;
+
+            var started = await _hardwareAccess.StartRecordingAudio(OnAudioDataReceived, _provider.RequiredInputSampleRate);
+            if (!started)
+                throw new InvalidOperationException("Failed to start audio recording");
+
+            IsRecording = true;
+            _sessionStartTime ??= DateTime.UtcNow;
+            _lastUsageUpdateTime = DateTime.UtcNow;
+            ReportStatus("Recording...");
+            _logAction(LogLevel.Info, "Audio recording started (provider already connected)");
+        }
+
+        /// <summary>
+        /// Stops audio recording but keeps the provider connected.
+        /// Remaining audio in the provider pipeline will still be processed.
+        /// </summary>
+        public async Task StopRecordingOnlyAsync()
+        {
+            if (!IsRecording) return;
+
+            await _hardwareAccess.StopRecordingAudio();
+            IsRecording = false;
+            ReportStatus("Processing...");
+            _logAction(LogLevel.Info, "Audio recording stopped (provider still connected)");
         }
 
         /// <summary>
@@ -635,6 +740,20 @@ namespace Ai.Tlbx.VoiceAssistant
                 // Also fire combined session usage update
                 FireSessionUsageUpdate(SessionUsageUpdateTrigger.TokenUsageReceived);
             };
+
+            _provider.OnTranscriptionDelta = (delta) =>
+            {
+                OnTranscriptionDelta?.Invoke(delta);
+            };
+
+            _provider.OnTranscriptionCompleted = (transcript) =>
+            {
+                var message = ChatMessage.CreateUserMessage(transcript);
+                _chatHistory.AddMessage(message);
+                OnMessageAdded?.Invoke(message);
+                OnTranscriptionCompleted?.Invoke(transcript);
+                _logAction(LogLevel.Info, $"Transcription completed: {transcript.Length} chars");
+            };
         }
 
         private int _audioReceivedCount = 0;
@@ -655,7 +774,12 @@ namespace Ai.Tlbx.VoiceAssistant
                     _logAction(LogLevel.Info, $"[VA-AUDIO] OnAudioDataReceived called {_audioReceivedCount} times, IsConnected: {isConnected}, IsTesting: {_isMicrophoneTesting}, AudioLength: {e.Base64EncodedPcm16Audio?.Length ?? 0}");
                 }
 
-                if (isConnected && !_isMicrophoneTesting)
+                var preBuffer = _preConnectBuffer;
+                if (!isConnected && preBuffer != null && !_isMicrophoneTesting)
+                {
+                    preBuffer.Enqueue(e.Base64EncodedPcm16Audio ?? "");
+                }
+                else if (isConnected && !_isMicrophoneTesting)
                 {
                     if (_audioReceivedCount % 50 == 1)
                     {
@@ -718,6 +842,8 @@ namespace Ai.Tlbx.VoiceAssistant
                     _provider.OnError = null;
                     _provider.OnInterruptDetected = null;
                     _provider.OnUsageReceived = null;
+                    _provider.OnTranscriptionDelta = null;
+                    _provider.OnTranscriptionCompleted = null;
                     await _provider.DisposeAsync();
                 }
                 await _hardwareAccess.DisposeAsync();

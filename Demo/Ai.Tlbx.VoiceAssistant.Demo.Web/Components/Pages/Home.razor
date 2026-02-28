@@ -11,7 +11,12 @@
 @using Ai.Tlbx.VoiceAssistant.Demo.Web.Services
 @using Ai.Tlbx.VoiceAssistant.Models
 @using Ai.Tlbx.VoiceAssistant.Interfaces
+@using System.Collections.Concurrent
 @using System.Diagnostics
+@using System.IO
+@using System.Net.Http
+@using System.Net.Http.Headers
+@using System.Text.Json
 @using Microsoft.Extensions.DependencyInjection
 
 @rendermode InteractiveServer
@@ -33,128 +38,323 @@
                     <h1 class="text-xl font-semibold text-gray-900">AI Voice Chat</h1>
                 </div>
 
-                <div class="flex flex-col lg:flex-row gap-3">
-                    <!-- Controls Panel -->
-                    <div class="lg:w-1/3">
-                        <div class="bg-white rounded-lg shadow-sm border border-gray-200">
-                            <div class="border-b border-gray-200 px-3 py-2">
-                                <h3 class="text-sm font-medium text-gray-700">Controls</h3>
-                            </div>
+                <!-- Tab Bar -->
+                <div class="mb-3 border-b border-gray-200">
+                    <nav class="flex space-x-4" aria-label="Tabs">
+                        <button class="px-3 py-2 text-sm font-medium border-b-2 transition-colors @(_activeTab == "voice" ? "border-blue-500 text-blue-600" : "border-transparent text-gray-500 hover:text-gray-700")"
+                                @onclick='() => OnTabChanged("voice")'
+                                disabled="@_isBusy">
+                            Voice Chat
+                        </button>
+                        <button class="px-3 py-2 text-sm font-medium border-b-2 transition-colors @(_activeTab == "transcribe" ? "border-blue-500 text-blue-600" : "border-transparent text-gray-500 hover:text-gray-700")"
+                                @onclick='() => OnTabChanged("transcribe")'
+                                disabled="@_isBusy">
+                            Transcribe
+                        </button>
+                    </nav>
+                </div>
 
-                            <div class="p-3 space-y-3">
-                                <!-- Talk Button -->
-                                <AiTalkControl OnStartTalking="StartSession" OnStopTalking="StopSession" IsTalking="voiceAssistant?.IsRecording ?? false" Loading="(voiceAssistant?.IsConnecting ?? false) || (voiceAssistant?.IsRecording ?? false)" />
-
-                                <!-- Provider Selection -->
-                                <div>
-                                    <label for="providerSelect" class="block text-xs font-medium text-gray-600 mb-1">AI Provider</label>
-                                    <ProviderSelect AvailableProviders="@availableProviders" @bind-SelectedProvider="@selectedProviderString" Disabled="@((voiceAssistant?.IsConnecting ?? false) || (voiceAssistant?.IsRecording ?? false))" />
+                @if (_activeTab == "voice")
+                {
+                    <div class="flex flex-col lg:flex-row gap-3">
+                        <!-- Controls Panel -->
+                        <div class="lg:w-1/3">
+                            <div class="bg-white rounded-lg shadow-sm border border-gray-200">
+                                <div class="border-b border-gray-200 px-3 py-2">
+                                    <h3 class="text-sm font-medium text-gray-700">Controls</h3>
                                 </div>
 
-                                <!-- Voice Selection -->
-                                <div>
-                                    <label for="voiceSelect" class="block text-xs font-medium text-gray-600 mb-1">Voice</label>
-                                    <VoiceSelect AvailableVoices="@availableVoices" @bind-SelectedVoice="@currentVoiceString" Disabled="@((voiceAssistant?.IsConnecting ?? false) || (voiceAssistant?.IsRecording ?? false))" />
-                                </div>
+                                <div class="p-3 space-y-3">
+                                    <!-- Talk Button -->
+                                    <AiTalkControl OnStartTalking="StartSession" OnStopTalking="StopSession" IsTalking="voiceAssistant?.IsRecording ?? false" Loading="(voiceAssistant?.IsConnecting ?? false) || (voiceAssistant?.IsRecording ?? false)" />
 
-                                <!-- Model Selection -->
-                                <div>
-                                    <label class="block text-xs font-medium text-gray-600 mb-1">Model</label>
-                                    <select class="w-full p-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-sm"
-                                            value="@_currentModelString"
-                                            @onchange="OnModelChanged"
-                                            disabled="@((voiceAssistant?.IsConnecting ?? false) || (voiceAssistant?.IsRecording ?? false))">
-                                        @foreach (var model in availableModels)
-                                        {
-                                            <option value="@model">@model</option>
-                                        }
-                                    </select>
-                                </div>
+                                    <!-- Provider Selection -->
+                                    <div>
+                                        <label for="providerSelect" class="block text-xs font-medium text-gray-600 mb-1">AI Provider</label>
+                                        <ProviderSelect AvailableProviders="@availableProviders" @bind-SelectedProvider="@selectedProviderString" Disabled="@((voiceAssistant?.IsConnecting ?? false) || (voiceAssistant?.IsRecording ?? false))" />
+                                    </div>
 
-                                <!-- Voice Speed -->
-                                <VoiceSpeedSlider SelectedSpeed="@currentVoiceSpeed" SelectedSpeedChanged="OnVoiceSpeedChanged" Disabled="@((voiceAssistant?.IsConnecting ?? false) || (voiceAssistant?.IsRecording ?? false))" />
+                                    <!-- Voice Selection -->
+                                    <div>
+                                        <label for="voiceSelect" class="block text-xs font-medium text-gray-600 mb-1">Voice</label>
+                                        <VoiceSelect AvailableVoices="@availableVoices" @bind-SelectedVoice="@currentVoiceString" Disabled="@((voiceAssistant?.IsConnecting ?? false) || (voiceAssistant?.IsRecording ?? false))" />
+                                    </div>
 
-                                <!-- Tool Selection -->
-                                <div>
-                                    <ToolSelector AvailableTools="@availableTools"
-                                                 @bind-EnabledTools="@enabledTools"
-                                                 Disabled="@((voiceAssistant?.IsConnecting ?? false) || (voiceAssistant?.IsRecording ?? false))" />
-                                </div>
+                                    <!-- Model Selection -->
+                                    <div>
+                                        <label class="block text-xs font-medium text-gray-600 mb-1">Model</label>
+                                        <select class="w-full p-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-sm"
+                                                value="@_currentModelString"
+                                                @onchange="OnModelChanged"
+                                                disabled="@((voiceAssistant?.IsConnecting ?? false) || (voiceAssistant?.IsRecording ?? false))">
+                                            @foreach (var model in availableModels)
+                                            {
+                                                <option value="@model">@model</option>
+                                            }
+                                        </select>
+                                    </div>
 
-                                <!-- Microphone Selection -->
-                                <div>
-                                    <label class="block text-xs font-medium text-gray-600 mb-1">Microphone</label>
-                                    <MicrophoneSelect AvailableMicrophones="availableMicrophones"
-                                                     @bind-SelectedMicrophoneId="selectedMicrophoneId"
-                                                     MicPermissionGranted="micPermissionGranted"
-                                                     OnRequestPermission="RequestMicrophonePermission"
+                                    <!-- Voice Speed -->
+                                    <VoiceSpeedSlider SelectedSpeed="@currentVoiceSpeed" SelectedSpeedChanged="OnVoiceSpeedChanged" Disabled="@((voiceAssistant?.IsConnecting ?? false) || (voiceAssistant?.IsRecording ?? false))" />
+
+                                    <!-- Tool Selection -->
+                                    <div>
+                                        <ToolSelector AvailableTools="@availableTools"
+                                                     @bind-EnabledTools="@enabledTools"
                                                      Disabled="@((voiceAssistant?.IsConnecting ?? false) || (voiceAssistant?.IsRecording ?? false))" />
+                                    </div>
+
+                                    <!-- Microphone Selection -->
+                                    <div>
+                                        <label class="block text-xs font-medium text-gray-600 mb-1">Microphone</label>
+                                        <MicrophoneSelect AvailableMicrophones="availableMicrophones"
+                                                         @bind-SelectedMicrophoneId="selectedMicrophoneId"
+                                                         MicPermissionGranted="micPermissionGranted"
+                                                         OnRequestPermission="RequestMicrophonePermission"
+                                                         Disabled="@((voiceAssistant?.IsConnecting ?? false) || (voiceAssistant?.IsRecording ?? false))" />
+                                    </div>
+
+                                    <!-- Action Buttons -->
+                                    <div class="space-y-2">
+                                        <button class="w-full py-2 px-3 rounded-md bg-gray-600 text-white text-sm font-medium hover:bg-gray-700 transition-colors flex items-center justify-center"
+                                        @onclick="ClearChat"
+                                        disabled="@((voiceAssistant?.IsConnecting ?? false) || (voiceAssistant?.IsRecording ?? false))">
+                                            <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4 mr-1.5" viewBox="0 0 20 20" fill="currentColor">
+                                                <path fill-rule="evenodd" d="M9 2a1 1 0 00-.894.553L7.382 4H4a1 1 0 000 2v10a2 2 0 002 2h8a2 2 0 002-2V6a1 1 0 100-2h-3.382l-.724-1.447A1 1 0 0011 2H9zM7 8a1 1 0 012 0v6a1 1 0 11-2 0V8zm5-1a1 1 0 00-1 1v6a1 1 0 102 0V8a1 1 0 00-1-1z" clip-rule="evenodd" />
+                                            </svg>
+                                            Clear Chat
+                                        </button>
+
+                                        <MicTestWidget OnStartTest="TestMicrophone" Loading="(voiceAssistant?.IsMicrophoneTesting ?? false) || (voiceAssistant?.IsConnecting ?? false) || (voiceAssistant?.IsRecording ?? false)" />
+                                    </div>
+
+                                    <!-- Status -->
+                                    <div>
+                                        <StatusWidget ConnectionStatus="@(voiceAssistant?.ConnectionStatus ?? "")" Error="@(voiceAssistant?.LastErrorMessage ?? "")" IsMicrophoneTesting="@(voiceAssistant?.IsMicrophoneTesting ?? false)" />
+                                    </div>
+
+                                    <!-- Connection Events -->
+                                    @if (!string.IsNullOrEmpty(lastConnectionEvent))
+                                    {
+                                        <div class="border-t pt-3">
+                                            <label class="block text-xs font-medium text-gray-600 mb-1">Last Event</label>
+                                            <div class="text-xs text-gray-700 bg-gray-50 rounded px-2 py-1">
+                                                @lastConnectionEvent
+                                            </div>
+                                        </div>
+                                    }
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Chat Panel -->
+                        <div class="lg:w-2/3">
+                            <div class="bg-white rounded-lg shadow-sm border border-gray-200 h-[500px] flex flex-col overflow-hidden">
+                                <div class="border-b border-gray-200 px-3 py-2 flex items-center justify-between">
+                                    <h3 class="text-sm font-medium text-gray-700">Conversation</h3>
+                                    <DebugModeToggle @bind-ShowDebugMode="showDebugMode" />
                                 </div>
 
-                                <!-- Action Buttons -->
-                                <div class="space-y-2">
+                                <div class="flex-1 p-3 overflow-y-auto bg-gray-50" id="chat-messages" @ref="chatContainer">
+                                    <ChatWidget ShowDebugToolCalls="@showDebugMode" ShowToolCalls="true" />
+                                </div>
+
+                                <div class="px-3 py-2 border-t border-gray-200 bg-white">
+                                    @if (voiceAssistant?.IsRecording ?? false)
+                                    {
+                                        <div class="flex items-center text-red-600 text-sm">
+                                            <div class="relative h-2 w-2 mr-2">
+                                                <span class="animate-ping absolute h-2 w-2 rounded-full bg-red-400 opacity-75"></span>
+                                                <span class="absolute h-2 w-2 rounded-full bg-red-500"></span>
+                                            </div>
+                                            <span>Listening...</span>
+                                        </div>
+                                    }
+                                    else
+                                    {
+                                        <span class="text-gray-500 text-sm">Ready</span>
+                                    }
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                }
+
+                @if (_activeTab == "transcribe")
+                {
+                    <div class="flex flex-col lg:flex-row gap-3">
+                        <!-- Transcription Controls -->
+                        <div class="lg:w-1/3">
+                            <div class="bg-white rounded-lg shadow-sm border border-gray-200">
+                                <div class="border-b border-gray-200 px-3 py-2">
+                                    <h3 class="text-sm font-medium text-gray-700">Transcription Controls</h3>
+                                </div>
+
+                                <div class="p-3 space-y-3">
+                                    <!-- Transcription Buttons -->
+                                    <div class="flex gap-2">
+                                        <!-- Continuous transcription (realtime WebSocket) -->
+                                        <button class="flex-1 py-3 px-4 rounded-md text-white text-sm font-medium transition-colors flex items-center justify-center @((voiceAssistant?.IsRecording ?? false) ? "bg-red-600 hover:bg-red-700" : "bg-blue-600 hover:bg-blue-700")"
+                                                @onclick="ToggleTranscription"
+                                                disabled="@((voiceAssistant?.IsConnecting ?? false) || _isPttRecording || _isPttProcessing)">
+                                            @if (voiceAssistant?.IsConnecting ?? false)
+                                            {
+                                                <svg class="animate-spin h-4 w-4 mr-2" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                                                    <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                                                    <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path>
+                                                </svg>
+                                                <span>Connecting...</span>
+                                            }
+                                            else if (voiceAssistant?.IsRecording ?? false)
+                                            {
+                                                <div class="relative h-3 w-3 mr-2">
+                                                    <span class="animate-ping absolute h-3 w-3 rounded-full bg-red-300 opacity-75"></span>
+                                                    <span class="absolute h-3 w-3 rounded-full bg-white"></span>
+                                                </div>
+                                                <span>Stop</span>
+                                            }
+                                            else
+                                            {
+                                                <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4 mr-2" viewBox="0 0 20 20" fill="currentColor">
+                                                    <path fill-rule="evenodd" d="M7 4a3 3 0 016 0v4a3 3 0 11-6 0V4zm4 10.93A7.001 7.001 0 0017 8a1 1 0 10-2 0A5 5 0 015 8a1 1 0 00-2 0 7.001 7.001 0 006 6.93V17H6a1 1 0 100 2h8a1 1 0 100-2h-3v-2.07z" clip-rule="evenodd" />
+                                                </svg>
+                                                <span>Stream</span>
+                                            }
+                                        </button>
+
+                                        <!-- Push-to-talk (local record → REST API) -->
+                                        <button class="flex-1 py-3 px-4 rounded-md text-white text-sm font-medium transition-all flex items-center justify-center select-none @(_isPttRecording ? "bg-red-600 scale-95" : _isPttProcessing ? "bg-amber-600" : "bg-green-600 hover:bg-green-700")"
+                                                @onmousedown="OnPushToTalkDown"
+                                                @onmouseup="OnPushToTalkUp"
+                                                @onmouseleave="OnPushToTalkUp"
+                                                @ontouchstart="OnPushToTalkDown"
+                                                @ontouchend="OnPushToTalkUp"
+                                                @ontouchcancel="OnPushToTalkUp"
+                                                @oncontextmenu:preventDefault
+                                                disabled="@((voiceAssistant?.IsRecording ?? false) || _isPttProcessing)">
+                                            @if (_isPttRecording)
+                                            {
+                                                <div class="relative h-3 w-3 mr-2">
+                                                    <span class="animate-ping absolute h-3 w-3 rounded-full bg-red-300 opacity-75"></span>
+                                                    <span class="absolute h-3 w-3 rounded-full bg-white"></span>
+                                                </div>
+                                                <span>Release</span>
+                                            }
+                                            else if (_isPttProcessing)
+                                            {
+                                                <svg class="animate-spin h-4 w-4 mr-2" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                                                    <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                                                    <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path>
+                                                </svg>
+                                                <span>Transcribing...</span>
+                                            }
+                                            else
+                                            {
+                                                <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4 mr-2" viewBox="0 0 20 20" fill="currentColor">
+                                                    <path fill-rule="evenodd" d="M7 4a3 3 0 016 0v4a3 3 0 11-6 0V4zm4 10.93A7.001 7.001 0 0017 8a1 1 0 10-2 0A5 5 0 015 8a1 1 0 00-2 0 7.001 7.001 0 006 6.93V17H6a1 1 0 100 2h8a1 1 0 100-2h-3v-2.07z" clip-rule="evenodd" />
+                                                </svg>
+                                                <span>Hold</span>
+                                            }
+                                        </button>
+                                    </div>
+
+                                    <!-- Model Selection -->
+                                    <div>
+                                        <label class="block text-xs font-medium text-gray-600 mb-1">Transcription Model</label>
+                                        <select class="w-full p-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-sm"
+                                                value="@_transcriptionModelString"
+                                                @onchange="OnTranscriptionModelChanged"
+                                                disabled="@((voiceAssistant?.IsRecording ?? false) || _isPttRecording || _isPttProcessing)">
+                                            @foreach (var model in _transcriptionModels)
+                                            {
+                                                <option value="@model">@model</option>
+                                            }
+                                        </select>
+                                    </div>
+
+                                    <!-- Microphone Selection -->
+                                    <div>
+                                        <label class="block text-xs font-medium text-gray-600 mb-1">Microphone</label>
+                                        <MicrophoneSelect AvailableMicrophones="availableMicrophones"
+                                                         @bind-SelectedMicrophoneId="selectedMicrophoneId"
+                                                         MicPermissionGranted="micPermissionGranted"
+                                                         OnRequestPermission="RequestMicrophonePermission"
+                                                         Disabled="@((voiceAssistant?.IsRecording ?? false) || _isPttRecording || _isPttProcessing)" />
+                                    </div>
+
+                                    <!-- Status -->
+                                    <div>
+                                        <StatusWidget ConnectionStatus="@(voiceAssistant?.ConnectionStatus ?? "")" Error="@(voiceAssistant?.LastErrorMessage ?? "")" IsMicrophoneTesting="@false" />
+                                    </div>
+
+                                    <!-- Clear Text -->
                                     <button class="w-full py-2 px-3 rounded-md bg-gray-600 text-white text-sm font-medium hover:bg-gray-700 transition-colors flex items-center justify-center"
-                                    @onclick="ClearChat"
-                                    disabled="@((voiceAssistant?.IsConnecting ?? false) || (voiceAssistant?.IsRecording ?? false))">
+                                            @onclick="ClearTranscriptionText"
+                                            disabled="@(voiceAssistant?.IsRecording ?? false)">
                                         <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4 mr-1.5" viewBox="0 0 20 20" fill="currentColor">
                                             <path fill-rule="evenodd" d="M9 2a1 1 0 00-.894.553L7.382 4H4a1 1 0 000 2v10a2 2 0 002 2h8a2 2 0 002-2V6a1 1 0 100-2h-3.382l-.724-1.447A1 1 0 0011 2H9zM7 8a1 1 0 012 0v6a1 1 0 11-2 0V8zm5-1a1 1 0 00-1 1v6a1 1 0 102 0V8a1 1 0 00-1-1z" clip-rule="evenodd" />
                                         </svg>
-                                        Clear Chat
+                                        Clear Text
                                     </button>
 
-                                    <MicTestWidget OnStartTest="TestMicrophone" Loading="(voiceAssistant?.IsMicrophoneTesting ?? false) || (voiceAssistant?.IsConnecting ?? false) || (voiceAssistant?.IsRecording ?? false)" />
-                                </div>
-
-                                <!-- Status -->
-                                <div>
-                                    <StatusWidget ConnectionStatus="@(voiceAssistant?.ConnectionStatus ?? "")" Error="@(voiceAssistant?.LastErrorMessage ?? "")" IsMicrophoneTesting="@(voiceAssistant?.IsMicrophoneTesting ?? false)" />
-                                </div>
-
-                                <!-- Connection Events -->
-                                @if (!string.IsNullOrEmpty(lastConnectionEvent))
-                                {
-                                    <div class="border-t pt-3">
-                                        <label class="block text-xs font-medium text-gray-600 mb-1">Last Event</label>
-                                        <div class="text-xs text-gray-700 bg-gray-50 rounded px-2 py-1">
-                                            @lastConnectionEvent
+                                    <!-- Connection Events -->
+                                    @if (!string.IsNullOrEmpty(lastConnectionEvent))
+                                    {
+                                        <div class="border-t pt-3">
+                                            <label class="block text-xs font-medium text-gray-600 mb-1">Last Event</label>
+                                            <div class="text-xs text-gray-700 bg-gray-50 rounded px-2 py-1">
+                                                @lastConnectionEvent
+                                            </div>
                                         </div>
-                                    </div>
-                                }
+                                    }
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Transcription Text Panel -->
+                        <div class="lg:w-2/3">
+                            <div class="bg-white rounded-lg shadow-sm border border-gray-200 h-[500px] flex flex-col overflow-hidden">
+                                <div class="border-b border-gray-200 px-3 py-2 flex items-center justify-between">
+                                    <h3 class="text-sm font-medium text-gray-700">Transcription</h3>
+                                    @if (_isPttRecording)
+                                    {
+                                        <div class="flex items-center text-red-600 text-xs">
+                                            <div class="relative h-2 w-2 mr-1.5">
+                                                <span class="animate-ping absolute h-2 w-2 rounded-full bg-red-400 opacity-75"></span>
+                                                <span class="absolute h-2 w-2 rounded-full bg-red-500"></span>
+                                            </div>
+                                            <span>Recording...</span>
+                                        </div>
+                                    }
+                                    else if (_isPttProcessing)
+                                    {
+                                        <div class="flex items-center text-amber-600 text-xs">
+                                            <svg class="animate-spin h-3 w-3 mr-1.5" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                                                <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                                                <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path>
+                                            </svg>
+                                            <span>Transcribing...</span>
+                                        </div>
+                                    }
+                                    else if (voiceAssistant?.IsRecording ?? false)
+                                    {
+                                        <div class="flex items-center text-red-600 text-xs">
+                                            <div class="relative h-2 w-2 mr-1.5">
+                                                <span class="animate-ping absolute h-2 w-2 rounded-full bg-red-400 opacity-75"></span>
+                                                <span class="absolute h-2 w-2 rounded-full bg-red-500"></span>
+                                            </div>
+                                            <span>Streaming...</span>
+                                        </div>
+                                    }
+                                </div>
+                                <textarea class="flex-1 w-full p-3 text-sm text-gray-900 bg-gray-50 resize-none focus:outline-none focus:ring-0 border-0"
+                                          placeholder="Transcribed text will appear here. You can also type or edit freely."
+                                          @bind="_transcriptionFullText"
+                                          @bind:event="oninput"></textarea>
                             </div>
                         </div>
                     </div>
-
-                    <!-- Chat Panel -->
-                    <div class="lg:w-2/3">
-                        <div class="bg-white rounded-lg shadow-sm border border-gray-200 h-[500px] flex flex-col overflow-hidden">
-                            <div class="border-b border-gray-200 px-3 py-2 flex items-center justify-between">
-                                <h3 class="text-sm font-medium text-gray-700">Conversation</h3>
-                                <DebugModeToggle @bind-ShowDebugMode="showDebugMode" />
-                            </div>
-
-                            <div class="flex-1 p-3 overflow-y-auto bg-gray-50" id="chat-messages" @ref="chatContainer">
-                                <ChatWidget ShowDebugToolCalls="@showDebugMode" ShowToolCalls="true" />
-                            </div>
-
-                            <div class="px-3 py-2 border-t border-gray-200 bg-white">
-                                @if (voiceAssistant?.IsRecording ?? false)
-                                {
-                                    <div class="flex items-center text-red-600 text-sm">
-                                        <div class="relative h-2 w-2 mr-2">
-                                            <span class="animate-ping absolute h-2 w-2 rounded-full bg-red-400 opacity-75"></span>
-                                            <span class="absolute h-2 w-2 rounded-full bg-red-500"></span>
-                                        </div>
-                                        <span>Listening...</span>
-                                    </div>
-                                }
-                                else
-                                {
-                                    <span class="text-gray-500 text-sm">Ready</span>
-                                }
-                            </div>
-                        </div>
-                    </div>
-                </div>
+                }
             </div>
         </div>
     </CascadingValue>
@@ -165,6 +365,10 @@
     private VoiceAssistant? voiceAssistant;
     private ElementReference chatContainer;
     private bool showDebugMode = false;
+
+    // Tab state
+    private string _activeTab = "voice";
+    private bool _isBusy => (voiceAssistant?.IsConnecting ?? false) || (voiceAssistant?.IsRecording ?? false) || _isPttRecording || _isPttProcessing;
 
     // Provider management
     private List<string> availableProviders = new() { "OpenAI", "Google", "xAI" };
@@ -221,6 +425,18 @@
     private SessionSettingsContext sessionSettings = new();
     private string lastConnectionEvent = string.Empty;
 
+    // Transcription state
+    private string _transcriptionFullText = string.Empty;
+
+    // Push-to-talk (local record → REST API)
+    private bool _isPttRecording = false;
+    private bool _isPttProcessing = false;
+    private readonly ConcurrentQueue<string> _pttAudioChunks = new();
+    private string _transcriptionModelString = nameof(OpenAiTranscriptionModel.Gpt4oTranscribe);
+    private List<string> _transcriptionModels = Enum.GetValues<OpenAiTranscriptionModel>()
+        .Where(m => m != OpenAiTranscriptionModel.Whisper1 && m != OpenAiTranscriptionModel.Gpt4oTranscribeDiarize)
+        .Select(v => v.ToString()).ToList();
+
     protected override async Task OnInitializedAsync()
     {
         // Create initial VoiceAssistant with OpenAI provider
@@ -246,14 +462,22 @@
             voiceAssistant.OnMicrophoneDevicesChanged = null;
         }
 
-        // Create provider
-        var providerType = _selectedProviderString switch
+        // Create provider based on active tab
+        VoiceProviderType providerType;
+        if (_activeTab == "transcribe")
         {
-            "OpenAI" => VoiceProviderType.OpenAI,
-            "Google" => VoiceProviderType.Google,
-            "xAI" => VoiceProviderType.XAi,
-            _ => VoiceProviderType.OpenAI
-        };
+            providerType = VoiceProviderType.OpenAiTranscription;
+        }
+        else
+        {
+            providerType = _selectedProviderString switch
+            {
+                "OpenAI" => VoiceProviderType.OpenAI,
+                "Google" => VoiceProviderType.Google,
+                "xAI" => VoiceProviderType.XAi,
+                _ => VoiceProviderType.OpenAI
+            };
+        }
         var provider = ProviderFactory.CreateProvider(providerType);
 
         // Create new VoiceAssistant
@@ -263,6 +487,8 @@
         voiceAssistant.OnConnectionStatusChanged = OnConnectionStatusChanged;
         voiceAssistant.OnMessageAdded = OnMessageAdded;
         voiceAssistant.OnMicrophoneDevicesChanged = OnMicrophoneDevicesChanged;
+        voiceAssistant.OnTranscriptionDelta = OnTranscriptionDelta;
+        voiceAssistant.OnTranscriptionCompleted = OnTranscriptionCompleted;
 
         Log(LogLevel.Info, $"Voice Assistant recreated with {_selectedProviderString} provider");
     }
@@ -531,6 +757,24 @@
         });
     }
 
+    private void OnTranscriptionDelta(string delta)
+    {
+        InvokeAsync(() =>
+        {
+            _transcriptionFullText += delta;
+            StateHasChanged();
+        });
+    }
+
+    private void OnTranscriptionCompleted(string transcript)
+    {
+        InvokeAsync(() =>
+        {
+            _transcriptionFullText += "\n";
+            StateHasChanged();
+        });
+    }
+
     private async Task ScrollToBottom()
     {
         try
@@ -627,7 +871,7 @@
 
                 Log(LogLevel.Info, $"Starting Google session with voice: {googleVoice}");
             }
-            else // xAI
+            else if (_selectedProviderString == "xAI")
             {
                 if (!Enum.TryParse<XaiVoice>(_currentVoiceString, out var xaiVoice))
                 {
@@ -646,6 +890,10 @@
                 };
 
                 Log(LogLevel.Info, $"Starting xAI session with voice: {xaiVoice}");
+            }
+            else
+            {
+                return;
             }
 
             // Start the session with the configured settings
@@ -732,6 +980,234 @@
         }
     }
 
+    private async Task OnTabChanged(string tab)
+    {
+        if (_isBusy || _activeTab == tab) return;
+
+        // Stop old VoiceAssistant before switching (frees audio device + WebSocket)
+        if (voiceAssistant != null && (voiceAssistant.IsRecording || voiceAssistant.IsProviderConnected))
+        {
+            try { await voiceAssistant.StopAsync(); }
+            catch (Exception ex) { Log(LogLevel.Error, $"Error stopping on tab switch: {ex.Message}"); }
+        }
+
+        _activeTab = tab;
+        RecreateVoiceAssistant();
+        Log(LogLevel.Info, $"Switched to tab: {tab}");
+    }
+
+    private async Task ToggleTranscription()
+    {
+        if (_isPttRecording || _isPttProcessing) return;
+        if (voiceAssistant?.IsRecording ?? false)
+            await StopTranscription();
+        else
+            await StartTranscription();
+    }
+
+    private OpenAiTranscriptionSettings BuildTranscriptionSettings()
+    {
+        if (!Enum.TryParse<OpenAiTranscriptionModel>(_transcriptionModelString, out var transcriptionModel))
+            transcriptionModel = OpenAiTranscriptionModel.Gpt4oTranscribe;
+
+        return new OpenAiTranscriptionSettings
+        {
+            TranscriptionModel = transcriptionModel,
+            TranscriptionPrompt = "Expect German with slight accent, business/IT/construction terms",
+            Language = "de"
+        };
+    }
+
+    private async Task StartTranscription()
+    {
+        try
+        {
+            if (voiceAssistant == null) return;
+
+            var settings = BuildTranscriptionSettings();
+            Log(LogLevel.Info, $"Starting streaming transcription with model: {settings.TranscriptionModel}");
+            await voiceAssistant.StartAsync(settings);
+            await InvokeAsync(StateHasChanged);
+        }
+        catch (Exception ex)
+        {
+            Log(LogLevel.Error, $"Error starting transcription: {ex.Message}");
+        }
+    }
+
+    private async Task StopTranscription()
+    {
+        try
+        {
+            if (voiceAssistant == null) return;
+            await voiceAssistant.StopAsync();
+            await InvokeAsync(StateHasChanged);
+        }
+        catch (Exception ex)
+        {
+            Log(LogLevel.Error, $"Error stopping transcription: {ex.Message}");
+        }
+    }
+
+    // --- Push-to-talk: local record → REST API ---
+
+    private async Task OnPushToTalkDown()
+    {
+        if (_isPttRecording || _isPttProcessing) return;
+        if (voiceAssistant?.IsRecording ?? false) return;
+
+        _isPttRecording = true;
+
+        try
+        {
+            // Clear buffer from any previous run
+            while (_pttAudioChunks.TryDequeue(out _)) { }
+
+            await HardwareAccess.InitAudioAsync();
+            var started = await HardwareAccess.StartRecordingAudio(
+                (sender, e) => _pttAudioChunks.Enqueue(e.Base64EncodedPcm16Audio),
+                AudioSampleRate.Rate24000);
+
+            if (!started)
+            {
+                _isPttRecording = false;
+                Log(LogLevel.Error, "Failed to start PTT recording");
+            }
+
+            await InvokeAsync(StateHasChanged);
+        }
+        catch (Exception ex)
+        {
+            _isPttRecording = false;
+            Log(LogLevel.Error, $"PTT start error: {ex.Message}");
+        }
+    }
+
+    private async Task OnPushToTalkUp()
+    {
+        if (!_isPttRecording) return;
+
+        _isPttRecording = false;
+
+        try
+        {
+            await HardwareAccess.StopRecordingAudio();
+
+            if (_pttAudioChunks.IsEmpty)
+            {
+                await InvokeAsync(StateHasChanged);
+                return;
+            }
+
+            _isPttProcessing = true;
+            await InvokeAsync(StateHasChanged);
+
+            var pcmBytes = DrainPttBuffer();
+            var wavBytes = BuildWav(pcmBytes, 24000);
+
+            Log(LogLevel.Info, $"Sending {wavBytes.Length / 1024}KB WAV to REST API...");
+            var text = await TranscribeViaRestAsync(wavBytes);
+
+            if (!string.IsNullOrWhiteSpace(text))
+            {
+                _transcriptionFullText += text + "\n";
+            }
+        }
+        catch (Exception ex)
+        {
+            Log(LogLevel.Error, $"PTT transcribe error: {ex.Message}");
+        }
+        finally
+        {
+            _isPttProcessing = false;
+            await InvokeAsync(StateHasChanged);
+        }
+    }
+
+    private byte[] DrainPttBuffer()
+    {
+        using var ms = new MemoryStream();
+        while (_pttAudioChunks.TryDequeue(out var chunk))
+        {
+            var bytes = Convert.FromBase64String(chunk);
+            ms.Write(bytes, 0, bytes.Length);
+        }
+        return ms.ToArray();
+    }
+
+    private static byte[] BuildWav(byte[] pcmData, int sampleRate)
+    {
+        const int channels = 1;
+        const int bitsPerSample = 16;
+        int byteRate = sampleRate * channels * bitsPerSample / 8;
+        int blockAlign = channels * bitsPerSample / 8;
+
+        using var ms = new MemoryStream(44 + pcmData.Length);
+        using var w = new BinaryWriter(ms);
+
+        w.Write(new[] { (byte)'R', (byte)'I', (byte)'F', (byte)'F' });
+        w.Write(36 + pcmData.Length);
+        w.Write(new[] { (byte)'W', (byte)'A', (byte)'V', (byte)'E' });
+
+        w.Write(new[] { (byte)'f', (byte)'m', (byte)'t', (byte)' ' });
+        w.Write(16);
+        w.Write((short)1);
+        w.Write((short)channels);
+        w.Write(sampleRate);
+        w.Write(byteRate);
+        w.Write((short)blockAlign);
+        w.Write((short)bitsPerSample);
+
+        w.Write(new[] { (byte)'d', (byte)'a', (byte)'t', (byte)'a' });
+        w.Write(pcmData.Length);
+        w.Write(pcmData);
+
+        return ms.ToArray();
+    }
+
+    private async Task<string> TranscribeViaRestAsync(byte[] wavAudio)
+    {
+        var apiKey = Environment.GetEnvironmentVariable("OPENAI_API_KEY")
+            ?? throw new InvalidOperationException("OPENAI_API_KEY not set");
+
+        if (!Enum.TryParse<OpenAiTranscriptionModel>(_transcriptionModelString, out var model))
+            model = OpenAiTranscriptionModel.Gpt4oMiniTranscribe;
+
+        using var client = new HttpClient();
+        client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", apiKey);
+
+        using var form = new MultipartFormDataContent();
+        var audioContent = new ByteArrayContent(wavAudio);
+        audioContent.Headers.ContentType = new MediaTypeHeaderValue("audio/wav");
+        form.Add(audioContent, "file", "audio.wav");
+        form.Add(new StringContent(model.ToApiString()), "model");
+        form.Add(new StringContent("de"), "language");
+        form.Add(new StringContent("Expect German with slight accent, business/IT/construction terms"), "prompt");
+
+        var response = await client.PostAsync("https://api.openai.com/v1/audio/transcriptions", form);
+        var body = await response.Content.ReadAsStringAsync();
+
+        if (!response.IsSuccessStatusCode)
+        {
+            Log(LogLevel.Error, $"REST transcription failed: {response.StatusCode} - {body}");
+            return string.Empty;
+        }
+
+        using var doc = JsonDocument.Parse(body);
+        return doc.RootElement.GetProperty("text").GetString() ?? "";
+    }
+
+    private void ClearTranscriptionText()
+    {
+        _transcriptionFullText = string.Empty;
+    }
+
+    private void OnTranscriptionModelChanged(ChangeEventArgs e)
+    {
+        _transcriptionModelString = e.Value?.ToString() ?? _transcriptionModelString;
+        Log(LogLevel.Info, $"Transcription model changed to: {_transcriptionModelString}");
+    }
+
     public async ValueTask DisposeAsync()
     {
         if (voiceAssistant != null)
@@ -739,6 +1215,8 @@
             voiceAssistant.OnConnectionStatusChanged = null;
             voiceAssistant.OnMessageAdded = null;
             voiceAssistant.OnMicrophoneDevicesChanged = null;
+            voiceAssistant.OnTranscriptionDelta = null;
+            voiceAssistant.OnTranscriptionCompleted = null;
             await voiceAssistant.DisposeAsync();
         }
     }

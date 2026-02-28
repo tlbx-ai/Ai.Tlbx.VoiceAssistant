@@ -91,6 +91,8 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.XAi
         /// Callback invoked when usage data is received from the AI provider.
         /// </summary>
         public Action<UsageReport>? OnUsageReceived { get; set; }
+        public Action<string>? OnTranscriptionDelta { get; set; }
+        public Action<string>? OnTranscriptionCompleted { get; set; }
 
         /// <summary>
         /// Initializes a new instance of the <see cref="XaiVoiceProvider"/> class.

@@ -90,5 +90,16 @@ namespace Ai.Tlbx.VoiceAssistant.Interfaces
         /// Reports token/audio usage for billing and monitoring.
         /// </summary>
         Action<UsageReport>? OnUsageReceived { get; set; }
+
+        /// <summary>
+        /// Callback invoked with partial transcription text as the user speaks.
+        /// Enables real-time streaming display of speech-to-text.
+        /// </summary>
+        Action<string>? OnTranscriptionDelta { get; set; }
+
+        /// <summary>
+        /// Callback invoked with the finalized transcript when an utterance completes.
+        /// </summary>
+        Action<string>? OnTranscriptionCompleted { get; set; }
     }
 }

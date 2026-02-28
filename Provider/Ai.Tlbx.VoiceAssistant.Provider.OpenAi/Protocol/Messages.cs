@@ -306,4 +306,32 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi.Protocol
     }
 
     #endregion
+
+    #region Transcription Session
+
+    public class TranscriptionSessionUpdateMessage
+    {
+        [JsonPropertyName("type")]
+        public string Type { get; } = "transcription_session.update";
+
+        [JsonPropertyName("session")]
+        public TranscriptionSessionConfig? Session { get; set; }
+    }
+
+    public class TranscriptionSessionConfig
+    {
+        [JsonPropertyName("input_audio_format")]
+        public string InputAudioFormat { get; set; } = "pcm16";
+
+        [JsonPropertyName("input_audio_transcription")]
+        public TranscriptionConfig? InputAudioTranscription { get; set; }
+
+        [JsonPropertyName("turn_detection")]
+        public TurnDetectionConfig? TurnDetection { get; set; }
+
+        [JsonPropertyName("input_audio_noise_reduction")]
+        public NoiseReductionConfig? InputAudioNoiseReduction { get; set; }
+    }
+
+    #endregion
 }

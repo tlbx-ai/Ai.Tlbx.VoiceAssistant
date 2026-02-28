@@ -31,6 +31,8 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi.Protocol
     [JsonSerializable(typeof(List<string>))]
     [JsonSerializable(typeof(string[]))]
     [JsonSerializable(typeof(JsonElement))]
+    [JsonSerializable(typeof(TranscriptionSessionUpdateMessage))]
+    [JsonSerializable(typeof(TranscriptionSessionConfig))]
     [JsonSourceGenerationOptions(
         DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
         WriteIndented = false)]

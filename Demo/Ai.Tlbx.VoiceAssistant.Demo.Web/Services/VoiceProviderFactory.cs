@@ -12,7 +12,8 @@ namespace Ai.Tlbx.VoiceAssistant.Demo.Web.Services
     {
         OpenAI,
         Google,
-        XAi
+        XAi,
+        OpenAiTranscription
     }
 
     public interface IVoiceProviderFactory
@@ -41,6 +42,8 @@ namespace Ai.Tlbx.VoiceAssistant.Demo.Web.Services
                     Environment.GetEnvironmentVariable("GOOGLE_API_KEY"), logAction),
                 VoiceProviderType.XAi => new XaiVoiceProvider(
                     Environment.GetEnvironmentVariable("XAI_API_KEY"), logAction),
+                VoiceProviderType.OpenAiTranscription => new OpenAiTranscriptionProvider(
+                    Environment.GetEnvironmentVariable("OPENAI_API_KEY"), logAction: logAction),
                 _ => throw new ArgumentException($"Unknown provider type: {providerType}", nameof(providerType))
             };
         }
