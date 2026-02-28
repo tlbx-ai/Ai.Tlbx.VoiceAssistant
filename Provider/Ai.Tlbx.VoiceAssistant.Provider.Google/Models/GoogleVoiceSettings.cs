@@ -1,5 +1,6 @@
 using System.Collections.Generic;
 using Ai.Tlbx.VoiceAssistant.Interfaces;
+using Ai.Tlbx.VoiceAssistant.Models;
 
 namespace Ai.Tlbx.VoiceAssistant.Provider.Google.Models
 {
@@ -88,5 +89,7 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.Google.Models
         /// If set, limits sampling to top K tokens.
         /// </summary>
         public int? TopK { get; set; }
+
+        public NoiseReductionMode NoiseReduction { get; set; } = NoiseReductionMode.FarField;
     }
 }

@@ -1,5 +1,6 @@
 using System.Collections.Generic;
 using Ai.Tlbx.VoiceAssistant.Interfaces;
+using Ai.Tlbx.VoiceAssistant.Models;
 
 namespace Ai.Tlbx.VoiceAssistant.Provider.XAi.Models
 {
@@ -61,6 +62,8 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.XAi.Models
         /// Improves accuracy and latency when the expected language is known.
         /// </summary>
         public string? InputAudioLanguage { get; set; }
+
+        public NoiseReductionMode NoiseReduction { get; set; } = NoiseReductionMode.FarField;
     }
 
     /// <summary>

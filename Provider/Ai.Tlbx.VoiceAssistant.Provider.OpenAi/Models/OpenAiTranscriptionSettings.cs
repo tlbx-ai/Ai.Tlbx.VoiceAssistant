@@ -1,5 +1,6 @@
 using System.Collections.Generic;
 using Ai.Tlbx.VoiceAssistant.Interfaces;
+using Ai.Tlbx.VoiceAssistant.Models;
 
 namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi.Models
 {
@@ -13,7 +14,7 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi.Models
         public double VadThreshold { get; set; } = 0.5;
         public int PrefixPaddingMs { get; set; } = 300;
         public int SilenceDurationMs { get; set; } = 200;
-        public string NoiseReductionType { get; set; } = "near_field";
+        public NoiseReductionMode NoiseReduction { get; set; } = NoiseReductionMode.NearField;
         public string? TranscriptionPrompt { get; set; }
         public string? Language { get; set; }
     }

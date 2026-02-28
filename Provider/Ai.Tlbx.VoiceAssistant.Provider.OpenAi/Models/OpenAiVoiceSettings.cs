@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using Ai.Tlbx.VoiceAssistant.Interfaces;
+using Ai.Tlbx.VoiceAssistant.Models;
 
 namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi.Models
 {
@@ -76,6 +77,8 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi.Models
         /// Output audio format settings.
         /// </summary>
         public string OutputAudioFormat { get; set; } = "pcm16";
+
+        public NoiseReductionMode NoiseReduction { get; set; } = NoiseReductionMode.FarField;
     }
 
     /// <summary>

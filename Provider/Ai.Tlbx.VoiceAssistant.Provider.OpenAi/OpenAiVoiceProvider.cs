@@ -424,7 +424,7 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi
                     {
                         Input = new AudioInputConfig
                         {
-                            NoiseReduction = new NoiseReductionConfig { Type = "far_field" },
+                            NoiseReduction = new NoiseReductionConfig { Type = _settings.NoiseReduction.ToApiString() },
                             Transcription = _settings.InputAudioTranscription.Enabled
                                 ? new TranscriptionConfig
                                 {

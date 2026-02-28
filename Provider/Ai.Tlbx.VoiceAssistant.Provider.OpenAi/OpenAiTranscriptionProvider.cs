@@ -170,7 +170,7 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi
                     },
                     InputAudioNoiseReduction = new NoiseReductionConfig
                     {
-                        Type = _settings.NoiseReductionType
+                        Type = _settings.NoiseReduction.ToApiString()
                     }
                 }
             };
