@@ -11,11 +11,8 @@
 @using Ai.Tlbx.VoiceAssistant.Demo.Web.Services
 @using Ai.Tlbx.VoiceAssistant.Models
 @using Ai.Tlbx.VoiceAssistant.Interfaces
-@using System.Collections.Concurrent
 @using System.Diagnostics
-@using System.IO
-@using System.Net.Http
-@using System.Net.Http.Headers
+@using System.Threading
 @using System.Text.Json
 @using Microsoft.Extensions.DependencyInjection
 
@@ -222,7 +219,7 @@
                                             }
                                         </button>
 
-                                        <!-- Push-to-talk (local record → REST API) -->
+                                        <!-- Push-to-talk (near-live HTTP transcription) -->
                                         <button class="flex-1 py-3 px-4 rounded-md text-white text-sm font-medium transition-all flex items-center justify-center select-none @(_isPttRecording ? "bg-red-600 scale-95" : _isPttProcessing ? "bg-amber-600" : "bg-green-600 hover:bg-green-700")"
                                                 @onmousedown="OnPushToTalkDown"
                                                 @onmouseup="OnPushToTalkUp"
@@ -246,7 +243,7 @@
                                                     <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
                                                     <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"></path>
                                                 </svg>
-                                                <span>Transcribing...</span>
+                                                <span>Finishing...</span>
                                             }
                                             else
                                             {
@@ -347,9 +344,23 @@
                                         </div>
                                     }
                                 </div>
+                                <div class="px-3 py-2 border-b border-amber-200 bg-amber-50">
+                                    <div class="text-[11px] font-semibold uppercase tracking-[0.14em] text-amber-700 mb-1">Live Hypothesis</div>
+                                    <div class="min-h-[76px] max-h-[140px] overflow-y-auto text-sm leading-6 text-gray-900">
+                                        @if (string.IsNullOrWhiteSpace(_pttLiveHypothesisText))
+                                        {
+                                            <span class="text-gray-400">@(_isPttRecording ? "Listening for speech..." : "Hold the button and live text will appear here.")</span>
+                                        }
+                                        else
+                                        {
+                                            <span>@_pttLiveHypothesisText</span>
+                                        }
+                                    </div>
+                                </div>
+
                                 <textarea class="flex-1 w-full p-3 text-sm text-gray-900 bg-gray-50 resize-none focus:outline-none focus:ring-0 border-0"
-                                          placeholder="Transcribed text will appear here. You can also type or edit freely."
-                                          @bind="_transcriptionFullText"
+                                          placeholder="Committed transcription will appear here. You can also type or edit freely."
+                                          @bind="_transcriptionCommittedText"
                                           @bind:event="oninput"></textarea>
                             </div>
                         </div>
@@ -426,12 +437,16 @@
     private string lastConnectionEvent = string.Empty;
 
     // Transcription state
-    private string _transcriptionFullText = string.Empty;
+    private string _transcriptionCommittedText = string.Empty;
+    private string _pttLiveHypothesisText = string.Empty;
 
-    // Push-to-talk (local record → REST API)
+    // Push-to-talk (near-live HTTP transcription)
     private bool _isPttRecording = false;
     private bool _isPttProcessing = false;
-    private readonly ConcurrentQueue<string> _pttAudioChunks = new();
+    private bool _pttReceivedText = false;
+    private CancellationTokenSource? _pttLiveTranscriptionCts;
+    private Task? _pttLiveTranscriptionTask;
+    private OpenAiHttpLiveTranscriber? _pttLiveTranscriber;
     private string _transcriptionModelString = nameof(OpenAiTranscriptionModel.Gpt4oTranscribe);
     private List<string> _transcriptionModels = Enum.GetValues<OpenAiTranscriptionModel>()
         .Where(m => m != OpenAiTranscriptionModel.Whisper1 && m != OpenAiTranscriptionModel.Gpt4oTranscribeDiarize)
@@ -761,7 +776,7 @@
     {
         InvokeAsync(() =>
         {
-            _transcriptionFullText += delta;
+            _transcriptionCommittedText += delta;
             StateHasChanged();
         });
     }
@@ -770,7 +785,7 @@
     {
         InvokeAsync(() =>
         {
-            _transcriptionFullText += "\n";
+            _transcriptionCommittedText += "\n";
             StateHasChanged();
         });
     }
@@ -984,6 +999,9 @@
     {
         if (_isBusy || _activeTab == tab) return;
 
+        try { await StopPttLiveTranscriptionAsync(); }
+        catch (Exception ex) { Log(LogLevel.Error, $"Error stopping PTT live transcription on tab switch: {ex.Message}"); }
+
         // Stop old VoiceAssistant before switching (frees audio device + WebSocket)
         if (voiceAssistant != null && (voiceAssistant.IsRecording || voiceAssistant.IsProviderConnected))
         {
@@ -1049,7 +1067,7 @@
         }
     }
 
-    // --- Push-to-talk: local record → REST API ---
+    // --- Push-to-talk: near-live HTTP transcription ---
 
     private async Task OnPushToTalkDown()
     {
@@ -1057,22 +1075,22 @@
         if (voiceAssistant?.IsRecording ?? false) return;
 
         _isPttRecording = true;
+        _pttReceivedText = false;
+        _pttLiveHypothesisText = string.Empty;
 
         try
         {
-            // Clear buffer from any previous run
-            while (_pttAudioChunks.TryDequeue(out _)) { }
+            await StopPttLiveTranscriptionAsync();
 
-            await HardwareAccess.InitAudioAsync();
-            var started = await HardwareAccess.StartRecordingAudio(
-                (sender, e) => _pttAudioChunks.Enqueue(e.Base64EncodedPcm16Audio),
-                AudioSampleRate.Rate24000);
+            _pttLiveTranscriptionCts = new CancellationTokenSource();
+            _pttLiveTranscriber = new OpenAiHttpLiveTranscriber(
+                HardwareAccess,
+                BuildPttLiveTranscriptionOptions(),
+                logAction: Log);
 
-            if (!started)
-            {
-                _isPttRecording = false;
-                Log(LogLevel.Error, "Failed to start PTT recording");
-            }
+            _pttLiveTranscriptionTask = _pttLiveTranscriber.TranscribeLive(
+                OnPttLiveTextChunk,
+                _pttLiveTranscriptionCts.Token);
 
             await InvokeAsync(StateHasChanged);
         }
@@ -1080,6 +1098,7 @@
         {
             _isPttRecording = false;
             Log(LogLevel.Error, $"PTT start error: {ex.Message}");
+            await StopPttLiveTranscriptionAsync();
         }
     }
 
@@ -1091,27 +1110,23 @@
 
         try
         {
-            await HardwareAccess.StopRecordingAudio();
-
-            if (_pttAudioChunks.IsEmpty)
-            {
-                await InvokeAsync(StateHasChanged);
-                return;
-            }
-
             _isPttProcessing = true;
             await InvokeAsync(StateHasChanged);
 
-            var pcmBytes = DrainPttBuffer();
-            var wavBytes = BuildWav(pcmBytes, 24000);
+            await StopPttLiveTranscriptionAsync();
 
-            Log(LogLevel.Info, $"Sending {wavBytes.Length / 1024}KB WAV to REST API...");
-            var text = await TranscribeViaRestAsync(wavBytes);
-
-            if (!string.IsNullOrWhiteSpace(text))
+            if (_pttReceivedText && !string.IsNullOrWhiteSpace(_pttLiveHypothesisText))
             {
-                _transcriptionFullText += text + "\n";
+                if (_transcriptionCommittedText.Length > 0 &&
+                    !_transcriptionCommittedText.EndsWith("\n", StringComparison.Ordinal))
+                {
+                    _transcriptionCommittedText += "\n";
+                }
+
+                _transcriptionCommittedText += _pttLiveHypothesisText + "\n";
             }
+
+            _pttLiveHypothesisText = string.Empty;
         }
         catch (Exception ex)
         {
@@ -1124,82 +1139,74 @@
         }
     }
 
-    private byte[] DrainPttBuffer()
+    private OpenAiHttpLiveTranscriptionOptions BuildPttLiveTranscriptionOptions()
     {
-        using var ms = new MemoryStream();
-        while (_pttAudioChunks.TryDequeue(out var chunk))
-        {
-            var bytes = Convert.FromBase64String(chunk);
-            ms.Write(bytes, 0, bytes.Length);
-        }
-        return ms.ToArray();
-    }
-
-    private static byte[] BuildWav(byte[] pcmData, int sampleRate)
-    {
-        const int channels = 1;
-        const int bitsPerSample = 16;
-        int byteRate = sampleRate * channels * bitsPerSample / 8;
-        int blockAlign = channels * bitsPerSample / 8;
-
-        using var ms = new MemoryStream(44 + pcmData.Length);
-        using var w = new BinaryWriter(ms);
-
-        w.Write(new[] { (byte)'R', (byte)'I', (byte)'F', (byte)'F' });
-        w.Write(36 + pcmData.Length);
-        w.Write(new[] { (byte)'W', (byte)'A', (byte)'V', (byte)'E' });
-
-        w.Write(new[] { (byte)'f', (byte)'m', (byte)'t', (byte)' ' });
-        w.Write(16);
-        w.Write((short)1);
-        w.Write((short)channels);
-        w.Write(sampleRate);
-        w.Write(byteRate);
-        w.Write((short)blockAlign);
-        w.Write((short)bitsPerSample);
-
-        w.Write(new[] { (byte)'d', (byte)'a', (byte)'t', (byte)'a' });
-        w.Write(pcmData.Length);
-        w.Write(pcmData);
-
-        return ms.ToArray();
-    }
-
-    private async Task<string> TranscribeViaRestAsync(byte[] wavAudio)
-    {
-        var apiKey = Environment.GetEnvironmentVariable("OPENAI_API_KEY")
-            ?? throw new InvalidOperationException("OPENAI_API_KEY not set");
-
         if (!Enum.TryParse<OpenAiTranscriptionModel>(_transcriptionModelString, out var model))
             model = OpenAiTranscriptionModel.Gpt4oMiniTranscribe;
 
-        using var client = new HttpClient();
-        client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", apiKey);
-
-        using var form = new MultipartFormDataContent();
-        var audioContent = new ByteArrayContent(wavAudio);
-        audioContent.Headers.ContentType = new MediaTypeHeaderValue("audio/wav");
-        form.Add(audioContent, "file", "audio.wav");
-        form.Add(new StringContent(model.ToApiString()), "model");
-        form.Add(new StringContent("de"), "language");
-        form.Add(new StringContent("Expect German with slight accent, business/IT/construction terms"), "prompt");
-
-        var response = await client.PostAsync("https://api.openai.com/v1/audio/transcriptions", form);
-        var body = await response.Content.ReadAsStringAsync();
-
-        if (!response.IsSuccessStatusCode)
+        return new OpenAiHttpLiveTranscriptionOptions
         {
-            Log(LogLevel.Error, $"REST transcription failed: {response.StatusCode} - {body}");
-            return string.Empty;
-        }
+            TranscriptionModel = model,
+            Language = "de",
+            Prompt = "Expect German with slight accent, business/IT/construction terms",
+            SnapshotInterval = TimeSpan.FromMilliseconds(250),
+            MinimumUtteranceDuration = TimeSpan.FromMilliseconds(120),
+            LeadingTrimDuration = TimeSpan.FromMilliseconds(120),
+            PrefixPadding = TimeSpan.FromMilliseconds(250),
+            SilenceDuration = TimeSpan.FromMilliseconds(180),
+            VadThreshold = 0.28
+        };
+    }
 
-        using var doc = JsonDocument.Parse(body);
-        return doc.RootElement.GetProperty("text").GetString() ?? "";
+    private void OnPttLiveTextChunk(string transcript)
+    {
+        InvokeAsync(() =>
+        {
+            _pttLiveHypothesisText = transcript;
+            _pttReceivedText = transcript.Length > 0;
+            StateHasChanged();
+        });
+    }
+
+    private async Task StopPttLiveTranscriptionAsync()
+    {
+        var transcriber = _pttLiveTranscriber;
+        var liveTask = _pttLiveTranscriptionTask;
+        var cts = _pttLiveTranscriptionCts;
+
+        _pttLiveTranscriber = null;
+        _pttLiveTranscriptionTask = null;
+        _pttLiveTranscriptionCts = null;
+
+        try
+        {
+            cts?.Cancel();
+
+            if (transcriber != null)
+            {
+                await transcriber.StopAsync();
+            }
+
+            if (liveTask != null)
+            {
+                await liveTask;
+            }
+        }
+        finally
+        {
+            cts?.Dispose();
+
+            if (transcriber != null)
+            {
+                await transcriber.DisposeAsync();
+            }
+        }
     }
 
     private void ClearTranscriptionText()
     {
-        _transcriptionFullText = string.Empty;
+        _transcriptionCommittedText = string.Empty;
+        _pttLiveHypothesisText = string.Empty;
     }
 
     private void OnTranscriptionModelChanged(ChangeEventArgs e)
@@ -1210,6 +1217,8 @@
 
     public async ValueTask DisposeAsync()
     {
+        await StopPttLiveTranscriptionAsync();
+
         if (voiceAssistant != null)
         {
             voiceAssistant.OnConnectionStatusChanged = null;

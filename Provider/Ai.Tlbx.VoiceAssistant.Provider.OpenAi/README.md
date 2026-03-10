@@ -24,6 +24,37 @@ var assistant = new VoiceAssistant(provider, audioHardware);
 await assistant.StartAsync(settings);
 ```
 
+## HTTP Live Transcription
+
+If you want near-live transcription without using the realtime WebSocket API, use
+`OpenAiHttpLiveTranscriber`. It records microphone audio through the existing
+`IAudioHardwareAccess` abstraction and repeatedly uploads the current utterance
+to the HTTP transcription endpoint.
+
+```csharp
+var transcriber = new OpenAiHttpLiveTranscriber(
+    audioHardware,
+    new OpenAiHttpLiveTranscriptionOptions
+    {
+        TranscriptionModel = OpenAiTranscriptionModel.Gpt4oMiniTranscribe,
+        Language = "de",
+        Prompt = "Expect German with business and IT terms"
+    },
+    apiKey);
+
+var cts = new CancellationTokenSource();
+
+await transcriber.TranscribeLive(chunk =>
+{
+    Console.Write($"\r{chunk}");
+}, cts.Token);
+```
+
+This path is near-live, not true realtime: it uses short repeated HTTP uploads,
+so partials may arrive a bit later. The callback receives the latest current
+hypothesis for the active push-to-talk segment, which lets a UI replace the
+current line as the model revises earlier words.
+
 ## Full Documentation
 
 See the main package for complete documentation:
