@@ -64,7 +64,7 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi.Extensions
             {
                 Instructions = instructions,
                 Voice = voice,
-                Model = OpenAiRealtimeModel.GptRealtime15,
+                Model = OpenAiRealtimeModel.GptRealtime,
                 TurnDetection = new TurnDetection
                 {
                     Type = "server_vad",

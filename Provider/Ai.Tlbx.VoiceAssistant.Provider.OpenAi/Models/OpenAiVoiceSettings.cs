@@ -23,7 +23,7 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi.Models
         /// <summary>
         /// The OpenAI model to use for the conversation.
         /// </summary>
-        public OpenAiRealtimeModel Model { get; set; } = OpenAiRealtimeModel.GptRealtime15;
+        public OpenAiRealtimeModel Model { get; set; } = OpenAiRealtimeModel.GptRealtime;
 
         /// <summary>
         /// The voice to use for AI responses.

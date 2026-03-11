@@ -23,6 +23,7 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.Google
     {
         private const string LIVE_API_ENDPOINT = "wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent";
         private const int CONNECTION_TIMEOUT_MS = 10000;
+        private const int SETUP_TIMEOUT_MS = 10000;
         private const int AUDIO_BUFFER_SIZE = 32384;
         private const string AUDIO_MIME_TYPE = "audio/pcm;rate=16000";
         private const int AUDIO_TX_LOG_INTERVAL = 100;
@@ -37,17 +38,16 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.Google
         private CancellationTokenSource? _cts;
         private bool _isDisposed = false;
         private GoogleVoiceSettings? _settings;
+        private TaskCompletionSource<bool>? _setupCompletionSource;
 
         private bool _setupComplete = false;
         private bool _responseInterrupted = false;
         private readonly StringBuilder _currentTranscript = new();
+        private readonly StringBuilder _currentModelText = new();
         private readonly StringBuilder _currentUserTranscript = new();
         private readonly Dictionary<string, string> _pendingToolCalls = new();
         private int _audioTxCount = 0;
         private int _audioRxCount = 0;
-        private DateTime _lastAudioSentTime = DateTime.MinValue;
-        private bool _audioStreamEnded = false;
-        private const int AUDIO_STREAM_END_DELAY_MS = 1500; // Send audioStreamEnd after 1.5s of silence
 
         /// <summary>
         /// Gets a value indicating whether the provider is connected and ready.
@@ -115,6 +115,8 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.Google
                 throw new ArgumentException("Settings must be of type GoogleVoiceSettings for Google provider", nameof(settings));
             }
 
+            ValidateSettings(googleSettings);
+            ResetConversationState();
             _settings = googleSettings;
             _logAction(LogLevel.Info, $"Settings configured - Voice: {_settings.Voice}, Model: {_settings.Model}");
 
@@ -128,14 +130,16 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.Google
                 OnStatusChanged?.Invoke("Connecting to Google Gemini...");
 
                 _webSocket = new ClientWebSocket();
-                var connectionCts = new CancellationTokenSource(CONNECTION_TIMEOUT_MS);
+                _setupCompletionSource = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
 
                 var uri = new Uri($"{LIVE_API_ENDPOINT}?key={_apiKey}");
                 _logAction(LogLevel.Info, $"Connecting to: {LIVE_API_ENDPOINT}");
                 _logAction(LogLevel.Info, $"API Key present: {!string.IsNullOrEmpty(_apiKey)}, Length: {_apiKey?.Length ?? 0}");
 
-                await _webSocket.ConnectAsync(uri, connectionCts.Token);
-                connectionCts.Dispose();
+                using (var connectionCts = new CancellationTokenSource(CONNECTION_TIMEOUT_MS))
+                {
+                    await _webSocket.ConnectAsync(uri, connectionCts.Token);
+                }
 
                 OnStatusChanged?.Invoke("Connected to Google Gemini");
                 _logAction(LogLevel.Info, $"WebSocket connected, State: {_webSocket.State}");
@@ -145,9 +149,11 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.Google
                 _receiveTask = ReceiveMessagesAsync(_cts.Token);
 
                 await SendSetupMessageAsync();
+                await WaitForSetupCompletionAsync();
             }
             catch (Exception ex)
             {
+                _setupCompletionSource?.TrySetException(ex);
                 _logAction(LogLevel.Error, $"Failed to connect to Google Gemini: {ex.Message}");
                 OnError?.Invoke($"Connection failed: {ex.Message}");
                 throw;
@@ -177,6 +183,8 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.Google
                 }
 
                 _setupComplete = false;
+                _setupCompletionSource?.TrySetCanceled();
+                _setupCompletionSource = null;
                 OnStatusChanged?.Invoke("Disconnected");
                 _logAction(LogLevel.Info, "Disconnected from Google Gemini");
             }
@@ -224,33 +232,19 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.Google
 
             try
             {
-                // Check if we should send audioStreamEnd (after silence period)
                 if (string.IsNullOrEmpty(base64Audio))
                 {
-                    await CheckAndSendAudioStreamEndAsync();
                     return;
                 }
-
-                // Reset audioStreamEnded flag when new audio arrives
-                if (_audioStreamEnded)
-                {
-                    _audioStreamEnded = false;
-                    _logAction(LogLevel.Info, "[AUDIO-TX] Audio stream resumed after silence");
-                }
-
-                _lastAudioSentTime = DateTime.UtcNow;
 
                 var message = new RealtimeInputMessage
                 {
                     RealtimeInput = new RealtimeInput
                     {
-                        MediaChunks = new List<MediaChunk>
+                        Audio = new Blob
                         {
-                            new MediaChunk
-                            {
-                                MimeType = AUDIO_MIME_TYPE,
-                                Data = base64Audio
-                            }
+                            MimeType = AUDIO_MIME_TYPE,
+                            Data = base64Audio
                         }
                     }
                 };
@@ -261,32 +255,6 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.Google
             {
                 _logAction(LogLevel.Error, $"Error processing audio: {ex.Message}");
                 OnError?.Invoke($"Audio processing error: {ex.Message}");
-            }
-        }
-
-        /// <summary>
-        /// Checks if enough silence has passed and sends audioStreamEnd to flush cached audio.
-        /// </summary>
-        private async Task CheckAndSendAudioStreamEndAsync()
-        {
-            if (_audioStreamEnded || _lastAudioSentTime == DateTime.MinValue)
-                return;
-
-            var silenceDuration = (DateTime.UtcNow - _lastAudioSentTime).TotalMilliseconds;
-            if (silenceDuration >= AUDIO_STREAM_END_DELAY_MS)
-            {
-                _audioStreamEnded = true;
-                _logAction(LogLevel.Info, $"[AUDIO-TX] Sending audioStreamEnd after {silenceDuration:F0}ms of silence");
-
-                var message = new RealtimeInputMessage
-                {
-                    RealtimeInput = new RealtimeInput
-                    {
-                        AudioStreamEnd = true
-                    }
-                };
-
-                await SendMessageAsync(message);
             }
         }
 
@@ -369,6 +337,49 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.Google
             }
         }
 
+        private static void ValidateSettings(GoogleVoiceSettings settings)
+        {
+            if (!settings.VoiceActivityDetection.AutomaticDetection)
+            {
+                throw new InvalidOperationException(
+                    "Google Live manual activity signaling is not supported by this toolkit. Set VoiceActivityDetection.AutomaticDetection to true.");
+            }
+        }
+
+        private void ResetConversationState()
+        {
+            _setupComplete = false;
+            _responseInterrupted = false;
+            _currentTranscript.Clear();
+            _currentModelText.Clear();
+            _currentUserTranscript.Clear();
+            _pendingToolCalls.Clear();
+            _audioTxCount = 0;
+            _audioRxCount = 0;
+        }
+
+        private async Task WaitForSetupCompletionAsync()
+        {
+            var setupTask = _setupCompletionSource?.Task
+                ?? throw new InvalidOperationException("Google setup completion task was not initialized.");
+
+            var completedTask = await Task.WhenAny(setupTask, Task.Delay(SETUP_TIMEOUT_MS));
+            if (completedTask != setupTask)
+            {
+                throw new TimeoutException("Timed out waiting for Google Live setupComplete.");
+            }
+
+            await setupTask;
+        }
+
+        private void ReportTransportError(string message, Exception ex)
+        {
+            _setupComplete = false;
+            _logAction(LogLevel.Error, $"{message}\n{ex}");
+            _setupCompletionSource?.TrySetException(new InvalidOperationException(message, ex));
+            OnError?.Invoke(message);
+        }
+
         private async Task SendSetupMessageAsync()
         {
             if (_settings == null || !(_webSocket?.State == WebSocketState.Open))
@@ -434,6 +445,22 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.Google
             _logAction(LogLevel.Info, "Setup message sent, awaiting confirmation");
         }
 
+        private void HandleUsageMetadata(JsonElement usageMetadata)
+        {
+            var report = new UsageReport
+            {
+                ProviderId = "google",
+                InputTokens = usageMetadata.TryGetProperty("promptTokenCount", out var promptTokens) ? promptTokens.GetInt32() : null,
+                OutputTokens = usageMetadata.TryGetProperty("candidatesTokenCount", out var candidateTokens) ? candidateTokens.GetInt32() : null,
+                IsEstimated = false
+            };
+
+            if (report.InputTokens.HasValue || report.OutputTokens.HasValue)
+            {
+                OnUsageReceived?.Invoke(report);
+            }
+        }
+
         private List<Tool> ConvertToolsToGoogleFormat()
         {
             if (_settings?.Tools == null || _settings.Tools.Count == 0)
@@ -490,11 +517,15 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.Google
             }
             catch (ObjectDisposedException)
             {
-                // WebSocket closed during send - expected during disconnect
+                if (!_isDisposed)
+                {
+                    throw;
+                }
             }
             catch (WebSocketException ex)
             {
-                _logAction(LogLevel.Warn, $"WebSocket send failed: {ex.Message}");
+                ReportTransportError($"WebSocket send failed: {ex.Message}", ex);
+                throw;
             }
         }
 
@@ -523,8 +554,10 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.Google
                         {
                             var closeStatus = result.CloseStatus?.ToString() ?? "Unknown";
                             var closeDescription = result.CloseStatusDescription ?? "No description provided";
+                            var closeMessage = $"Connection closed by server: {closeStatus} - {closeDescription}";
                             _logAction(LogLevel.Info, $"[RX-LOOP] Close message received from server - Status: {closeStatus}, Description: {closeDescription}");
-                            OnStatusChanged?.Invoke($"Connection closed by server: {closeStatus} - {closeDescription}");
+                            _setupCompletionSource?.TrySetException(new InvalidOperationException(closeMessage));
+                            OnStatusChanged?.Invoke(closeMessage);
                             return;
                         }
                     }
@@ -547,6 +580,7 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.Google
             {
                 _logAction(LogLevel.Error, $"[RX-LOOP] Error in message receive loop: {ex.Message}");
                 _logAction(LogLevel.Error, $"[RX-LOOP] Stack trace: {ex.StackTrace}");
+                _setupCompletionSource?.TrySetException(ex);
                 OnError?.Invoke($"Message receive error: {ex.Message}");
             }
         }
@@ -561,9 +595,15 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.Google
                 if (root.TryGetProperty("setupComplete", out _))
                 {
                     _setupComplete = true;
+                    _setupCompletionSource?.TrySetResult(true);
                     _logAction(LogLevel.Info, "Setup complete - ready for interaction");
                     OnStatusChanged?.Invoke("Ready");
                     return;
+                }
+
+                if (root.TryGetProperty("usageMetadata", out var usageMetadata))
+                {
+                    HandleUsageMetadata(usageMetadata);
                 }
 
                 if (root.TryGetProperty("serverContent", out var serverContent))
@@ -588,6 +628,7 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.Google
                 {
                     var errorMessage = error.ToString();
                     _logAction(LogLevel.Error, $"[ERROR-FROM-SERVER] {errorMessage}");
+                    _setupCompletionSource?.TrySetException(new InvalidOperationException(errorMessage));
                     OnError?.Invoke($"Server error: {errorMessage}");
                     return;
                 }
@@ -597,13 +638,12 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.Google
             catch (Exception ex)
             {
                 _logAction(LogLevel.Error, $"Error processing received message: {ex.Message}");
+                OnError?.Invoke($"Message processing error: {ex.Message}");
             }
         }
 
         private async Task HandleServerContent(JsonElement serverContent)
         {
-            // Google sends incremental transcription fragments as user speaks.
-            // Accumulate fragments until AI starts responding (modelTurn), then flush complete message.
             if (serverContent.TryGetProperty("inputTranscription", out var inputTranscription))
             {
                 if (inputTranscription.TryGetProperty("text", out var inputText))
@@ -638,20 +678,13 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.Google
                 _responseInterrupted = true;
                 OnInterruptDetected?.Invoke();
                 _currentTranscript.Clear();
-                _currentUserTranscript.Clear();
+                _currentModelText.Clear();
                 return;
             }
 
             if (serverContent.TryGetProperty("modelTurn", out var modelTurn))
             {
-                // Flush accumulated user transcript when AI begins responding
-                if (_currentUserTranscript.Length > 0)
-                {
-                    var userMessage = _currentUserTranscript.ToString();
-                    _logAction(LogLevel.Info, $"[USER-COMPLETE] {userMessage}");
-                    OnMessageReceived?.Invoke(ChatMessage.CreateUserMessage(userMessage));
-                    _currentUserTranscript.Clear();
-                }
+                FlushUserTranscript();
 
                 if (modelTurn.TryGetProperty("parts", out var parts))
                 {
@@ -670,7 +703,7 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.Google
                                 }
                                 else
                                 {
-                                    _currentTranscript.Append(textValue);
+                                    _currentModelText.Append(textValue);
                                 }
                             }
                         }
@@ -714,18 +747,54 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.Google
                     _responseInterrupted = false;
                 }
 
-                if (_currentTranscript.Length > 0)
-                {
-                    var transcriptText = _currentTranscript.ToString();
-                    _logAction(LogLevel.Info, $"[AI] {transcriptText}");
-                    OnMessageReceived?.Invoke(ChatMessage.CreateAssistantMessage(transcriptText));
-                    _currentTranscript.Clear();
-                }
-
-                // Reset audio stream tracking after model turn - ready for new user input
-                _audioStreamEnded = false;
-                _lastAudioSentTime = DateTime.MinValue;
+                FlushUserTranscript();
+                FlushAssistantMessage();
             }
+        }
+
+        private void FlushUserTranscript()
+        {
+            if (_currentUserTranscript.Length == 0)
+            {
+                return;
+            }
+
+            var userMessage = _currentUserTranscript.ToString();
+            _logAction(LogLevel.Info, $"[USER-COMPLETE] {userMessage}");
+            OnMessageReceived?.Invoke(ChatMessage.CreateUserMessage(userMessage));
+            _currentUserTranscript.Clear();
+        }
+
+        private void FlushAssistantMessage()
+        {
+            string transcriptText = ChooseAssistantMessageText();
+            if (string.IsNullOrWhiteSpace(transcriptText))
+            {
+                _currentTranscript.Clear();
+                _currentModelText.Clear();
+                return;
+            }
+
+            _logAction(LogLevel.Info, $"[AI] {transcriptText}");
+            OnMessageReceived?.Invoke(ChatMessage.CreateAssistantMessage(transcriptText));
+            _currentTranscript.Clear();
+            _currentModelText.Clear();
+        }
+
+        private string ChooseAssistantMessageText()
+        {
+            if (string.Equals(_settings?.ResponseModality, "AUDIO", StringComparison.OrdinalIgnoreCase) &&
+                _currentTranscript.Length > 0)
+            {
+                return _currentTranscript.ToString();
+            }
+
+            if (_currentModelText.Length > 0)
+            {
+                return _currentModelText.ToString();
+            }
+
+            return _currentTranscript.ToString();
         }
 
         private async Task HandleToolCall(JsonElement toolCall)

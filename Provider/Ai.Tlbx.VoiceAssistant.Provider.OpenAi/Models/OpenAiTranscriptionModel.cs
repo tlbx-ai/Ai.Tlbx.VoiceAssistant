@@ -5,15 +5,18 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi.Models
     public enum OpenAiTranscriptionModel
     {
         Gpt4oMiniTranscribe,
+        [Obsolete("Pinned legacy snapshot. Prefer Gpt4oMiniTranscribe or Gpt4oMiniTranscribe20251215.")]
         Gpt4oMiniTranscribe20250320,
         Gpt4oMiniTranscribe20251215,
         Gpt4oTranscribe,
         Gpt4oTranscribeDiarize,
+        [Obsolete("Legacy transcription model. Prefer Gpt4oMiniTranscribe or Gpt4oTranscribe.")]
         Whisper1,
     }
 
     public static class OpenAiTranscriptionModelExtensions
     {
+#pragma warning disable CS0618
         public static string ToApiString(this OpenAiTranscriptionModel model)
         {
             return model switch
@@ -27,5 +30,6 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi.Models
                 _ => throw new ArgumentOutOfRangeException(nameof(model), model, "Unsupported transcription model")
             };
         }
+#pragma warning restore CS0618
     }
 }

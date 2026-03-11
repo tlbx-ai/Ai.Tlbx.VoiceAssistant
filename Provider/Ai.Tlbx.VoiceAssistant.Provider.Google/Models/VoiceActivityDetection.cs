@@ -36,7 +36,8 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.Google.Models
         public ActivityHandling ActivityHandling { get; set; } = ActivityHandling.START_OF_ACTIVITY_INTERRUPTS;
 
         /// <summary>
-        /// Enable automatic VAD. When false, client must manually signal activity.
+        /// Enable automatic VAD.
+        /// The current Google provider implementation requires this to remain true.
         /// </summary>
         public bool AutomaticDetection { get; set; } = true;
     }

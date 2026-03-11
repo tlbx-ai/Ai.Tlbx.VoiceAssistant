@@ -25,6 +25,7 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.XAi
     {
         private const string REALTIME_WEBSOCKET_ENDPOINT = "wss://api.x.ai/v1/realtime";
         private const int CONNECTION_TIMEOUT_MS = 10000;
+        private const int SESSION_UPDATE_TIMEOUT_MS = 10000;
         private const int AUDIO_BUFFER_SIZE = 32384;
 
         private readonly string _apiKey;
@@ -35,9 +36,11 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.XAi
         private CancellationTokenSource? _cts;
         private bool _isDisposed = false;
         private XaiVoiceSettings? _settings;
+        private TaskCompletionSource<bool>? _sessionUpdateCompletionSource;
 
         private bool _hasActiveResponse = false;
         private readonly StringBuilder _currentAiMessage = new();
+        private readonly StringBuilder _currentAudioTranscript = new();
         private string _currentResponseId = string.Empty;
         private readonly StringBuilder _currentFunctionArgs = new();
         private string _currentFunctionName = string.Empty;
@@ -118,8 +121,14 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.XAi
                 throw new ArgumentException("Settings must be of type XaiVoiceSettings for xAI provider", nameof(settings));
             }
 
+            ValidateSettings(xaiSettings);
+            ResetResponseState();
             _settings = xaiSettings;
             _logAction(LogLevel.Info, $"Settings configured - Voice: {_settings.Voice}, Speed: {_settings.TalkingSpeed}");
+            if (Math.Abs(_settings.TalkingSpeed - 1.0) > 0.001)
+            {
+                _logAction(LogLevel.Warn, "xAI Voice Agent does not expose speech-rate control; TalkingSpeed will be ignored.");
+            }
 
             try
             {
@@ -127,12 +136,13 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.XAi
 
                 _webSocket = new ClientWebSocket();
                 _webSocket.Options.SetRequestHeader("Authorization", $"Bearer {_apiKey}");
-
-                var connectionCts = new CancellationTokenSource(CONNECTION_TIMEOUT_MS);
+                _sessionUpdateCompletionSource = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
 
                 var uri = new Uri(REALTIME_WEBSOCKET_ENDPOINT);
-                await _webSocket.ConnectAsync(uri, connectionCts.Token);
-                connectionCts.Dispose();
+                using (var connectionCts = new CancellationTokenSource(CONNECTION_TIMEOUT_MS))
+                {
+                    await _webSocket.ConnectAsync(uri, connectionCts.Token);
+                }
 
                 OnStatusChanged?.Invoke("Connected to xAI");
 
@@ -140,9 +150,11 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.XAi
                 _receiveTask = ReceiveMessagesAsync(_cts.Token);
 
                 await SendSessionConfigurationAsync();
+                await WaitForSessionUpdateAsync();
             }
             catch (Exception ex)
             {
+                _sessionUpdateCompletionSource?.TrySetException(ex);
                 _logAction(LogLevel.Error, $"Failed to connect to xAI: {ex.Message}");
                 OnError?.Invoke($"Connection failed: {ex.Message}");
                 throw;
@@ -171,6 +183,8 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.XAi
                     await _receiveTask;
                 }
 
+                _sessionUpdateCompletionSource?.TrySetCanceled();
+                _sessionUpdateCompletionSource = null;
                 OnStatusChanged?.Invoke("Disconnected");
                 _logAction(LogLevel.Info, "Disconnected from xAI");
             }
@@ -195,6 +209,10 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.XAi
 
             _settings = xaiSettings;
             _logAction(LogLevel.Info, $"Settings configured - Voice: {_settings.Voice}, Speed: {_settings.TalkingSpeed}");
+            if (Math.Abs(_settings.TalkingSpeed - 1.0) > 0.001)
+            {
+                _logAction(LogLevel.Warn, "xAI Voice Agent does not expose speech-rate control; TalkingSpeed will be ignored.");
+            }
 
             if (IsConnected)
             {
@@ -301,6 +319,65 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.XAi
             }
         }
 
+        private static void ValidateSettings(XaiVoiceSettings settings)
+        {
+            if (!string.Equals(settings.AudioFormatType, "audio/pcm", StringComparison.OrdinalIgnoreCase))
+            {
+                throw new InvalidOperationException(
+                    "The current xAI provider implementation only supports PCM audio output/input (audio/pcm).");
+            }
+
+            if (settings.AudioSampleRate != 24000)
+            {
+                throw new InvalidOperationException(
+                    "The current xAI provider implementation only supports 24000 Hz audio end-to-end.");
+            }
+
+            if (settings.TurnDetection == null)
+            {
+                throw new InvalidOperationException(
+                    "The current xAI provider implementation requires server_vad turn detection. " +
+                    "Without it, the realtime API requires explicit input_audio_buffer.commit and response.create turn control.");
+            }
+
+            if (!string.Equals(settings.TurnDetection.Type, "server_vad", StringComparison.OrdinalIgnoreCase))
+            {
+                throw new InvalidOperationException("xAI turn detection must be 'server_vad' for this provider.");
+            }
+        }
+
+        private void ResetResponseState()
+        {
+            _hasActiveResponse = false;
+            _currentAiMessage.Clear();
+            _currentAudioTranscript.Clear();
+            _currentResponseId = string.Empty;
+            _currentFunctionArgs.Clear();
+            _currentFunctionName = string.Empty;
+            _currentCallId = string.Empty;
+        }
+
+        private async Task WaitForSessionUpdateAsync()
+        {
+            var sessionTask = _sessionUpdateCompletionSource?.Task
+                ?? throw new InvalidOperationException("xAI session update completion task was not initialized.");
+
+            var completedTask = await Task.WhenAny(sessionTask, Task.Delay(SESSION_UPDATE_TIMEOUT_MS));
+            if (completedTask != sessionTask)
+            {
+                throw new TimeoutException("Timed out waiting for xAI session.updated.");
+            }
+
+            await sessionTask;
+        }
+
+        private void ReportTransportError(string message, Exception ex)
+        {
+            _logAction(LogLevel.Error, $"{message}\n{ex}");
+            _sessionUpdateCompletionSource?.TrySetException(new InvalidOperationException(message, ex));
+            OnError?.Invoke(message);
+        }
+
         private async Task SendSessionConfigurationAsync()
         {
             if (_settings == null || !IsConnected)
@@ -351,8 +428,7 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.XAi
                             {
                                 Type = _settings.AudioFormatType,
                                 Rate = _settings.AudioSampleRate
-                            },
-                            Speed = _settings.TalkingSpeed
+                            }
                         }
                     },
                     InputAudioTranscription = _settings.InputAudioLanguage != null
@@ -390,11 +466,15 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.XAi
             }
             catch (ObjectDisposedException)
             {
-                // WebSocket closed during send - expected during disconnect
+                if (!_isDisposed)
+                {
+                    throw;
+                }
             }
             catch (WebSocketException ex)
             {
-                _logAction(LogLevel.Warn, $"WebSocket send failed: {ex.Message}");
+                ReportTransportError($"WebSocket send failed: {ex.Message}", ex);
+                throw;
             }
         }
 
@@ -419,6 +499,8 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.XAi
                         }
                         else if (result.MessageType == WebSocketMessageType.Close)
                         {
+                            var closeMessage = "Connection closed by server";
+                            _sessionUpdateCompletionSource?.TrySetException(new InvalidOperationException(closeMessage));
                             OnStatusChanged?.Invoke("Connection closed by server");
                             return;
                         }
@@ -437,6 +519,7 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.XAi
             }
             catch (Exception ex)
             {
+                _sessionUpdateCompletionSource?.TrySetException(ex);
                 _logAction(LogLevel.Error, $"Error in message receive loop: {ex.Message}");
                 OnError?.Invoke($"Message receive error: {ex.Message}");
             }
@@ -460,6 +543,8 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.XAi
                         _logAction(LogLevel.Info, "Session created by xAI");
                         break;
                     case "session.updated":
+                        _sessionUpdateCompletionSource?.TrySetResult(true);
+                        OnStatusChanged?.Invoke("Ready");
                         break;
                     case "response.created":
                         HandleResponseCreated(root);
@@ -468,6 +553,9 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.XAi
                         break;
                     case "response.output_audio.delta":
                         await HandleAudioResponse(root);
+                        break;
+                    case "response.output_audio_transcript.delta":
+                        HandleAudioTranscriptDelta(root);
                         break;
                     case "response.output_audio_transcript.done":
                         HandleAudioTranscriptDone(root);
@@ -505,7 +593,6 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.XAi
                     case "response.content_part.added":
                     case "response.content_part.done":
                     case "response.output_audio.done":
-                    case "response.output_audio_transcript.delta":
                     case "response.output_item.done":
                     case "rate_limits.updated":
                     case "conversation.item.input_audio_transcription.delta":
@@ -526,6 +613,7 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.XAi
             catch (Exception ex)
             {
                 _logAction(LogLevel.Error, $"Error processing received message: {ex.Message}");
+                OnError?.Invoke($"Message processing error: {ex.Message}");
             }
         }
 
@@ -647,17 +735,34 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.XAi
             }
         }
 
+        private void HandleAudioTranscriptDelta(JsonElement root)
+        {
+            if (!root.TryGetProperty("delta", out var deltaElement))
+            {
+                return;
+            }
+
+            string deltaText = deltaElement.ValueKind switch
+            {
+                JsonValueKind.String => deltaElement.GetString() ?? string.Empty,
+                JsonValueKind.Object when deltaElement.TryGetProperty("text", out var textElement) => textElement.GetString() ?? string.Empty,
+                _ => string.Empty
+            };
+
+            if (!string.IsNullOrEmpty(deltaText))
+            {
+                _currentAudioTranscript.Append(deltaText);
+            }
+        }
+
         private void HandleAudioTranscriptDone(JsonElement root)
         {
             if (root.TryGetProperty("transcript", out var transcript))
             {
                 var text = transcript.GetString();
-                if (!string.IsNullOrEmpty(text))
+                if (!string.IsNullOrEmpty(text) && _currentAudioTranscript.Length == 0)
                 {
-                    _logAction(LogLevel.Info, $"Audio transcript: {text}");
-
-                    var message = ChatMessage.CreateAssistantMessage(text);
-                    OnMessageReceived?.Invoke(message);
+                    _currentAudioTranscript.Append(text);
                 }
             }
         }
@@ -679,8 +784,19 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.XAi
 
         private void HandleTextDelta(JsonElement root)
         {
-            if (root.TryGetProperty("delta", out var deltaElem) &&
-                deltaElem.TryGetProperty("text", out var textElem))
+            if (!root.TryGetProperty("delta", out var deltaElem))
+            {
+                return;
+            }
+
+            if (deltaElem.ValueKind == JsonValueKind.String)
+            {
+                string deltaText = deltaElem.GetString() ?? string.Empty;
+                _currentAiMessage.Append(deltaText);
+                return;
+            }
+
+            if (deltaElem.TryGetProperty("text", out var textElem))
             {
                 string deltaText = textElem.GetString() ?? string.Empty;
                 _currentAiMessage.Append(deltaText);
@@ -692,6 +808,8 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.XAi
             if (root.TryGetProperty("response", out var response) &&
                 response.TryGetProperty("id", out var idElement))
             {
+                _currentAiMessage.Clear();
+                _currentAudioTranscript.Clear();
                 _currentResponseId = idElement.GetString() ?? "";
                 _hasActiveResponse = true;
                 _logAction(LogLevel.Info, $"New response started: {_currentResponseId}");
@@ -702,6 +820,8 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.XAi
         {
             _hasActiveResponse = false;
             _logAction(LogLevel.Info, "Response completed");
+
+            FlushAssistantMessage();
 
             // Parse usage from response.done event (OpenAI-compatible format)
             if (root.TryGetProperty("response", out var response) &&
@@ -726,15 +846,9 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.XAi
 
         private async Task HandleTextDone()
         {
-            if (_currentAiMessage.Length > 0)
+            if (_currentAiMessage.Length > 0 || _currentAudioTranscript.Length > 0)
             {
-                string messageText = _currentAiMessage.ToString();
-                _logAction(LogLevel.Info, $"AI Text Complete: {messageText}");
-
-                var message = ChatMessage.CreateAssistantMessage(messageText);
-                OnMessageReceived?.Invoke(message);
-
-                _currentAiMessage.Clear();
+                _logAction(LogLevel.Info, "Assistant text stream complete");
             }
             await Task.CompletedTask;
         }
@@ -755,6 +869,8 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.XAi
                 if (_hasActiveResponse)
                 {
                     _logAction(LogLevel.Info, "Interrupting active AI response");
+                    _currentAiMessage.Clear();
+                    _currentAudioTranscript.Clear();
                     await SendInterruptAsync();
                     _hasActiveResponse = false;
                 }
@@ -793,6 +909,22 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.XAi
             {
                 return argumentsJson;
             }
+        }
+
+        private void FlushAssistantMessage()
+        {
+            string messageText = _currentAudioTranscript.Length > 0
+                ? _currentAudioTranscript.ToString()
+                : _currentAiMessage.ToString();
+
+            if (!string.IsNullOrWhiteSpace(messageText))
+            {
+                _logAction(LogLevel.Info, $"AI Text Complete: {messageText}");
+                OnMessageReceived?.Invoke(ChatMessage.CreateAssistantMessage(messageText));
+            }
+
+            _currentAiMessage.Clear();
+            _currentAudioTranscript.Clear();
         }
 
         /// <summary>

@@ -4,35 +4,40 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.Google.Models
 {
     /// <summary>
     /// Supported Google Gemini Live API models that have been verified to work with this library.
+    /// Current defaults should prefer the <see cref="Gemini25FlashNativeAudio"/> alias.
     /// </summary>
     public enum GoogleModel
     {
         /// <summary>
-        /// Gemini Live 2.5 Flash with native audio support (recommended).
-        /// Combines live streaming with native audio for best quality and stability.
-        /// Model: gemini-live-2.5-flash-native-audio
+        /// Legacy alias retained for compatibility with older integrations.
         /// </summary>
+        [Obsolete("Use Gemini25FlashNativeAudio. This legacy alias is kept for compatibility.")]
         GeminiLive25FlashNativeAudio,
 
         /// <summary>
-        /// Gemini 2.5 Flash with native audio support.
-        /// Features the most natural and realistic-sounding speech with multilingual support.
-        /// Model: gemini-2.5-flash-native-audio-preview-09-2025
+        /// Current Gemini 2.5 Flash native audio model.
+        /// Model: gemini-2.5-flash-native-audio-preview-12-2025
         /// </summary>
         Gemini25FlashNativeAudio,
 
         /// <summary>
-        /// Gemini Live 2.5 Flash.
-        /// Uses half-cascade architecture for improved stability.
-        /// Model: gemini-live-2.5-flash-preview
+        /// Pinned September 2025 Gemini 2.5 Flash native audio preview.
         /// </summary>
+        [Obsolete("Pinned legacy snapshot. Use Gemini25FlashNativeAudio.")]
+        Gemini25FlashNativeAudioPreview202509,
+
+        /// <summary>
+        /// Gemini Live 2.5 Flash preview.
+        /// Google shut this model down on December 9, 2025.
+        /// </summary>
+        [Obsolete("Google shut this model down on 2025-12-09. Use Gemini25FlashNativeAudio.")]
         GeminiLive25Flash,
 
         /// <summary>
-        /// Gemini 2.0 Flash Live (stable release).
-        /// Earlier version maintained for compatibility.
-        /// Model: gemini-2.0-flash-live-001
+        /// Gemini 2.0 Flash Live.
+        /// Google shut this model down on December 9, 2025.
         /// </summary>
+        [Obsolete("Google shut this model down on 2025-12-09. Use Gemini25FlashNativeAudio.")]
         Gemini20FlashLive001
     }
 
@@ -46,16 +51,19 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.Google.Models
         /// </summary>
         /// <param name="model">The model enum value.</param>
         /// <returns>The API model string to use with Google Gemini.</returns>
+#pragma warning disable CS0618
         public static string ToApiString(this GoogleModel model)
         {
             return model switch
             {
                 GoogleModel.GeminiLive25FlashNativeAudio => "models/gemini-live-2.5-flash-native-audio",
-                GoogleModel.Gemini25FlashNativeAudio => "models/gemini-2.5-flash-native-audio-preview-09-2025",
+                GoogleModel.Gemini25FlashNativeAudio => "models/gemini-2.5-flash-native-audio-preview-12-2025",
+                GoogleModel.Gemini25FlashNativeAudioPreview202509 => "models/gemini-2.5-flash-native-audio-preview-09-2025",
                 GoogleModel.GeminiLive25Flash => "models/gemini-live-2.5-flash-preview",
                 GoogleModel.Gemini20FlashLive001 => "models/gemini-2.0-flash-live-001",
                 _ => throw new ArgumentOutOfRangeException(nameof(model), model, "Unsupported model")
             };
         }
+#pragma warning restore CS0618
     }
 }

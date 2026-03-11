@@ -14,7 +14,7 @@ namespace Ai.Tlbx.VoiceAssistant.Demo.Linux
         private static VoiceAssistant? _voiceAssistant;
         private static OpenAiVoiceProvider? _voiceProvider;
         private static string _openAiApiKey = string.Empty;
-        private static OpenAiRealtimeModel _openAiModel = OpenAiRealtimeModel.Gpt4oRealtimePreview20250603;
+        private static OpenAiRealtimeModel _openAiModel = OpenAiRealtimeModel.GptRealtime;
         private static readonly ManualResetEvent _exitEvent = new ManualResetEvent(false);
         private static readonly CancellationTokenSource _cts = new CancellationTokenSource();
 
@@ -113,16 +113,11 @@ namespace Ai.Tlbx.VoiceAssistant.Demo.Linux
                         
                         if (openAi.TryGetProperty("Model", out var model))
                         {
-                            // Parse the model string from config if possible
                             var modelString = model.GetString() ?? "";
-                            _openAiModel = modelString switch
+                            if (!OpenAiRealtimeModelExtensions.TryParseApiString(modelString, out _openAiModel))
                             {
-                                "gpt-4o-realtime-preview-2025-06-03" => OpenAiRealtimeModel.Gpt4oRealtimePreview20250603,
-                                "gpt-4o-realtime-preview-2024-12-17" => OpenAiRealtimeModel.Gpt4oRealtimePreview20241217,
-                                "gpt-4o-realtime-preview-2024-10-01" => OpenAiRealtimeModel.Gpt4oRealtimePreview20241001,
-                                "gpt-4o-mini-realtime-preview-2024-12-17" => OpenAiRealtimeModel.Gpt4oMiniRealtimePreview20241217,
-                                _ => OpenAiRealtimeModel.Gpt4oRealtimePreview20250603 // Default to latest
-                            };
+                                _openAiModel = OpenAiRealtimeModel.GptRealtime;
+                            }
                         }
                     }
                 }

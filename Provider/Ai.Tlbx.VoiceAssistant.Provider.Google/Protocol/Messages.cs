@@ -183,14 +183,20 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.Google.Protocol
 
     public class RealtimeInput
     {
-        [JsonPropertyName("mediaChunks")]
-        public List<MediaChunk>? MediaChunks { get; set; }
+        [JsonPropertyName("audio")]
+        public Blob? Audio { get; set; }
+
+        [JsonPropertyName("activityStart")]
+        public object? ActivityStart { get; set; }
+
+        [JsonPropertyName("activityEnd")]
+        public object? ActivityEnd { get; set; }
 
         [JsonPropertyName("audioStreamEnd")]
         public bool? AudioStreamEnd { get; set; }
     }
 
-    public class MediaChunk
+    public class Blob
     {
         [JsonPropertyName("mimeType")]
         public string MimeType { get; set; } = string.Empty;

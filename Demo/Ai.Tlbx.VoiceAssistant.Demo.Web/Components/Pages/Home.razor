@@ -415,8 +415,8 @@
     private List<string> availableVoices = Enum.GetValues<AssistantVoice>().Select(v => v.ToString()).ToList();
 
     // Model management (provider-specific)
-    private string _currentModelString = nameof(OpenAiRealtimeModel.GptRealtime15);
-    private List<string> availableModels = Enum.GetValues<OpenAiRealtimeModel>().Select(v => v.ToString()).ToList();
+    private string _currentModelString = nameof(OpenAiRealtimeModel.GptRealtime);
+    private List<string> availableModels = GetSelectableEnumNames<OpenAiRealtimeModel>();
 
     private void OnModelChanged(ChangeEventArgs e)
     {
@@ -448,9 +448,23 @@
     private Task? _pttLiveTranscriptionTask;
     private OpenAiHttpLiveTranscriber? _pttLiveTranscriber;
     private string _transcriptionModelString = nameof(OpenAiTranscriptionModel.Gpt4oTranscribe);
-    private List<string> _transcriptionModels = Enum.GetValues<OpenAiTranscriptionModel>()
-        .Where(m => m != OpenAiTranscriptionModel.Whisper1 && m != OpenAiTranscriptionModel.Gpt4oTranscribeDiarize)
+    private List<string> _transcriptionModels = GetSelectableEnumValues<OpenAiTranscriptionModel>()
+        .Where(m => m != OpenAiTranscriptionModel.Gpt4oTranscribeDiarize)
         .Select(v => v.ToString()).ToList();
+
+    private static List<TEnum> GetSelectableEnumValues<TEnum>() where TEnum : struct, Enum
+    {
+        return Enum.GetValues<TEnum>()
+            .Where(value =>
+            {
+                var field = typeof(TEnum).GetField(value.ToString());
+                return field is not null && !Attribute.IsDefined(field, typeof(ObsoleteAttribute));
+            })
+            .ToList();
+    }
+
+    private static List<string> GetSelectableEnumNames<TEnum>() where TEnum : struct, Enum
+        => GetSelectableEnumValues<TEnum>().Select(v => v.ToString()).ToList();
 
     protected override async Task OnInitializedAsync()
     {
@@ -521,14 +535,14 @@
         {
             availableVoices = Enum.GetValues<AssistantVoice>().Select(v => v.ToString()).ToList();
             _currentVoiceString = "Alloy";
-            availableModels = Enum.GetValues<OpenAiRealtimeModel>().Select(v => v.ToString()).ToList();
-            _currentModelString = nameof(OpenAiRealtimeModel.GptRealtime15);
+            availableModels = GetSelectableEnumNames<OpenAiRealtimeModel>();
+            _currentModelString = nameof(OpenAiRealtimeModel.GptRealtime);
         }
         else if (_selectedProviderString == "Google")
         {
             availableVoices = Enum.GetValues<GoogleVoice>().Select(v => v.ToString()).ToList();
             _currentVoiceString = "Aoede";
-            availableModels = Enum.GetValues<GoogleModel>().Select(v => v.ToString()).ToList();
+            availableModels = GetSelectableEnumNames<GoogleModel>();
             _currentModelString = nameof(GoogleModel.Gemini25FlashNativeAudio);
         }
         else if (_selectedProviderString == "xAI")
@@ -836,7 +850,7 @@
 
                 if (!Enum.TryParse<OpenAiRealtimeModel>(_currentModelString, out var openAiModel))
                 {
-                    openAiModel = OpenAiRealtimeModel.GptRealtime15;
+                    openAiModel = OpenAiRealtimeModel.GptRealtime;
                 }
 
                 settings = new OpenAiVoiceSettings

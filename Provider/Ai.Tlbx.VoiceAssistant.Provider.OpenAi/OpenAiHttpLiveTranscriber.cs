@@ -430,10 +430,12 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi
 
         private void ValidateOptions()
         {
+#pragma warning disable CS0618
             if (Options.TranscriptionModel == OpenAiTranscriptionModel.Whisper1)
             {
                 throw new InvalidOperationException("Whisper-1 does not support streamed HTTP transcription responses.");
             }
+#pragma warning restore CS0618
 
             if (Options.SnapshotInterval <= TimeSpan.Zero)
             {

@@ -27,23 +27,26 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.XAi.Models
 
         /// <summary>
         /// The speed of the AI model's spoken response.
-        /// Note: xAI API doesn't currently support speed adjustment; this is for interface compatibility.
+        /// Note: xAI Voice Agent does not currently expose speech-rate control.
+        /// This property is retained for IVoiceSettings compatibility and is ignored by the provider.
         /// </summary>
         public double TalkingSpeed { get; set; } = 1.0;
 
         /// <summary>
-        /// Audio sample rate in Hz. Supported: 8000, 16000, 21050, 24000 (default), 32000, 44100, 48000.
+        /// Audio sample rate in Hz.
+        /// The current toolkit implementation supports 24000 Hz only.
         /// </summary>
         public int AudioSampleRate { get; set; } = 24000;
 
         /// <summary>
-        /// Audio format type. Supported: "audio/pcm" (default), "audio/pcmu", "audio/pcma".
+        /// Audio format type.
+        /// The current toolkit implementation supports "audio/pcm" only.
         /// </summary>
         public string AudioFormatType { get; set; } = "audio/pcm";
 
         /// <summary>
         /// Turn detection settings for conversation flow.
-        /// Set to null to disable server-side VAD.
+        /// The current toolkit implementation requires xAI server VAD and does not support null/manual turn control.
         /// </summary>
         public XaiTurnDetection? TurnDetection { get; set; } = new();
 
