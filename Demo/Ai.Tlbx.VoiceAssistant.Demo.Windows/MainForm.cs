@@ -128,7 +128,7 @@ namespace Ai.Tlbx.VoiceAssistant.Demo.Windows
                 {
                     Instructions = "You are a helpful AI assistant. Be friendly, conversational, helpful, and engaging.",
                     Voice = AssistantVoice.Alloy,
-                    Model = OpenAiRealtimeModel.GptRealtime
+                    Model = OpenAiRealtimeModel.GptRealtime15
                 };
                 
                 await _voiceAssistant.StartAsync(settings);

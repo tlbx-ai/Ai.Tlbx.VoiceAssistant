@@ -14,7 +14,7 @@ namespace Ai.Tlbx.VoiceAssistant.Demo.Linux
         private static VoiceAssistant? _voiceAssistant;
         private static OpenAiVoiceProvider? _voiceProvider;
         private static string _openAiApiKey = string.Empty;
-        private static OpenAiRealtimeModel _openAiModel = OpenAiRealtimeModel.GptRealtime;
+        private static OpenAiRealtimeModel _openAiModel = OpenAiRealtimeModel.GptRealtime15;
         private static readonly ManualResetEvent _exitEvent = new ManualResetEvent(false);
         private static readonly CancellationTokenSource _cts = new CancellationTokenSource();
 
@@ -116,7 +116,7 @@ namespace Ai.Tlbx.VoiceAssistant.Demo.Linux
                             var modelString = model.GetString() ?? "";
                             if (!OpenAiRealtimeModelExtensions.TryParseApiString(modelString, out _openAiModel))
                             {
-                                _openAiModel = OpenAiRealtimeModel.GptRealtime;
+                                _openAiModel = OpenAiRealtimeModel.GptRealtime15;
                             }
                         }
                     }

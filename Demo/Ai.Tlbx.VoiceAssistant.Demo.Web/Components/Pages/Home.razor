@@ -415,7 +415,7 @@
     private List<string> availableVoices = Enum.GetValues<AssistantVoice>().Select(v => v.ToString()).ToList();
 
     // Model management (provider-specific)
-    private string _currentModelString = nameof(OpenAiRealtimeModel.GptRealtime);
+    private string _currentModelString = nameof(OpenAiRealtimeModel.GptRealtime15);
     private List<string> availableModels = GetSelectableEnumNames<OpenAiRealtimeModel>();
 
     private void OnModelChanged(ChangeEventArgs e)
@@ -536,7 +536,7 @@
             availableVoices = Enum.GetValues<AssistantVoice>().Select(v => v.ToString()).ToList();
             _currentVoiceString = "Alloy";
             availableModels = GetSelectableEnumNames<OpenAiRealtimeModel>();
-            _currentModelString = nameof(OpenAiRealtimeModel.GptRealtime);
+            _currentModelString = nameof(OpenAiRealtimeModel.GptRealtime15);
         }
         else if (_selectedProviderString == "Google")
         {
@@ -850,7 +850,7 @@
 
                 if (!Enum.TryParse<OpenAiRealtimeModel>(_currentModelString, out var openAiModel))
                 {
-                    openAiModel = OpenAiRealtimeModel.GptRealtime;
+                    openAiModel = OpenAiRealtimeModel.GptRealtime15;
                 }
 
                 settings = new OpenAiVoiceSettings
