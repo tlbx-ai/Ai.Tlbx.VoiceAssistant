@@ -111,11 +111,19 @@ builder.Services.AddScoped<IAudioHardwareAccess, WebAudioAccess>();
 ```csharp
 // OpenAI — voices: Alloy, Ash, Ballad, Coral, Echo, Sage, Shimmer, Verse, Marin, Cedar
 var provider = new OpenAiVoiceProvider(apiKey);
-var settings = new OpenAiVoiceSettings { Voice = AssistantVoice.Alloy };
+var settings = new OpenAiVoiceSettings
+{
+    Voice = AssistantVoice.Alloy,
+    Model = OpenAiRealtimeModel.GptRealtime15
+};
 
 // Google Gemini — voices: Puck, Charon, Kore, Fenrir, Aoede, Leda, Orus, Zephyr
 var provider = new GoogleVoiceProvider(apiKey);
-var settings = new GoogleVoiceSettings { Voice = GoogleVoice.Puck };
+var settings = new GoogleVoiceSettings
+{
+    Voice = GoogleVoice.Puck,
+    Model = GoogleModel.Gemini31FlashLivePreview
+};
 
 // xAI Grok — voices: Ara, Rex, Sal, Eve, Leo
 var provider = new XaiVoiceProvider(apiKey);
@@ -131,20 +139,22 @@ Each provider has its own settings class with shared and provider-specific optio
 **Shared (`IVoiceSettings`):** `Instructions`, `Tools`, `TalkingSpeed`
 
 ```csharp
-// OpenAI — full TalkingSpeed support (0.25–1.5), turn detection, eagerness, transcription
+// OpenAI — current recommended realtime default is GptRealtime15
 new OpenAiVoiceSettings
 {
     Voice = AssistantVoice.Coral,
+    Model = OpenAiRealtimeModel.GptRealtime15,
     TalkingSpeed = 1.2,
     Eagerness = Eagerness.auto,
     TurnDetection = new TurnDetection { SilenceDurationMs = 200 },
     MostLikelySpokenLanguage = "en"
 };
 
-// Google — temperature, voice activity detection, context compression
+// Google — current recommended Live model is Gemini31FlashLivePreview
 new GoogleVoiceSettings
 {
     Voice = GoogleVoice.Puck,
+    Model = GoogleModel.Gemini31FlashLivePreview,
     LanguageCode = "en",
     Temperature = 0.8,
     AutomaticContextCompression = true
@@ -167,6 +177,12 @@ new XaiVoiceSettings
 | Language hint | `MostLikelySpokenLanguage` | `LanguageCode` | `InputAudioLanguage` |
 | Context management | `AutomaticContextTruncation` | `AutomaticContextCompression` | — |
 | Web search | — | — | `EnableWebSearch`, `EnableXSearch` |
+
+### Current model guidance
+
+- OpenAI: `OpenAiRealtimeModel.GptRealtime15` is the production default. Legacy `gpt-4o-realtime-preview-*` enums remain available but are marked obsolete.
+- Google: `GoogleModel.Gemini31FlashLivePreview` is the current default. `Gemini25FlashNativeAudio` remains supported for compatibility checks and is marked obsolete.
+- xAI: the provider remains model-stable at the toolkit surface; current selection is voice/settings driven rather than a public model enum.
 
 ---
 
@@ -340,6 +356,18 @@ Write once, run on any provider. The orchestrator handles:
 - Tool schema translation per provider
 - Streaming audio playback with interruption support
 - Chat history management
+
+### Demo-First Compatibility Validation
+Realtime voice APIs drift fast and are difficult to cover with reliable automation. The web demo is intentionally treated as the primary compatibility harness for provider validation:
+- switch providers and models from one UI
+- keep obsolete models visible for manual regression checks
+- validate real microphone, websocket, transcription, and tool-call behavior on the shipped demo surface
+
+Run it locally:
+
+```bash
+dotnet watch run --project Demo/Ai.Tlbx.VoiceAssistant.Demo.Web/Ai.Tlbx.VoiceAssistant.Demo.Web.csproj --launch-profile https
+```
 
 ### Built-in Tools
 - `TimeTool` — Current time in any timezone
