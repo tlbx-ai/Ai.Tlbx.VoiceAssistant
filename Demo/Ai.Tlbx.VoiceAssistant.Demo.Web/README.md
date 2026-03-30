@@ -10,6 +10,7 @@ This demo application has been refactored to use reusable Razor components from 
 
 ### Voice Chat Functionality
 - **Real-time voice interaction** with an AI assistant
+- **Provider model selection** with obsolete models kept visible for manual regression checks
 - Start/stop voice recording controls
 - Voice selection for AI responses
 - Microphone device selection

@@ -1,7 +1,7 @@
 # Script to build NuGet packages with auto-incremented version numbers
 # This script will:
 # 1. Commit and push any pending changes to git
-# 2. Increment the patch version number (1.0.x)
+# 2. Increment the requested semantic version segment
 # 3. Build the packages with the version 1.0.x
 # 4. If NUGET_API_KEY environment variable exists, upload packages to NuGet.org
 
@@ -10,7 +10,11 @@ param(
     [string]$Configuration = "Release",
 
     [Parameter(Mandatory=$false)]
-    [string]$CommitMessage = "Automated version increment for NuGet publishing"
+    [string]$CommitMessage = "Automated version increment for NuGet publishing",
+
+    [Parameter(Mandatory=$false)]
+    [ValidateSet("patch", "minor", "major")]
+    [string]$VersionBump = "patch"
 )
 
 $ErrorActionPreference = "Stop"
@@ -85,8 +89,24 @@ if (Test-Path $propsFilePath)
 
         $currentVersion = "$major.$minor.$patch"
 
-        # Increment patch version
-        $patch++
+        switch ($VersionBump)
+        {
+            "major"
+            {
+                $major++
+                $minor = 0
+                $patch = 0
+            }
+            "minor"
+            {
+                $minor++
+                $patch = 0
+            }
+            default
+            {
+                $patch++
+            }
+        }
 
         $newVersion = "$major.$minor.$patch"
     }
@@ -232,8 +252,8 @@ foreach ($project in $projects)
 }
 
 # Commit the version change
-Write-Host "Committing version.txt change..." -ForegroundColor Yellow
-git add $versionFilePath
+Write-Host "Committing Directory.Build.props version change..." -ForegroundColor Yellow
+git add $propsFilePath
 git commit -m "Increment version to $newVersion"
 git push
 

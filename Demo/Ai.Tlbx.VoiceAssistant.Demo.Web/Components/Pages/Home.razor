@@ -86,9 +86,10 @@
                                                 disabled="@((voiceAssistant?.IsConnecting ?? false) || (voiceAssistant?.IsRecording ?? false))">
                                             @foreach (var model in availableModels)
                                             {
-                                                <option value="@model">@model</option>
+                                                <option value="@model.Value">@model.Label</option>
                                             }
                                         </select>
+                                        <p class="mt-1 text-xs text-gray-500">Obsolete models stay selectable here for manual compatibility checks.</p>
                                     </div>
 
                                     <!-- Voice Speed -->
@@ -413,10 +414,11 @@
     }
     private double currentVoiceSpeed = 1.0;
     private List<string> availableVoices = Enum.GetValues<AssistantVoice>().Select(v => v.ToString()).ToList();
+    private sealed record ModelOption(string Value, string Label);
 
     // Model management (provider-specific)
     private string _currentModelString = nameof(OpenAiRealtimeModel.GptRealtime15);
-    private List<string> availableModels = GetSelectableEnumNames<OpenAiRealtimeModel>();
+    private List<ModelOption> availableModels = GetEnumOptions<OpenAiRealtimeModel>(includeObsolete: true);
 
     private void OnModelChanged(ChangeEventArgs e)
     {
@@ -463,8 +465,26 @@
             .ToList();
     }
 
-    private static List<string> GetSelectableEnumNames<TEnum>() where TEnum : struct, Enum
-        => GetSelectableEnumValues<TEnum>().Select(v => v.ToString()).ToList();
+    private static List<ModelOption> GetEnumOptions<TEnum>(bool includeObsolete = false) where TEnum : struct, Enum
+    {
+        return Enum.GetValues<TEnum>()
+            .Select(value =>
+            {
+                var field = typeof(TEnum).GetField(value.ToString());
+                var obsoleteAttribute = field?.GetCustomAttributes(typeof(ObsoleteAttribute), false).OfType<ObsoleteAttribute>().FirstOrDefault();
+                var isObsolete = obsoleteAttribute is not null;
+
+                return new
+                {
+                    Value = value.ToString(),
+                    IsObsolete = isObsolete,
+                    Label = isObsolete ? $"{value} [obsolete]" : value.ToString()
+                };
+            })
+            .Where(option => includeObsolete || !option.IsObsolete)
+            .Select(option => new ModelOption(option.Value, option.Label))
+            .ToList();
+    }
 
     protected override async Task OnInitializedAsync()
     {
@@ -535,21 +555,21 @@
         {
             availableVoices = Enum.GetValues<AssistantVoice>().Select(v => v.ToString()).ToList();
             _currentVoiceString = "Alloy";
-            availableModels = GetSelectableEnumNames<OpenAiRealtimeModel>();
+            availableModels = GetEnumOptions<OpenAiRealtimeModel>(includeObsolete: true);
             _currentModelString = nameof(OpenAiRealtimeModel.GptRealtime15);
         }
         else if (_selectedProviderString == "Google")
         {
             availableVoices = Enum.GetValues<GoogleVoice>().Select(v => v.ToString()).ToList();
             _currentVoiceString = "Aoede";
-            availableModels = GetSelectableEnumNames<GoogleModel>();
-            _currentModelString = nameof(GoogleModel.Gemini25FlashNativeAudio);
+            availableModels = GetEnumOptions<GoogleModel>(includeObsolete: true);
+            _currentModelString = nameof(GoogleModel.Gemini31FlashLivePreview);
         }
         else if (_selectedProviderString == "xAI")
         {
             availableVoices = Enum.GetValues<XaiVoice>().Select(v => v.ToString()).ToList();
             _currentVoiceString = "Ara";
-            availableModels = new() { "Default" };
+            availableModels = new() { new ModelOption("Default", "Default") };
             _currentModelString = "Default";
         }
     }
@@ -879,7 +899,7 @@
 
                 if (!Enum.TryParse<GoogleModel>(_currentModelString, out var googleModel))
                 {
-                    googleModel = GoogleModel.Gemini25FlashNativeAudio;
+                    googleModel = GoogleModel.Gemini31FlashLivePreview;
                 }
 
                 settings = new GoogleVoiceSettings
@@ -898,7 +918,7 @@
                     }
                 };
 
-                Log(LogLevel.Info, $"Starting Google session with voice: {googleVoice}");
+                Log(LogLevel.Info, $"Starting Google session with voice: {googleVoice}, model: {googleModel}");
             }
             else if (_selectedProviderString == "xAI")
             {

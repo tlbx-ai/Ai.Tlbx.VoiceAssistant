@@ -12,7 +12,7 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi.Models
         /// Legacy alias for the unpinned GPT Realtime model id.
         /// Kept for compatibility with earlier releases.
         /// </summary>
-        [Obsolete("Prefer GptRealtime15. This unpinned alias is kept for compatibility.")]
+        [Obsolete("Prefer GptRealtime15 for production or GptRealtimeMini for lower-cost realtime sessions. This unpinned alias is kept only for compatibility.")]
         GptRealtime,
 
         /// <summary>
@@ -30,31 +30,31 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi.Models
         /// <summary>
         /// Pinned GPT Realtime snapshot from August 28, 2025.
         /// </summary>
-        [Obsolete("Prefer GptRealtime15 unless you explicitly need the 2025-08-28 snapshot.")]
+        [Obsolete("Prefer GptRealtime15. This pinned 2025-08-28 snapshot is legacy and should only be used for compatibility investigations.")]
         Gpt520250828,
 
         /// <summary>
         /// GPT-4o Realtime preview from June 2025.
         /// </summary>
-        [Obsolete("Legacy preview model. Use GptRealtime15 instead.")]
+        [Obsolete("Legacy GPT-4o Realtime preview model. Migrate to GptRealtime15 before the preview shutdown path becomes unusable.")]
         Gpt4oRealtimePreview20250603,
         
         /// <summary>
         /// GPT-4o Realtime preview from December 2024.
         /// </summary>
-        [Obsolete("Legacy preview model. Use GptRealtime15 instead.")]
+        [Obsolete("Legacy GPT-4o Realtime preview model. Migrate to GptRealtime15 before the preview shutdown path becomes unusable.")]
         Gpt4oRealtimePreview20241217,
         
         /// <summary>
         /// GPT-4o Realtime preview from October 2024.
         /// </summary>
-        [Obsolete("Legacy preview model. Use GptRealtime15 instead.")]
+        [Obsolete("Legacy GPT-4o Realtime preview model. Migrate to GptRealtime15 before the preview shutdown path becomes unusable.")]
         Gpt4oRealtimePreview20241001,
         
         /// <summary>
         /// GPT-4o Mini Realtime preview from December 2024.
         /// </summary>
-        [Obsolete("Legacy preview model. Use GptRealtimeMini instead.")]
+        [Obsolete("Legacy GPT-4o Mini Realtime preview model. Migrate to GptRealtimeMini before the preview shutdown path becomes unusable.")]
         Gpt4oMiniRealtimePreview20241217,
     }
     

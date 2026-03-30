@@ -62,8 +62,6 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi
 
                 _webSocket = new ClientWebSocket();
                 _webSocket.Options.SetRequestHeader("Authorization", $"Bearer {_apiKey}");
-                _webSocket.Options.SetRequestHeader("OpenAI-Beta", "realtime=v1");
-
                 var connectionCts = new CancellationTokenSource(CONNECTION_TIMEOUT_MS);
                 var uri = new Uri($"{REALTIME_WEBSOCKET_ENDPOINT}?intent=transcription");
                 await _webSocket.ConnectAsync(uri, connectionCts.Token);
