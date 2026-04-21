@@ -29,5 +29,11 @@ namespace Ai.Tlbx.VoiceAssistant.Interfaces
         /// FarField for speaker/room setups. Currently only supported by OpenAI.
         /// </summary>
         NoiseReductionMode NoiseReduction { get; set; }
+
+        /// <summary>
+        /// Optional provider-neutral thinking configuration for the session.
+        /// Providers that do not support thinking controls should ignore it.
+        /// </summary>
+        SessionThinkingConfig Thinking { get; set; }
     }
 }

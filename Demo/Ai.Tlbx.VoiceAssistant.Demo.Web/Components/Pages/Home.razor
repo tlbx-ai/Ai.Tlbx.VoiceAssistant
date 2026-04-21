@@ -92,6 +92,53 @@
                                         <p class="mt-1 text-xs text-gray-500">Obsolete models stay selectable here for manual compatibility checks.</p>
                                     </div>
 
+                                    @if (_selectedProviderString == "Google")
+                                    {
+                                        <div class="rounded-md border border-gray-200 bg-gray-50 p-3 space-y-3">
+                                            <div>
+                                                <div class="text-xs font-medium text-gray-700">Thinking</div>
+                                                <p class="mt-1 text-xs text-gray-500">Gemini 3.1 Live uses thinking levels. Legacy Gemini 2.5 Live models use token budgets.</p>
+                                            </div>
+
+                                            <div>
+                                                <label class="block text-xs font-medium text-gray-600 mb-1">Thinking Level</label>
+                                                <select class="w-full p-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-sm disabled:bg-gray-100 disabled:text-gray-400"
+                                                        value="@GoogleThinkingLevelValue"
+                                                        @onchange="OnGoogleThinkingLevelChanged"
+                                                        disabled="@((voiceAssistant?.IsConnecting ?? false) || (voiceAssistant?.IsRecording ?? false) || !SelectedGoogleModelSupportsThinkingLevel)">
+                                                    <option value="">Provider default</option>
+                                                    @foreach (var level in _thinkingLevels)
+                                                    {
+                                                        <option value="@level.Value">@level.Label</option>
+                                                    }
+                                                </select>
+                                                <p class="mt-1 text-xs text-gray-500">@GetGoogleThinkingLevelHint()</p>
+                                            </div>
+
+                                            <div>
+                                                <label class="block text-xs font-medium text-gray-600 mb-1">Thinking Budget</label>
+                                                <input type="number"
+                                                       min="-1"
+                                                       step="1"
+                                                       class="w-full p-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-sm disabled:bg-gray-100 disabled:text-gray-400"
+                                                       value="@GoogleThinkingBudgetValue"
+                                                       @oninput="OnGoogleThinkingBudgetChanged"
+                                                       disabled="@((voiceAssistant?.IsConnecting ?? false) || (voiceAssistant?.IsRecording ?? false) || !SelectedGoogleModelSupportsThinkingBudget)" />
+                                                <p class="mt-1 text-xs text-gray-500">@GetGoogleThinkingBudgetHint()</p>
+                                            </div>
+
+                                            <label class="flex items-center gap-2 text-sm text-gray-700">
+                                                <input type="checkbox"
+                                                       class="h-4 w-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+                                                       checked="@sessionSettings.Thinking.IncludeThoughts"
+                                                       @onchange="OnGoogleIncludeThoughtsChanged"
+                                                       disabled="@((voiceAssistant?.IsConnecting ?? false) || (voiceAssistant?.IsRecording ?? false) || !SelectedGoogleModelSupportsThoughtSummaries)" />
+                                                <span>Include thought summaries</span>
+                                            </label>
+                                            <p class="text-xs text-gray-500">@GetGoogleThoughtSummariesHint()</p>
+                                        </div>
+                                    }
+
                                     <!-- Voice Speed -->
                                     <VoiceSpeedSlider SelectedSpeed="@currentVoiceSpeed" SelectedSpeedChanged="OnVoiceSpeedChanged" Disabled="@((voiceAssistant?.IsConnecting ?? false) || (voiceAssistant?.IsRecording ?? false))" />
 
@@ -419,6 +466,7 @@
     // Model management (provider-specific)
     private string _currentModelString = nameof(OpenAiRealtimeModel.GptRealtime15);
     private List<ModelOption> availableModels = GetEnumOptions<OpenAiRealtimeModel>(includeObsolete: true);
+    private static readonly List<ModelOption> _thinkingLevels = GetEnumOptions<SessionThinkingLevel>();
 
     private void OnModelChanged(ChangeEventArgs e)
     {
@@ -437,6 +485,11 @@
 
     private SessionSettingsContext sessionSettings = new();
     private string lastConnectionEvent = string.Empty;
+    private string GoogleThinkingLevelValue => sessionSettings.Thinking.Level?.ToString() ?? string.Empty;
+    private string GoogleThinkingBudgetValue => sessionSettings.Thinking.Budget?.ToString() ?? string.Empty;
+    private bool SelectedGoogleModelSupportsThinkingLevel => GetSelectedGoogleModelOrDefault().SupportsThinkingLevel();
+    private bool SelectedGoogleModelSupportsThinkingBudget => GetSelectedGoogleModelOrDefault().SupportsThinkingBudget();
+    private bool SelectedGoogleModelSupportsThoughtSummaries => GetSelectedGoogleModelOrDefault().SupportsThoughtSummaries();
 
     // Transcription state
     private string _transcriptionCommittedText = string.Empty;
@@ -770,6 +823,95 @@
         await Task.CompletedTask;
     }
 
+    private void OnGoogleThinkingLevelChanged(ChangeEventArgs e)
+    {
+        SessionThinkingLevel? level = null;
+        var rawValue = e.Value?.ToString();
+        if (!string.IsNullOrWhiteSpace(rawValue) &&
+            Enum.TryParse<SessionThinkingLevel>(rawValue, out var parsedLevel))
+        {
+            level = parsedLevel;
+        }
+
+        sessionSettings = sessionSettings with
+        {
+            Thinking = sessionSettings.Thinking with { Level = level }
+        };
+    }
+
+    private void OnGoogleThinkingBudgetChanged(ChangeEventArgs e)
+    {
+        int? budget = null;
+        var rawValue = e.Value?.ToString();
+        if (!string.IsNullOrWhiteSpace(rawValue) &&
+            int.TryParse(rawValue, out var parsedBudget) &&
+            parsedBudget >= -1)
+        {
+            budget = parsedBudget;
+        }
+
+        sessionSettings = sessionSettings with
+        {
+            Thinking = sessionSettings.Thinking with { Budget = budget }
+        };
+    }
+
+    private void OnGoogleIncludeThoughtsChanged(ChangeEventArgs e)
+    {
+        var includeThoughts = e.Value is bool boolValue
+            ? boolValue
+            : string.Equals(e.Value?.ToString(), "true", StringComparison.OrdinalIgnoreCase);
+
+        sessionSettings = sessionSettings with
+        {
+            Thinking = sessionSettings.Thinking with { IncludeThoughts = includeThoughts }
+        };
+    }
+
+    private GoogleModel GetSelectedGoogleModelOrDefault()
+    {
+        return Enum.TryParse<GoogleModel>(_currentModelString, out var model)
+            ? model
+            : GoogleModel.Gemini31FlashLivePreview;
+    }
+
+    private string GetGoogleThinkingLevelHint()
+    {
+        if (SelectedGoogleModelSupportsThinkingLevel)
+        {
+            return "Used by Gemini 3.1 Live. Leave empty to keep the provider default.";
+        }
+
+        if (SelectedGoogleModelSupportsThinkingBudget)
+        {
+            return "This model uses thinking budgets instead of thinking levels.";
+        }
+
+        return "This legacy model does not expose Google thinking controls.";
+    }
+
+    private string GetGoogleThinkingBudgetHint()
+    {
+        if (SelectedGoogleModelSupportsThinkingBudget)
+        {
+            return "Used by legacy Gemini 2.5 Live models. Use 0 to disable thinking, -1 for dynamic thinking, or leave empty for the provider default.";
+        }
+
+        if (SelectedGoogleModelSupportsThinkingLevel)
+        {
+            return "Gemini 3.1 Live ignores token budgets and uses thinking levels.";
+        }
+
+        return "This legacy model does not expose Google thinking controls.";
+    }
+
+    private string GetGoogleThoughtSummariesHint()
+    {
+        return SelectedGoogleModelSupportsThoughtSummaries
+            ? "Thought summaries are only sent when Google includes them in the response."
+            : "This legacy model does not expose Google thought summaries.";
+    }
+
     private void OnMicrophoneDevicesChanged(List<AudioDeviceInfo> devices)
     {
         InvokeAsync(async () => 
@@ -885,6 +1027,7 @@
                     },
                     TalkingSpeed = currentVoiceSpeed,
                     Model = openAiModel,
+                    Thinking = sessionSettings.Thinking,
                     Tools = enabledTools.ToList()
                 };
 
@@ -908,6 +1051,7 @@
                     Voice = googleVoice,
                     TalkingSpeed = currentVoiceSpeed,
                     Model = googleModel,
+                    Thinking = sessionSettings.Thinking,
                     ResponseModality = "AUDIO",
                     LanguageCode = "de-DE", // Set to German - change to "en-US" for English or null for auto-detect
                     Tools = enabledTools.ToList(),
@@ -932,6 +1076,7 @@
                     Instructions = instructions,
                     Voice = xaiVoice,
                     TalkingSpeed = currentVoiceSpeed,
+                    Thinking = sessionSettings.Thinking,
                     Tools = enabledTools.ToList(),
                     EnableWebSearch = false,
                     EnableXSearch = false,

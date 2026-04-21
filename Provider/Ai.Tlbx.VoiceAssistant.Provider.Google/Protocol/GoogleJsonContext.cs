@@ -8,6 +8,7 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.Google.Protocol
     [JsonSerializable(typeof(Setup))]
     [JsonSerializable(typeof(ProactivityConfig))]
     [JsonSerializable(typeof(GenerationConfig))]
+    [JsonSerializable(typeof(GoogleThinkingConfig))]
     [JsonSerializable(typeof(SpeechConfig))]
     [JsonSerializable(typeof(VoiceConfig))]
     [JsonSerializable(typeof(PrebuiltVoiceConfig))]

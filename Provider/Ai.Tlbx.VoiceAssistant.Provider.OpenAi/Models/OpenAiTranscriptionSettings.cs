@@ -15,6 +15,7 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi.Models
         public int PrefixPaddingMs { get; set; } = 300;
         public int SilenceDurationMs { get; set; } = 200;
         public NoiseReductionMode NoiseReduction { get; set; } = NoiseReductionMode.NearField;
+        public SessionThinkingConfig Thinking { get; set; } = new();
         public string? TranscriptionPrompt { get; set; }
         public string? Language { get; set; }
     }

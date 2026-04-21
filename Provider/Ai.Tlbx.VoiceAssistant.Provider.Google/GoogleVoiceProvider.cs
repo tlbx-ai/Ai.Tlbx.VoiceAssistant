@@ -395,6 +395,7 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.Google
                     GenerationConfig = new GenerationConfig
                     {
                         ResponseModalities = new List<string> { _settings.ResponseModality },
+                        ThinkingConfig = BuildThinkingConfig(_settings),
                         SpeechConfig = new SpeechConfig
                         {
                             VoiceConfig = new VoiceConfig
@@ -476,6 +477,35 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.Google
             {
                 new Tool { FunctionDeclarations = functionDeclarations }
             };
+        }
+
+        private static GoogleThinkingConfig? BuildThinkingConfig(GoogleVoiceSettings settings)
+        {
+            var thinking = settings.Thinking;
+            if (!thinking.IsConfigured)
+            {
+                return null;
+            }
+
+            var config = new GoogleThinkingConfig
+            {
+                ThinkingLevel = settings.Model.SupportsThinkingLevel() && thinking.Level.HasValue
+                    ? thinking.Level.Value.ToApiString()
+                    : null,
+                ThinkingBudget = settings.Model.SupportsThinkingBudget()
+                    ? thinking.Budget
+                    : null,
+                IncludeThoughts = settings.Model.SupportsThoughtSummaries() && thinking.IncludeThoughts
+                    ? true
+                    : null
+            };
+
+            if (config.ThinkingLevel == null && config.ThinkingBudget == null && config.IncludeThoughts == null)
+            {
+                return null;
+            }
+
+            return config;
         }
 
         private Task SendMessageAsync(SetupMessage message) =>

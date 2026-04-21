@@ -60,6 +60,9 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.Google.Protocol
         [JsonPropertyName("speechConfig")]
         public SpeechConfig? SpeechConfig { get; set; }
 
+        [JsonPropertyName("thinkingConfig")]
+        public GoogleThinkingConfig? ThinkingConfig { get; set; }
+
         [JsonPropertyName("temperature")]
         public double? Temperature { get; set; }
 
@@ -71,6 +74,18 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.Google.Protocol
 
         [JsonPropertyName("maxOutputTokens")]
         public int? MaxOutputTokens { get; set; }
+    }
+
+    public class GoogleThinkingConfig
+    {
+        [JsonPropertyName("thinkingLevel")]
+        public string? ThinkingLevel { get; set; }
+
+        [JsonPropertyName("thinkingBudget")]
+        public int? ThinkingBudget { get; set; }
+
+        [JsonPropertyName("includeThoughts")]
+        public bool? IncludeThoughts { get; set; }
     }
 
     public class SpeechConfig

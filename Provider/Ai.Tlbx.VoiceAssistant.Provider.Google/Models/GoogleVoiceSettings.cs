@@ -33,6 +33,13 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.Google.Models
         public GoogleModel Model { get; set; } = GoogleModel.Gemini31FlashLivePreview;
 
         /// <summary>
+        /// Shared thinking configuration.
+        /// Gemini 3.1 Live uses qualitative levels; Gemini 2.5 Live uses token budgets.
+        /// Unsupported providers can ignore this object safely.
+        /// </summary>
+        public SessionThinkingConfig Thinking { get; set; } = new();
+
+        /// <summary>
         /// The voice to use for AI responses.
         /// </summary>
         public GoogleVoice Voice { get; set; } = GoogleVoice.Aoede;

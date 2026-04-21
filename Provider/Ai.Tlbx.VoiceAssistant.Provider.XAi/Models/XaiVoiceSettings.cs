@@ -67,6 +67,11 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.XAi.Models
         public string? InputAudioLanguage { get; set; }
 
         public NoiseReductionMode NoiseReduction { get; set; } = NoiseReductionMode.FarField;
+
+        /// <summary>
+        /// xAI Voice Agent currently ignores the shared thinking configuration.
+        /// </summary>
+        public SessionThinkingConfig Thinking { get; set; } = new();
     }
 
     /// <summary>

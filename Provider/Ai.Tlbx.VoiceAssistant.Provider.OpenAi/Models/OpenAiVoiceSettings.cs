@@ -79,6 +79,11 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi.Models
         public string OutputAudioFormat { get; set; } = "pcm16";
 
         public NoiseReductionMode NoiseReduction { get; set; } = NoiseReductionMode.FarField;
+
+        /// <summary>
+        /// OpenAI Realtime currently ignores the shared thinking configuration.
+        /// </summary>
+        public SessionThinkingConfig Thinking { get; set; } = new();
     }
 
     /// <summary>
