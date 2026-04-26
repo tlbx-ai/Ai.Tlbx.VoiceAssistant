@@ -89,7 +89,7 @@
                                                 <option value="@model.Value">@model.Label</option>
                                             }
                                         </select>
-                                        <p class="mt-1 text-xs text-gray-500">Obsolete models stay selectable here for manual compatibility checks.</p>
+                                        <p class="mt-1 text-xs text-gray-500">@GetModelSelectHint()</p>
                                     </div>
 
                                     @if (_selectedProviderString == "Google")
@@ -474,6 +474,13 @@
         Log(LogLevel.Info, $"Model changed to: {_currentModelString}");
     }
 
+    private string GetModelSelectHint()
+    {
+        return _selectedProviderString == "xAI"
+            ? "Use Think Fast for the new model, or Fast as the A/B baseline."
+            : "Obsolete models stay selectable here for manual compatibility checks.";
+    }
+
     // Tool management
     private List<IVoiceTool> availableTools = new();
     private List<IVoiceTool> enabledTools = new();
@@ -622,8 +629,12 @@
         {
             availableVoices = Enum.GetValues<XaiVoice>().Select(v => v.ToString()).ToList();
             _currentVoiceString = "Ara";
-            availableModels = new() { new ModelOption("Default", "Default") };
-            _currentModelString = "Default";
+            availableModels = new()
+            {
+                new ModelOption(nameof(XaiVoiceModel.GrokVoiceThinkFast10), "Grok Voice Think Fast 1.0"),
+                new ModelOption(nameof(XaiVoiceModel.GrokVoiceFast10), "Grok Voice Fast 1.0")
+            };
+            _currentModelString = nameof(XaiVoiceModel.GrokVoiceThinkFast10);
         }
     }
 
@@ -1071,9 +1082,15 @@
                     xaiVoice = XaiVoice.Ara;
                 }
 
+                if (!Enum.TryParse<XaiVoiceModel>(_currentModelString, out var xaiModel))
+                {
+                    xaiModel = XaiVoiceModel.GrokVoiceThinkFast10;
+                }
+
                 settings = new XaiVoiceSettings
                 {
                     Instructions = instructions,
+                    Model = xaiModel,
                     Voice = xaiVoice,
                     TalkingSpeed = currentVoiceSpeed,
                     Thinking = sessionSettings.Thinking,
@@ -1083,7 +1100,7 @@
                     InputAudioLanguage = "de"
                 };
 
-                Log(LogLevel.Info, $"Starting xAI session with voice: {xaiVoice}");
+                Log(LogLevel.Info, $"Starting xAI session with voice: {xaiVoice}, model: {xaiModel}");
             }
             else
             {

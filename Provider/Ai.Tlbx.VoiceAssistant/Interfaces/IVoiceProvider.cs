@@ -69,6 +69,11 @@ namespace Ai.Tlbx.VoiceAssistant.Interfaces
         /// Callback invoked when audio data is received from the AI provider for playback.
         /// </summary>
         Action<string>? OnAudioReceived { get; set; }
+
+        /// <summary>
+        /// Callback invoked when the provider needs to wait until queued playback has drained.
+        /// </summary>
+        Func<TimeSpan?, Task<bool>>? WaitForPlaybackDrainAsync { get; set; }
         
         /// <summary>
         /// Callback invoked when the provider status changes.

@@ -26,6 +26,12 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.XAi.Models
         public XaiVoice Voice { get; set; } = XaiVoice.Ara;
 
         /// <summary>
+        /// The xAI realtime voice model to use for the conversation.
+        /// Defaults to Grok Voice Think Fast 1.0.
+        /// </summary>
+        public XaiVoiceModel Model { get; set; } = XaiVoiceModel.GrokVoiceThinkFast10;
+
+        /// <summary>
         /// The speed of the AI model's spoken response.
         /// Note: xAI Voice Agent does not currently expose speech-rate control.
         /// This property is retained for IVoiceSettings compatibility and is ignored by the provider.

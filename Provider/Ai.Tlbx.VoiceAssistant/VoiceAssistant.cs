@@ -689,6 +689,8 @@ namespace Ai.Tlbx.VoiceAssistant
                     _logAction(LogLevel.Error, $"Error playing audio: {ex.Message}");
                 }
             };
+
+            _provider.WaitForPlaybackDrainAsync = _hardwareAccess.WaitForPlaybackDrainAsync;
             
             _provider.OnStatusChanged = async (status) =>
             {
@@ -838,6 +840,7 @@ namespace Ai.Tlbx.VoiceAssistant
                 {
                     _provider.OnMessageReceived = null;
                     _provider.OnAudioReceived = null;
+                    _provider.WaitForPlaybackDrainAsync = null;
                     _provider.OnStatusChanged = null;
                     _provider.OnError = null;
                     _provider.OnInterruptDetected = null;

@@ -59,6 +59,7 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.XAi.Extensions
             return new XaiVoiceSettings
             {
                 Instructions = instructions,
+                Model = XaiVoiceModel.GrokVoiceThinkFast10,
                 Voice = voice,
                 AudioSampleRate = 24000,
                 AudioFormatType = "audio/pcm",

@@ -76,6 +76,11 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.XAi
         public Action<string>? OnAudioReceived { get; set; }
 
         /// <summary>
+        /// Callback invoked when xAI should wait for queued playback to drain before continuing a tool response.
+        /// </summary>
+        public Func<TimeSpan?, Task<bool>>? WaitForPlaybackDrainAsync { get; set; }
+
+        /// <summary>
         /// Callback invoked when the provider status changes.
         /// </summary>
         public Action<string>? OnStatusChanged { get; set; }
@@ -124,7 +129,7 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.XAi
             ValidateSettings(xaiSettings);
             ResetResponseState();
             _settings = xaiSettings;
-            _logAction(LogLevel.Info, $"Settings configured - Voice: {_settings.Voice}, Speed: {_settings.TalkingSpeed}");
+            _logAction(LogLevel.Info, $"Settings configured - Voice: {_settings.Voice}, Speed: {_settings.TalkingSpeed}, Model: {_settings.Model}");
             if (Math.Abs(_settings.TalkingSpeed - 1.0) > 0.001)
             {
                 _logAction(LogLevel.Warn, "xAI Voice Agent does not expose speech-rate control; TalkingSpeed will be ignored.");
@@ -138,7 +143,7 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.XAi
                 _webSocket.Options.SetRequestHeader("Authorization", $"Bearer {_apiKey}");
                 _sessionUpdateCompletionSource = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
 
-                var uri = new Uri(REALTIME_WEBSOCKET_ENDPOINT);
+                var uri = new Uri($"{REALTIME_WEBSOCKET_ENDPOINT}?model={Uri.EscapeDataString(_settings.Model.ToApiString())}");
                 using (var connectionCts = new CancellationTokenSource(CONNECTION_TIMEOUT_MS))
                 {
                     await _webSocket.ConnectAsync(uri, connectionCts.Token);
@@ -208,7 +213,7 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.XAi
             }
 
             _settings = xaiSettings;
-            _logAction(LogLevel.Info, $"Settings configured - Voice: {_settings.Voice}, Speed: {_settings.TalkingSpeed}");
+            _logAction(LogLevel.Info, $"Settings configured - Voice: {_settings.Voice}, Speed: {_settings.TalkingSpeed}, Model: {_settings.Model}");
             if (Math.Abs(_settings.TalkingSpeed - 1.0) > 0.001)
             {
                 _logAction(LogLevel.Warn, "xAI Voice Agent does not expose speech-rate control; TalkingSpeed will be ignored.");
@@ -712,9 +717,34 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.XAi
             await SendMessageAsync(JsonSerializer.Serialize(toolResponse, XaiJsonContext.Default.XaiConversationItemCreateMessage));
             _logAction(LogLevel.Info, $"Tool result sent for call {callId}");
 
+            await WaitForPlaybackBeforeToolContinuationAsync();
+
             var responseCreate = new XaiResponseCreateMessage();
             await SendMessageAsync(JsonSerializer.Serialize(responseCreate, XaiJsonContext.Default.XaiResponseCreateMessage));
             _logAction(LogLevel.Info, "Requested AI response after tool execution");
+        }
+
+        private async Task WaitForPlaybackBeforeToolContinuationAsync()
+        {
+            var waitForPlaybackDrainAsync = WaitForPlaybackDrainAsync;
+            if (waitForPlaybackDrainAsync == null)
+            {
+                _logAction(LogLevel.Info, "No playback drain callback registered; continuing tool response immediately");
+                return;
+            }
+
+            OnStatusChanged?.Invoke("Waiting for playback before tool continuation");
+            _logAction(LogLevel.Info, "Waiting for current playback to drain before requesting xAI tool continuation");
+
+            var drained = await waitForPlaybackDrainAsync(TimeSpan.FromSeconds(30));
+            if (drained)
+            {
+                _logAction(LogLevel.Info, "Playback drained; requesting xAI tool continuation");
+            }
+            else
+            {
+                _logAction(LogLevel.Warn, "Timed out waiting for playback to drain; requesting xAI tool continuation anyway");
+            }
         }
 
         private void HandleError(JsonElement root)

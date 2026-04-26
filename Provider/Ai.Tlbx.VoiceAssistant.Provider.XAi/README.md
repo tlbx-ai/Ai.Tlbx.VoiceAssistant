@@ -16,6 +16,7 @@ dotnet add package Ai.Tlbx.VoiceAssistant.Provider.XAi
 var provider = factory.CreateXai(apiKey);
 var settings = new XaiVoiceSettings
 {
+    Model = XaiVoiceModel.GrokVoiceThinkFast10,
     Voice = XaiVoice.Ara,
     Instructions = "You are a helpful assistant."
 };

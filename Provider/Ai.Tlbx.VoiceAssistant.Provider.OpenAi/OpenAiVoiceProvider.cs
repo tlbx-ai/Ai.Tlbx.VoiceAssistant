@@ -77,6 +77,11 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi
         public Action<string>? OnAudioReceived { get; set; }
 
         /// <summary>
+        /// Callback invoked when the provider needs to wait for queued playback to drain.
+        /// </summary>
+        public Func<TimeSpan?, Task<bool>>? WaitForPlaybackDrainAsync { get; set; }
+
+        /// <summary>
         /// Callback invoked when the provider status changes.
         /// </summary>
         public Action<string>? OnStatusChanged { get; set; }

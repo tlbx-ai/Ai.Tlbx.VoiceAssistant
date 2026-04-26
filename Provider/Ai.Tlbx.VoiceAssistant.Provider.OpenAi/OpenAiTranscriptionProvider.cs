@@ -32,6 +32,7 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi
 
         public Action<ChatMessage>? OnMessageReceived { get; set; }
         public Action<string>? OnAudioReceived { get; set; }
+        public Func<TimeSpan?, Task<bool>>? WaitForPlaybackDrainAsync { get; set; }
         public Action<string>? OnStatusChanged { get; set; }
         public Action<string>? OnError { get; set; }
         public Action? OnInterruptDetected { get; set; }
