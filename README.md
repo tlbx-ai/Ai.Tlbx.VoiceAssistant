@@ -127,7 +127,11 @@ var settings = new GoogleVoiceSettings
 
 // xAI Grok — voices: Ara, Rex, Sal, Eve, Leo
 var provider = new XaiVoiceProvider(apiKey);
-var settings = new XaiVoiceSettings { Voice = XaiVoice.Ara };
+var settings = new XaiVoiceSettings
+{
+    Voice = XaiVoice.Ara,
+    Model = XaiVoiceModel.GrokVoiceThinkFast10
+};
 ```
 
 Same `VoiceAssistant` API, same tool definitions — just swap the provider.
@@ -164,6 +168,7 @@ new GoogleVoiceSettings
 new XaiVoiceSettings
 {
     Voice = XaiVoice.Ara,
+    Model = XaiVoiceModel.GrokVoiceThinkFast10,
     InputAudioLanguage = "en",
     TurnDetection = new XaiTurnDetection { SilenceDurationMs = 200, Threshold = 0.5 },
     EnableWebSearch = true
@@ -182,7 +187,11 @@ new XaiVoiceSettings
 
 - OpenAI: `OpenAiRealtimeModel.GptRealtime15` is the production default. Legacy `gpt-4o-realtime-preview-*` enums remain available but are marked obsolete.
 - Google: `GoogleModel.Gemini31FlashLivePreview` is the current default. `Gemini25FlashNativeAudio` remains supported for compatibility checks and is marked obsolete.
-- xAI: the provider remains model-stable at the toolkit surface; current selection is voice/settings driven rather than a public model enum.
+- xAI: `XaiVoiceModel.GrokVoiceThinkFast10` is the default and recommended model. `XaiVoiceModel.GrokVoiceFast10` remains available as an A/B baseline.
+
+### xAI Tool Continuations
+
+The xAI provider waits for queued audio playback to drain before sending `response.create` after a custom tool result. This follows xAI Voice Agent guidance and avoids the model starting a follow-up response while the previous audio is still playing.
 
 ---
 
