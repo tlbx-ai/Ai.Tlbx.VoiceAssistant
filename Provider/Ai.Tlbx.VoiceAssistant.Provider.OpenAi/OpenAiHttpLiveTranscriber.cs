@@ -236,19 +236,38 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi
             form.Add(audioContent, "file", $"hold-transcribe-{snapshot.SessionId}.wav");
             form.Add(new StringContent(Options.TranscriptionModel.ToApiString()), "model");
             form.Add(new StringContent("true"), "stream");
-            form.Add(new StringContent("server_vad"), "chunking_strategy[type]");
-            form.Add(new StringContent(((int)Math.Round(Options.PrefixPadding.TotalMilliseconds)).ToString(CultureInfo.InvariantCulture)), "chunking_strategy[prefix_padding_ms]");
-            form.Add(new StringContent(((int)Math.Round(Options.SilenceDuration.TotalMilliseconds)).ToString(CultureInfo.InvariantCulture)), "chunking_strategy[silence_duration_ms]");
-            form.Add(new StringContent(Options.VadThreshold.ToString("0.###", CultureInfo.InvariantCulture)), "chunking_strategy[threshold]");
+
+            var useDiarizedJson = Options.TranscriptionModel.SupportsDiarizedJson();
+            form.Add(new StringContent(useDiarizedJson ? "diarized_json" : "text"), "response_format");
+
+            if (useDiarizedJson)
+            {
+                form.Add(new StringContent("auto"), "chunking_strategy");
+            }
+            else
+            {
+                form.Add(new StringContent("server_vad"), "chunking_strategy[type]");
+                form.Add(new StringContent(((int)Math.Round(Options.PrefixPadding.TotalMilliseconds)).ToString(CultureInfo.InvariantCulture)), "chunking_strategy[prefix_padding_ms]");
+                form.Add(new StringContent(((int)Math.Round(Options.SilenceDuration.TotalMilliseconds)).ToString(CultureInfo.InvariantCulture)), "chunking_strategy[silence_duration_ms]");
+                form.Add(new StringContent(Options.VadThreshold.ToString("0.###", CultureInfo.InvariantCulture)), "chunking_strategy[threshold]");
+            }
 
             if (!string.IsNullOrWhiteSpace(Options.Language))
             {
                 form.Add(new StringContent(Options.Language), "language");
             }
 
-            if (!string.IsNullOrWhiteSpace(Options.Prompt))
+            if (Options.TranscriptionModel.SupportsTranscriptionPrompt() &&
+                !string.IsNullOrWhiteSpace(Options.Prompt))
             {
                 form.Add(new StringContent(Options.Prompt), "prompt");
+            }
+
+            if (Options.IncludeLogProbabilities &&
+                Options.TranscriptionModel.SupportsTranscriptionLogProbabilities() &&
+                !useDiarizedJson)
+            {
+                form.Add(new StringContent("logprobs"), "include[]");
             }
 
             using var request = new HttpRequestMessage(HttpMethod.Post, TRANSCRIPTION_ENDPOINT)
@@ -335,6 +354,11 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi
                 switch (type)
                 {
                     case "transcript.text.delta":
+                        if (Options.TranscriptionModel.SupportsDiarizedJson())
+                        {
+                            break;
+                        }
+
                         if (root.TryGetProperty("delta", out var deltaElement))
                         {
                             string delta = deltaElement.GetString() ?? string.Empty;
@@ -343,6 +367,20 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi
                                 hypothesis.Append(delta);
                                 PublishHypothesisUpdate(snapshot, hypothesis.ToString(), onTextChunk);
                             }
+                        }
+                        break;
+
+                    case "transcript.text.segment":
+                        var segmentText = TryGetDiarizedSegmentText(root);
+                        if (!string.IsNullOrWhiteSpace(segmentText))
+                        {
+                            if (hypothesis.Length > 0 && hypothesis[^1] != '\n')
+                            {
+                                hypothesis.AppendLine();
+                            }
+
+                            hypothesis.Append(segmentText);
+                            PublishHypothesisUpdate(snapshot, hypothesis.ToString(), onTextChunk);
                         }
                         break;
 
@@ -436,6 +474,12 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi
                 throw new InvalidOperationException("Whisper-1 does not support streamed HTTP transcription responses.");
             }
 #pragma warning restore CS0618
+
+            if (Options.TranscriptionModel.SupportsDiarizedJson() &&
+                !string.IsNullOrWhiteSpace(Options.Prompt))
+            {
+                _logAction(LogLevel.Warn, "Ignoring transcription prompt because gpt-4o-transcribe-diarize does not support prompting.");
+            }
 
             if (Options.SnapshotInterval <= TimeSpan.Zero)
             {
@@ -648,6 +692,40 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi
 
             return commonPrefixLength >= Math.Min(12, shorterLength) ||
                 (commonPrefixLength * 4) >= (shorterLength * 3);
+        }
+
+        private static string? TryGetDiarizedSegmentText(JsonElement root)
+        {
+            var segment = root.TryGetProperty("segment", out var segmentElement)
+                ? segmentElement
+                : root;
+
+            string? text = null;
+            if (segment.TryGetProperty("text", out var textElement))
+            {
+                text = textElement.GetString();
+            }
+            else if (segment.TryGetProperty("delta", out var deltaElement))
+            {
+                text = deltaElement.GetString();
+            }
+
+            if (string.IsNullOrWhiteSpace(text))
+            {
+                return null;
+            }
+
+            var speaker = "speaker";
+            if (segment.TryGetProperty("speaker", out var speakerElement))
+            {
+                speaker = speakerElement.GetString() ?? speaker;
+            }
+            else if (segment.TryGetProperty("speaker_label", out var speakerLabelElement))
+            {
+                speaker = speakerLabelElement.GetString() ?? speaker;
+            }
+
+            return $"[{speaker}] {text.Trim()}";
         }
 
         private static int GetCommonPrefixLength(string left, string right)

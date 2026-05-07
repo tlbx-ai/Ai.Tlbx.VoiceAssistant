@@ -114,7 +114,7 @@ var provider = new OpenAiVoiceProvider(apiKey);
 var settings = new OpenAiVoiceSettings
 {
     Voice = AssistantVoice.Alloy,
-    Model = OpenAiRealtimeModel.GptRealtime15
+    Model = OpenAiRealtimeModel.GptRealtime2
 };
 
 // Google Gemini — voices: Puck, Charon, Kore, Fenrir, Aoede, Leda, Orus, Zephyr
@@ -140,14 +140,16 @@ Same `VoiceAssistant` API, same tool definitions — just swap the provider.
 
 Each provider has its own settings class with shared and provider-specific options:
 
-**Shared (`IVoiceSettings`):** `Instructions`, `Tools`, `TalkingSpeed`
+**Shared (`IVoiceSettings`):** `Instructions`, `Tools`, `TalkingSpeed`, `NoiseReduction`, `ReasoningEffort`, `ToolCallPreambleMode`
 
 ```csharp
-// OpenAI — current recommended realtime default is GptRealtime15
+// OpenAI — current recommended realtime default is GptRealtime2
 new OpenAiVoiceSettings
 {
     Voice = AssistantVoice.Coral,
-    Model = OpenAiRealtimeModel.GptRealtime15,
+    Model = OpenAiRealtimeModel.GptRealtime2,
+    ReasoningEffort = SessionReasoningEffort.Medium,
+    ToolCallPreambleMode = ToolCallPreambleMode.BeforeToolBurst,
     TalkingSpeed = 1.2,
     Eagerness = Eagerness.auto,
     TurnDetection = new TurnDetection { SilenceDurationMs = 200 },
@@ -185,7 +187,7 @@ new XaiVoiceSettings
 
 ### Current model guidance
 
-- OpenAI: `OpenAiRealtimeModel.GptRealtime15` is the production default. Legacy `gpt-4o-realtime-preview-*` enums remain available but are marked obsolete.
+- OpenAI: `OpenAiRealtimeModel.GptRealtime2` is the production default for the latest reasoning voice model. `OpenAiRealtimeModel.GptRealtime15` remains available as an A/B baseline, and legacy `gpt-4o-realtime-preview-*` enums remain available but are marked obsolete.
 - Google: `GoogleModel.Gemini31FlashLivePreview` is the current default. `Gemini25FlashNativeAudio` remains supported for compatibility checks and is marked obsolete.
 - xAI: `XaiVoiceModel.GrokVoiceThinkFast10` is the default and recommended model. `XaiVoiceModel.GrokVoiceFast10` remains available as an A/B baseline.
 

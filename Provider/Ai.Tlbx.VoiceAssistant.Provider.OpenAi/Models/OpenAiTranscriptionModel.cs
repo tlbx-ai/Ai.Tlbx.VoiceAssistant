@@ -4,13 +4,14 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi.Models
 {
     public enum OpenAiTranscriptionModel
     {
+        GptRealtimeWhisper,
         Gpt4oMiniTranscribe,
-        [Obsolete("Pinned legacy snapshot. Prefer Gpt4oMiniTranscribe or Gpt4oMiniTranscribe20251215.")]
+        [Obsolete("Pinned legacy snapshot. Prefer GptRealtimeWhisper for realtime streaming or Gpt4oMiniTranscribe for HTTP transcription.")]
         Gpt4oMiniTranscribe20250320,
         Gpt4oMiniTranscribe20251215,
         Gpt4oTranscribe,
         Gpt4oTranscribeDiarize,
-        [Obsolete("Legacy transcription model. Prefer Gpt4oMiniTranscribe or Gpt4oTranscribe.")]
+        [Obsolete("Legacy transcription model. Prefer GptRealtimeWhisper for realtime streaming or Gpt4oTranscribe for HTTP transcription.")]
         Whisper1,
     }
 
@@ -21,6 +22,7 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi.Models
         {
             return model switch
             {
+                OpenAiTranscriptionModel.GptRealtimeWhisper => "gpt-realtime-whisper",
                 OpenAiTranscriptionModel.Gpt4oMiniTranscribe => "gpt-4o-mini-transcribe",
                 OpenAiTranscriptionModel.Gpt4oMiniTranscribe20250320 => "gpt-4o-mini-transcribe-2025-03-20",
                 OpenAiTranscriptionModel.Gpt4oMiniTranscribe20251215 => "gpt-4o-mini-transcribe-2025-12-15",
@@ -31,5 +33,42 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi.Models
             };
         }
 #pragma warning restore CS0618
+
+        public static bool SupportsRealtimeTranscription(this OpenAiTranscriptionModel model)
+        {
+            return model != OpenAiTranscriptionModel.Gpt4oTranscribeDiarize;
+        }
+
+        public static bool SupportsHttpStreamingTranscription(this OpenAiTranscriptionModel model)
+        {
+#pragma warning disable CS0618
+            return model != OpenAiTranscriptionModel.Whisper1;
+#pragma warning restore CS0618
+        }
+
+        public static bool SupportsDiarizedJson(this OpenAiTranscriptionModel model)
+        {
+            return model == OpenAiTranscriptionModel.Gpt4oTranscribeDiarize;
+        }
+
+        public static bool SupportsTranscriptionPrompt(this OpenAiTranscriptionModel model)
+        {
+            return model != OpenAiTranscriptionModel.GptRealtimeWhisper &&
+                model != OpenAiTranscriptionModel.Gpt4oTranscribeDiarize;
+        }
+
+        public static bool SupportsRealtimeTurnDetection(this OpenAiTranscriptionModel model)
+        {
+            return model != OpenAiTranscriptionModel.GptRealtimeWhisper &&
+                model != OpenAiTranscriptionModel.Gpt4oTranscribeDiarize;
+        }
+
+        public static bool SupportsTranscriptionLogProbabilities(this OpenAiTranscriptionModel model)
+        {
+            return model == OpenAiTranscriptionModel.GptRealtimeWhisper ||
+                model == OpenAiTranscriptionModel.Gpt4oTranscribe ||
+                model == OpenAiTranscriptionModel.Gpt4oMiniTranscribe ||
+                model == OpenAiTranscriptionModel.Gpt4oMiniTranscribe20251215;
+        }
     }
 }

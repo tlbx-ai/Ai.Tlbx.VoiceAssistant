@@ -92,6 +92,31 @@
                                         <p class="mt-1 text-xs text-gray-500">@GetModelSelectHint()</p>
                                     </div>
 
+                                    @if (_selectedProviderString == "OpenAI" && SelectedOpenAiModelSupportsReasoningEffort)
+                                    {
+                                        <div class="rounded-md border border-gray-200 bg-gray-50 p-3 space-y-3">
+                                            <div>
+                                                <div class="text-xs font-medium text-gray-700">Reasoning</div>
+                                                <p class="mt-1 text-xs text-gray-500">GPT Realtime 2 supports configurable reasoning effort.</p>
+                                            </div>
+
+                                            <div>
+                                                <label class="block text-xs font-medium text-gray-600 mb-1">Reasoning Effort</label>
+                                                <select class="w-full p-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-sm disabled:bg-gray-100 disabled:text-gray-400"
+                                                        value="@ReasoningEffortValue"
+                                                        @onchange="OnReasoningEffortChanged"
+                                                        disabled="@((voiceAssistant?.IsConnecting ?? false) || (voiceAssistant?.IsRecording ?? false))">
+                                                    <option value="">Provider default</option>
+                                                    @foreach (var effort in _reasoningEfforts)
+                                                    {
+                                                        <option value="@effort.Value">@effort.Label</option>
+                                                    }
+                                                </select>
+                                                <p class="mt-1 text-xs text-gray-500">Higher effort can improve complex voice-agent workflows and increase latency.</p>
+                                            </div>
+                                        </div>
+                                    }
+
                                     @if (_selectedProviderString == "Google")
                                     {
                                         <div class="rounded-md border border-gray-200 bg-gray-50 p-3 space-y-3">
@@ -147,6 +172,27 @@
                                         <ToolSelector AvailableTools="@availableTools"
                                                      @bind-EnabledTools="@enabledTools"
                                                      Disabled="@((voiceAssistant?.IsConnecting ?? false) || (voiceAssistant?.IsRecording ?? false))" />
+                                    </div>
+
+                                    <div class="rounded-md border border-gray-200 bg-gray-50 p-3 space-y-3">
+                                        <div>
+                                            <div class="text-xs font-medium text-gray-700">Tool behavior</div>
+                                            <p class="mt-1 text-xs text-gray-500">OpenAI applies this through Realtime instructions; unsupported providers ignore it.</p>
+                                        </div>
+
+                                        <div>
+                                            <label class="block text-xs font-medium text-gray-600 mb-1">Tool preambles</label>
+                                            <select class="w-full p-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-sm disabled:bg-gray-100 disabled:text-gray-400"
+                                                    value="@ToolCallPreambleModeValue"
+                                                    @onchange="OnToolCallPreambleModeChanged"
+                                                    disabled="@((voiceAssistant?.IsConnecting ?? false) || (voiceAssistant?.IsRecording ?? false))">
+                                                @foreach (var mode in _toolCallPreambleModes)
+                                                {
+                                                    <option value="@mode.Value">@mode.Label</option>
+                                                }
+                                            </select>
+                                            <p class="mt-1 text-xs text-gray-500">@GetToolCallPreambleModeHint()</p>
+                                        </div>
                                     </div>
 
                                     <!-- Microphone Selection -->
@@ -241,7 +287,7 @@
                                         <!-- Continuous transcription (realtime WebSocket) -->
                                         <button class="flex-1 py-3 px-4 rounded-md text-white text-sm font-medium transition-colors flex items-center justify-center @((voiceAssistant?.IsRecording ?? false) ? "bg-red-600 hover:bg-red-700" : "bg-blue-600 hover:bg-blue-700")"
                                                 @onclick="ToggleTranscription"
-                                                disabled="@((voiceAssistant?.IsConnecting ?? false) || _isPttRecording || _isPttProcessing)">
+                                                disabled="@((voiceAssistant?.IsConnecting ?? false) || _isPttRecording || _isPttProcessing || !SelectedTranscriptionModelSupportsRealtime)">
                                             @if (voiceAssistant?.IsConnecting ?? false)
                                             {
                                                 <svg class="animate-spin h-4 w-4 mr-2" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
@@ -315,6 +361,19 @@
                                                 <option value="@model">@model</option>
                                             }
                                         </select>
+                                        <p class="mt-1 text-xs text-gray-500">@GetTranscriptionModelHint()</p>
+                                    </div>
+
+                                    <label class="flex items-center gap-2 text-sm text-gray-700">
+                                        <input type="checkbox"
+                                               class="h-4 w-4 rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+                                               checked="@_includeTranscriptionLogProbabilities"
+                                               @onchange="OnIncludeTranscriptionLogProbabilitiesChanged"
+                                               disabled="@((voiceAssistant?.IsRecording ?? false) || _isPttRecording || _isPttProcessing || !SelectedTranscriptionModelSupportsLogProbabilities)" />
+                                        <span>Include log probabilities</span>
+                                    </label>
+                                    <div class="text-xs text-gray-500">
+                                        @GetTranscriptionLogProbabilitiesHint()
                                     </div>
 
                                     <!-- Microphone Selection -->
@@ -464,9 +523,16 @@
     private sealed record ModelOption(string Value, string Label);
 
     // Model management (provider-specific)
-    private string _currentModelString = nameof(OpenAiRealtimeModel.GptRealtime15);
+    private string _currentModelString = nameof(OpenAiRealtimeModel.GptRealtime2);
     private List<ModelOption> availableModels = GetEnumOptions<OpenAiRealtimeModel>(includeObsolete: true);
     private static readonly List<ModelOption> _thinkingLevels = GetEnumOptions<SessionThinkingLevel>();
+    private static readonly List<ModelOption> _reasoningEfforts = GetEnumOptions<SessionReasoningEffort>()
+        .Where(option =>
+            option.Value is nameof(SessionReasoningEffort.Low) or
+                nameof(SessionReasoningEffort.Medium) or
+                nameof(SessionReasoningEffort.High))
+        .ToList();
+    private static readonly List<ModelOption> _toolCallPreambleModes = GetEnumOptions<ToolCallPreambleMode>();
 
     private void OnModelChanged(ChangeEventArgs e)
     {
@@ -476,9 +542,12 @@
 
     private string GetModelSelectHint()
     {
-        return _selectedProviderString == "xAI"
-            ? "Use Think Fast for the new model, or Fast as the A/B baseline."
-            : "Obsolete models stay selectable here for manual compatibility checks.";
+        return _selectedProviderString switch
+        {
+            "OpenAI" => "Use GPT Realtime 2 for the new reasoning voice model, or 1.5 as the A/B baseline.",
+            "xAI" => "Use Think Fast for the new model, or Fast as the A/B baseline.",
+            _ => "Obsolete models stay selectable here for manual compatibility checks."
+        };
     }
 
     // Tool management
@@ -493,7 +562,10 @@
     private SessionSettingsContext sessionSettings = new();
     private string lastConnectionEvent = string.Empty;
     private string GoogleThinkingLevelValue => sessionSettings.Thinking.Level?.ToString() ?? string.Empty;
+    private string ReasoningEffortValue => sessionSettings.ReasoningEffort?.ToString() ?? string.Empty;
+    private string ToolCallPreambleModeValue => sessionSettings.ToolCallPreambleMode.ToString();
     private string GoogleThinkingBudgetValue => sessionSettings.Thinking.Budget?.ToString() ?? string.Empty;
+    private bool SelectedOpenAiModelSupportsReasoningEffort => GetSelectedOpenAiModelOrDefault().SupportsReasoningEffort();
     private bool SelectedGoogleModelSupportsThinkingLevel => GetSelectedGoogleModelOrDefault().SupportsThinkingLevel();
     private bool SelectedGoogleModelSupportsThinkingBudget => GetSelectedGoogleModelOrDefault().SupportsThinkingBudget();
     private bool SelectedGoogleModelSupportsThoughtSummaries => GetSelectedGoogleModelOrDefault().SupportsThoughtSummaries();
@@ -501,6 +573,7 @@
     // Transcription state
     private string _transcriptionCommittedText = string.Empty;
     private string _pttLiveHypothesisText = string.Empty;
+    private bool _realtimeHypothesisIsFinal = false;
 
     // Push-to-talk (near-live HTTP transcription)
     private bool _isPttRecording = false;
@@ -509,10 +582,13 @@
     private CancellationTokenSource? _pttLiveTranscriptionCts;
     private Task? _pttLiveTranscriptionTask;
     private OpenAiHttpLiveTranscriber? _pttLiveTranscriber;
-    private string _transcriptionModelString = nameof(OpenAiTranscriptionModel.Gpt4oTranscribe);
+    private string _transcriptionModelString = nameof(OpenAiTranscriptionModel.GptRealtimeWhisper);
+    private bool _includeTranscriptionLogProbabilities = false;
     private List<string> _transcriptionModels = GetSelectableEnumValues<OpenAiTranscriptionModel>()
-        .Where(m => m != OpenAiTranscriptionModel.Gpt4oTranscribeDiarize)
         .Select(v => v.ToString()).ToList();
+    private OpenAiTranscriptionModel SelectedTranscriptionModel => GetSelectedTranscriptionModelOrDefault();
+    private bool SelectedTranscriptionModelSupportsRealtime => SelectedTranscriptionModel.SupportsRealtimeTranscription();
+    private bool SelectedTranscriptionModelSupportsLogProbabilities => SelectedTranscriptionModel.SupportsTranscriptionLogProbabilities();
 
     private static List<TEnum> GetSelectableEnumValues<TEnum>() where TEnum : struct, Enum
     {
@@ -616,7 +692,7 @@
             availableVoices = Enum.GetValues<AssistantVoice>().Select(v => v.ToString()).ToList();
             _currentVoiceString = "Alloy";
             availableModels = GetEnumOptions<OpenAiRealtimeModel>(includeObsolete: true);
-            _currentModelString = nameof(OpenAiRealtimeModel.GptRealtime15);
+            _currentModelString = nameof(OpenAiRealtimeModel.GptRealtime2);
         }
         else if (_selectedProviderString == "Google")
         {
@@ -850,6 +926,38 @@
         };
     }
 
+    private void OnReasoningEffortChanged(ChangeEventArgs e)
+    {
+        SessionReasoningEffort? effort = null;
+        var rawValue = e.Value?.ToString();
+        if (!string.IsNullOrWhiteSpace(rawValue) &&
+            Enum.TryParse<SessionReasoningEffort>(rawValue, out var parsedEffort))
+        {
+            effort = parsedEffort;
+        }
+
+        sessionSettings = sessionSettings with
+        {
+            ReasoningEffort = effort
+        };
+    }
+
+    private void OnToolCallPreambleModeChanged(ChangeEventArgs e)
+    {
+        var mode = ToolCallPreambleMode.ProviderDefault;
+        var rawValue = e.Value?.ToString();
+        if (!string.IsNullOrWhiteSpace(rawValue) &&
+            Enum.TryParse<ToolCallPreambleMode>(rawValue, out var parsedMode))
+        {
+            mode = parsedMode;
+        }
+
+        sessionSettings = sessionSettings with
+        {
+            ToolCallPreambleMode = mode
+        };
+    }
+
     private void OnGoogleThinkingBudgetChanged(ChangeEventArgs e)
     {
         int? budget = null;
@@ -886,6 +994,20 @@
             : GoogleModel.Gemini31FlashLivePreview;
     }
 
+    private OpenAiRealtimeModel GetSelectedOpenAiModelOrDefault()
+    {
+        return Enum.TryParse<OpenAiRealtimeModel>(_currentModelString, out var model)
+            ? model
+            : OpenAiRealtimeModel.GptRealtime2;
+    }
+
+    private OpenAiTranscriptionModel GetSelectedTranscriptionModelOrDefault()
+    {
+        return Enum.TryParse<OpenAiTranscriptionModel>(_transcriptionModelString, out var model)
+            ? model
+            : OpenAiTranscriptionModel.GptRealtimeWhisper;
+    }
+
     private string GetGoogleThinkingLevelHint()
     {
         if (SelectedGoogleModelSupportsThinkingLevel)
@@ -914,6 +1036,39 @@
         }
 
         return "This legacy model does not expose Google thinking controls.";
+    }
+
+    private string GetToolCallPreambleModeHint()
+    {
+        return sessionSettings.ToolCallPreambleMode switch
+        {
+            ToolCallPreambleMode.ProviderDefault => "Let the model decide whether to speak before tool calls.",
+            ToolCallPreambleMode.Disabled => "No spoken bridge messages before tool calls.",
+            ToolCallPreambleMode.BeforeToolBurst => "Best for 7-10 call bursts: one bridge sentence before the burst, not before each call.",
+            ToolCallPreambleMode.ForLongRunningTools => "Only bridge noticeable waits or visible external actions.",
+            ToolCallPreambleMode.BeforeEveryToolCall => "Useful for debugging, but noisy when tools are called in bursts.",
+            _ => "Unsupported providers ignore this setting."
+        };
+    }
+
+    private string GetTranscriptionModelHint()
+    {
+        return SelectedTranscriptionModel switch
+        {
+            OpenAiTranscriptionModel.GptRealtimeWhisper => "Default for low-latency live transcript deltas; priced by audio duration.",
+            OpenAiTranscriptionModel.Gpt4oTranscribe => "Best accuracy for German/business transcription; supports Realtime stream and Hold.",
+            OpenAiTranscriptionModel.Gpt4oMiniTranscribe => "Lower latency and cost; supports Realtime stream and Hold.",
+            OpenAiTranscriptionModel.Gpt4oMiniTranscribe20251215 => "Pinned mini snapshot for compatibility checks.",
+            OpenAiTranscriptionModel.Gpt4oTranscribeDiarize => "Speaker diarization. OpenAI currently supports this only through the HTTP Transcription API, so use Hold.",
+            _ => "Legacy or compatibility model."
+        };
+    }
+
+    private string GetTranscriptionLogProbabilitiesHint()
+    {
+        return SelectedTranscriptionModelSupportsLogProbabilities
+            ? "Adds confidence metadata to the Realtime Stream where OpenAI emits it; text output remains unchanged."
+            : "This selected transcription model does not expose log probabilities here.";
     }
 
     private string GetGoogleThoughtSummariesHint()
@@ -963,7 +1118,14 @@
     {
         InvokeAsync(() =>
         {
-            _transcriptionCommittedText += delta;
+            if (_realtimeHypothesisIsFinal)
+            {
+                _pttLiveHypothesisText = string.Empty;
+                _realtimeHypothesisIsFinal = false;
+            }
+
+            _pttLiveHypothesisText += delta;
+            _pttReceivedText = _pttLiveHypothesisText.Length > 0;
             StateHasChanged();
         });
     }
@@ -972,7 +1134,20 @@
     {
         InvokeAsync(() =>
         {
-            _transcriptionCommittedText += "\n";
+            if (!string.IsNullOrWhiteSpace(transcript))
+            {
+                if (_transcriptionCommittedText.Length > 0 &&
+                    !_transcriptionCommittedText.EndsWith("\n", StringComparison.Ordinal))
+                {
+                    _transcriptionCommittedText += "\n";
+                }
+
+                _transcriptionCommittedText += transcript + "\n";
+            }
+
+            _pttLiveHypothesisText = transcript;
+            _pttReceivedText = !string.IsNullOrWhiteSpace(transcript);
+            _realtimeHypothesisIsFinal = true;
             StateHasChanged();
         });
     }
@@ -1023,7 +1198,7 @@
 
                 if (!Enum.TryParse<OpenAiRealtimeModel>(_currentModelString, out var openAiModel))
                 {
-                    openAiModel = OpenAiRealtimeModel.GptRealtime15;
+                    openAiModel = OpenAiRealtimeModel.GptRealtime2;
                 }
 
                 settings = new OpenAiVoiceSettings
@@ -1032,12 +1207,14 @@
                     Voice = openAiVoice,
                     InputAudioTranscription = new InputAudioTranscription
                     {
-                        Model = OpenAiTranscriptionModel.Gpt4oTranscribe,
+                        Model = OpenAiTranscriptionModel.GptRealtimeWhisper,
                         Prompt = "Expect German with slight accent",
                         Enabled = true,
                     },
                     TalkingSpeed = currentVoiceSpeed,
                     Model = openAiModel,
+                    ReasoningEffort = sessionSettings.ReasoningEffort,
+                    ToolCallPreambleMode = sessionSettings.ToolCallPreambleMode,
                     Thinking = sessionSettings.Thinking,
                     Tools = enabledTools.ToList()
                 };
@@ -1062,6 +1239,8 @@
                     Voice = googleVoice,
                     TalkingSpeed = currentVoiceSpeed,
                     Model = googleModel,
+                    ReasoningEffort = sessionSettings.ReasoningEffort,
+                    ToolCallPreambleMode = sessionSettings.ToolCallPreambleMode,
                     Thinking = sessionSettings.Thinking,
                     ResponseModality = "AUDIO",
                     LanguageCode = "de-DE", // Set to German - change to "en-US" for English or null for auto-detect
@@ -1093,6 +1272,8 @@
                     Model = xaiModel,
                     Voice = xaiVoice,
                     TalkingSpeed = currentVoiceSpeed,
+                    ReasoningEffort = sessionSettings.ReasoningEffort,
+                    ToolCallPreambleMode = sessionSettings.ToolCallPreambleMode,
                     Thinking = sessionSettings.Thinking,
                     Tools = enabledTools.ToList(),
                     EnableWebSearch = false,
@@ -1221,14 +1402,17 @@
 
     private OpenAiTranscriptionSettings BuildTranscriptionSettings()
     {
-        if (!Enum.TryParse<OpenAiTranscriptionModel>(_transcriptionModelString, out var transcriptionModel))
-            transcriptionModel = OpenAiTranscriptionModel.Gpt4oTranscribe;
+        var transcriptionModel = SelectedTranscriptionModel;
 
         return new OpenAiTranscriptionSettings
         {
             TranscriptionModel = transcriptionModel,
-            TranscriptionPrompt = "Expect German with slight accent, business/IT/construction terms",
-            Language = "de"
+            TranscriptionPrompt = transcriptionModel.SupportsTranscriptionPrompt()
+                ? "Expect German with slight accent, business/IT/construction terms"
+                : null,
+            Language = "de",
+            IncludeLogProbabilities = _includeTranscriptionLogProbabilities &&
+                transcriptionModel.SupportsTranscriptionLogProbabilities()
         };
     }
 
@@ -1237,9 +1421,17 @@
         try
         {
             if (voiceAssistant == null) return;
+            if (!SelectedTranscriptionModelSupportsRealtime)
+            {
+                Log(LogLevel.Warn, $"{SelectedTranscriptionModel} is not supported by the Realtime transcription stream. Use Hold instead.");
+                return;
+            }
 
             var settings = BuildTranscriptionSettings();
             Log(LogLevel.Info, $"Starting streaming transcription with model: {settings.TranscriptionModel}");
+            _pttLiveHypothesisText = string.Empty;
+            _pttReceivedText = false;
+            _realtimeHypothesisIsFinal = false;
             await voiceAssistant.StartAsync(settings);
             await InvokeAsync(StateHasChanged);
         }
@@ -1337,14 +1529,16 @@
 
     private OpenAiHttpLiveTranscriptionOptions BuildPttLiveTranscriptionOptions()
     {
-        if (!Enum.TryParse<OpenAiTranscriptionModel>(_transcriptionModelString, out var model))
-            model = OpenAiTranscriptionModel.Gpt4oMiniTranscribe;
+        var model = SelectedTranscriptionModel;
 
         return new OpenAiHttpLiveTranscriptionOptions
         {
             TranscriptionModel = model,
             Language = "de",
-            Prompt = "Expect German with slight accent, business/IT/construction terms",
+            Prompt = model.SupportsTranscriptionPrompt()
+                ? "Expect German with slight accent, business/IT/construction terms"
+                : null,
+            IncludeLogProbabilities = false,
             SnapshotInterval = TimeSpan.FromMilliseconds(250),
             MinimumUtteranceDuration = TimeSpan.FromMilliseconds(120),
             LeadingTrimDuration = TimeSpan.FromMilliseconds(120),
@@ -1408,7 +1602,24 @@
     private void OnTranscriptionModelChanged(ChangeEventArgs e)
     {
         _transcriptionModelString = e.Value?.ToString() ?? _transcriptionModelString;
+        if (!SelectedTranscriptionModelSupportsLogProbabilities)
+        {
+            _includeTranscriptionLogProbabilities = false;
+        }
+
         Log(LogLevel.Info, $"Transcription model changed to: {_transcriptionModelString}");
+    }
+
+    private void OnIncludeTranscriptionLogProbabilitiesChanged(ChangeEventArgs e)
+    {
+        _includeTranscriptionLogProbabilities = e.Value is bool boolValue
+            ? boolValue
+            : string.Equals(e.Value?.ToString(), "true", StringComparison.OrdinalIgnoreCase);
+
+        if (!SelectedTranscriptionModelSupportsLogProbabilities)
+        {
+            _includeTranscriptionLogProbabilities = false;
+        }
     }
 
     public async ValueTask DisposeAsync()

@@ -9,9 +9,9 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi.Models
     public sealed class OpenAiHttpLiveTranscriptionOptions
     {
         /// <summary>
-        /// The transcription model to use. Defaults to the faster mini model.
+        /// The transcription model to use. Defaults to the low-latency realtime transcription model.
         /// </summary>
-        public OpenAiTranscriptionModel TranscriptionModel { get; set; } = OpenAiTranscriptionModel.Gpt4oMiniTranscribe;
+        public OpenAiTranscriptionModel TranscriptionModel { get; set; } = OpenAiTranscriptionModel.GptRealtimeWhisper;
 
         /// <summary>
         /// Optional spoken language hint (for example "en" or "de").
@@ -22,6 +22,11 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi.Models
         /// Optional transcription prompt to bias recognition.
         /// </summary>
         public string? Prompt { get; set; }
+
+        /// <summary>
+        /// Include token log probabilities when supported by the selected model and response format.
+        /// </summary>
+        public bool IncludeLogProbabilities { get; set; }
 
         /// <summary>
         /// How often a growing utterance snapshot should be uploaded while speech is active.

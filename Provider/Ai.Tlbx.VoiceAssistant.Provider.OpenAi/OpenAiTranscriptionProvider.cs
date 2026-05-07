@@ -133,6 +133,9 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi
 
             try
             {
+                if (string.IsNullOrWhiteSpace(base64Audio))
+                    return;
+
                 var audioMessage = new AudioBufferAppendMessage { Audio = base64Audio };
                 await SendMessageAsync(JsonSerializer.Serialize(audioMessage, OpenAiJsonContext.Default.AudioBufferAppendMessage));
             }
@@ -150,31 +153,50 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi
         {
             if (_settings == null) return;
 
-            var sessionUpdate = new TranscriptionSessionUpdateMessage
+            var sessionUpdate = new SessionUpdateMessage
             {
-                Session = new TranscriptionSessionConfig
+                Session = new SessionConfig
                 {
-                    InputAudioFormat = "pcm16",
-                    InputAudioTranscription = new TranscriptionConfig
+                    Type = "transcription",
+                    Audio = new AudioConfig
                     {
-                        Model = _settings.TranscriptionModel.ToApiString(),
-                        Prompt = _settings.TranscriptionPrompt
+                        Input = new AudioInputConfig
+                        {
+                            Format = new AudioInputFormatConfig
+                            {
+                                Type = "audio/pcm",
+                                Rate = 24000
+                            },
+                            Transcription = new TranscriptionConfig
+                            {
+                                Model = _settings.TranscriptionModel.ToApiString(),
+                                Prompt = _settings.TranscriptionModel.SupportsTranscriptionPrompt()
+                                    ? _settings.TranscriptionPrompt
+                                    : null,
+                                Language = _settings.Language
+                            },
+                            TurnDetection = _settings.TranscriptionModel.SupportsRealtimeTurnDetection()
+                                ? new TurnDetectionConfig
+                                {
+                                    Type = "server_vad",
+                                    Threshold = _settings.VadThreshold,
+                                    PrefixPaddingMs = _settings.PrefixPaddingMs,
+                                    SilenceDurationMs = _settings.SilenceDurationMs
+                                }
+                                : null,
+                            NoiseReduction = new NoiseReductionConfig
+                            {
+                                Type = _settings.NoiseReduction.ToApiString()
+                            }
+                        }
                     },
-                    TurnDetection = new TurnDetectionConfig
-                    {
-                        Type = "server_vad",
-                        Threshold = _settings.VadThreshold,
-                        PrefixPaddingMs = _settings.PrefixPaddingMs,
-                        SilenceDurationMs = _settings.SilenceDurationMs
-                    },
-                    InputAudioNoiseReduction = new NoiseReductionConfig
-                    {
-                        Type = _settings.NoiseReduction.ToApiString()
-                    }
+                    Include = _settings.IncludeLogProbabilities
+                        ? new List<string> { "item.input_audio_transcription.logprobs" }
+                        : null
                 }
             };
 
-            var json = JsonSerializer.Serialize(sessionUpdate, OpenAiJsonContext.Default.TranscriptionSessionUpdateMessage);
+            var json = JsonSerializer.Serialize(sessionUpdate, OpenAiJsonContext.Default.SessionUpdateMessage);
             _logAction(LogLevel.Info, $"Sending transcription session config: {json}");
             await SendMessageAsync(json);
         }
@@ -256,11 +278,13 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi
 
                 switch (messageType)
                 {
+                    case "session.created":
                     case "transcription_session.created":
                         _logAction(LogLevel.Info, "Transcription session created");
                         OnStatusChanged?.Invoke("Transcription ready");
                         break;
 
+                    case "session.updated":
                     case "transcription_session.updated":
                         _logAction(LogLevel.Info, "Transcription session updated");
                         break;

@@ -19,7 +19,9 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi.Protocol
     [JsonSerializable(typeof(TruncationConfig))]
     [JsonSerializable(typeof(AudioConfig))]
     [JsonSerializable(typeof(AudioInputConfig))]
+    [JsonSerializable(typeof(AudioInputFormatConfig))]
     [JsonSerializable(typeof(AudioOutputConfig))]
+    [JsonSerializable(typeof(OpenAiReasoningConfig))]
     [JsonSerializable(typeof(NoiseReductionConfig))]
     [JsonSerializable(typeof(TranscriptionConfig))]
     [JsonSerializable(typeof(TurnDetectionConfig))]
@@ -31,8 +33,6 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi.Protocol
     [JsonSerializable(typeof(List<string>))]
     [JsonSerializable(typeof(string[]))]
     [JsonSerializable(typeof(JsonElement))]
-    [JsonSerializable(typeof(TranscriptionSessionUpdateMessage))]
-    [JsonSerializable(typeof(TranscriptionSessionConfig))]
     [JsonSourceGenerationOptions(
         DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
         WriteIndented = false)]
@@ -42,6 +42,8 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi.Protocol
 
     [JsonSerializable(typeof(SessionUpdateMessage))]
     [JsonSerializable(typeof(SessionConfig))]
+    [JsonSerializable(typeof(AudioInputFormatConfig))]
+    [JsonSerializable(typeof(OpenAiReasoningConfig))]
     [JsonSerializable(typeof(ToolDefinition))]
     [JsonSerializable(typeof(ToolParameters))]
     [JsonSerializable(typeof(ToolProperty))]

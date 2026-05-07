@@ -57,4 +57,70 @@ namespace Ai.Tlbx.VoiceAssistant.Models
             };
         }
     }
+
+    /// <summary>
+    /// Provider-neutral reasoning effort for models that expose qualitative reasoning controls.
+    /// Providers and models that do not support this should ignore it.
+    /// </summary>
+    public enum SessionReasoningEffort
+    {
+        None,
+        Minimal,
+        Low,
+        Medium,
+        High,
+        XHigh
+    }
+
+    /// <summary>
+    /// Helper methods for provider-specific reasoning effort mappings.
+    /// </summary>
+    public static class SessionReasoningEffortExtensions
+    {
+        public static string ToApiString(this SessionReasoningEffort effort)
+        {
+            return effort switch
+            {
+                SessionReasoningEffort.None => "none",
+                SessionReasoningEffort.Minimal => "minimal",
+                SessionReasoningEffort.Low => "low",
+                SessionReasoningEffort.Medium => "medium",
+                SessionReasoningEffort.High => "high",
+                SessionReasoningEffort.XHigh => "xhigh",
+                _ => throw new System.ArgumentOutOfRangeException(nameof(effort), effort, "Unsupported reasoning effort")
+            };
+        }
+    }
+
+    /// <summary>
+    /// Provider-neutral policy for spoken bridge messages around tool calls.
+    /// Providers and models that do not support this should ignore it.
+    /// </summary>
+    public enum ToolCallPreambleMode
+    {
+        /// <summary>
+        /// Let the provider/model decide whether to speak before tool calls.
+        /// </summary>
+        ProviderDefault,
+
+        /// <summary>
+        /// Do not add spoken preambles before tool calls.
+        /// </summary>
+        Disabled,
+
+        /// <summary>
+        /// Speak one short bridge line before a multi-tool burst, then stay quiet until the final result.
+        /// </summary>
+        BeforeToolBurst,
+
+        /// <summary>
+        /// Speak a short preamble only before slow or user-visible tool calls.
+        /// </summary>
+        ForLongRunningTools,
+
+        /// <summary>
+        /// Speak one short preamble before every tool call.
+        /// </summary>
+        BeforeEveryToolCall
+    }
 }

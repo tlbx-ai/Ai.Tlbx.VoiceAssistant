@@ -36,7 +36,7 @@ var transcriber = new OpenAiHttpLiveTranscriber(
     audioHardware,
     new OpenAiHttpLiveTranscriptionOptions
     {
-        TranscriptionModel = OpenAiTranscriptionModel.Gpt4oMiniTranscribe,
+        TranscriptionModel = OpenAiTranscriptionModel.GptRealtimeWhisper,
         Language = "de",
         Prompt = "Expect German with business and IT terms"
     },
@@ -54,6 +54,16 @@ This path is near-live, not true realtime: it uses short repeated HTTP uploads,
 so partials may arrive a bit later. The callback receives the latest current
 hypothesis for the active push-to-talk segment, which lets a UI replace the
 current line as the model revises earlier words.
+
+For low-latency live transcript deltas use `GptRealtimeWhisper`, the current
+default for realtime transcription. For higher-quality file/HTTP transcription
+use `Gpt4oTranscribe`; for lower cost use `Gpt4oMiniTranscribe`.
+`Gpt4oTranscribeDiarize` enables speaker labels through the HTTP transcription
+endpoint and is not supported by OpenAI's Realtime transcription stream.
+Realtime Whisper does not accept the `prompt` parameter, so the provider omits
+prompt steering and server-side turn detection for that model.
+`Whisper1` remains available as a legacy model, but it does not support
+streamed HTTP transcription responses.
 
 ## Full Documentation
 

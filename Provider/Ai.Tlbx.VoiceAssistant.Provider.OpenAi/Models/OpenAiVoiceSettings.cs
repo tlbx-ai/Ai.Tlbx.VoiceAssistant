@@ -23,7 +23,7 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi.Models
         /// <summary>
         /// The OpenAI model to use for the conversation.
         /// </summary>
-        public OpenAiRealtimeModel Model { get; set; } = OpenAiRealtimeModel.GptRealtime15;
+        public OpenAiRealtimeModel Model { get; set; } = OpenAiRealtimeModel.GptRealtime2;
 
         /// <summary>
         /// The voice to use for AI responses.
@@ -79,6 +79,16 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi.Models
         public string OutputAudioFormat { get; set; } = "pcm16";
 
         public NoiseReductionMode NoiseReduction { get; set; } = NoiseReductionMode.FarField;
+
+        /// <summary>
+        /// Optional reasoning effort. Supported by GPT Realtime 2; ignored by other OpenAI realtime models.
+        /// </summary>
+        public SessionReasoningEffort? ReasoningEffort { get; set; }
+
+        /// <summary>
+        /// Spoken bridge policy for tool calls. Applied through OpenAI Realtime instructions.
+        /// </summary>
+        public ToolCallPreambleMode ToolCallPreambleMode { get; set; } = ToolCallPreambleMode.ProviderDefault;
 
         /// <summary>
         /// OpenAI Realtime currently ignores the shared thinking configuration.
@@ -150,7 +160,7 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi.Models
     /// </summary>
     public class InputAudioTranscription
     {
-        public OpenAiTranscriptionModel Model { get; set; } = OpenAiTranscriptionModel.Gpt4oMiniTranscribe;
+        public OpenAiTranscriptionModel Model { get; set; } = OpenAiTranscriptionModel.GptRealtimeWhisper;
 
         /// <summary>
         /// Whether to enable transcription.

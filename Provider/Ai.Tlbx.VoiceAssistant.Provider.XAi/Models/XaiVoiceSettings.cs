@@ -75,6 +75,16 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.XAi.Models
         public NoiseReductionMode NoiseReduction { get; set; } = NoiseReductionMode.FarField;
 
         /// <summary>
+        /// xAI Voice Agent currently ignores provider-neutral reasoning effort.
+        /// </summary>
+        public SessionReasoningEffort? ReasoningEffort { get; set; }
+
+        /// <summary>
+        /// xAI Voice Agent currently ignores provider-neutral tool-call preamble policy.
+        /// </summary>
+        public ToolCallPreambleMode ToolCallPreambleMode { get; set; } = ToolCallPreambleMode.ProviderDefault;
+
+        /// <summary>
         /// xAI Voice Agent currently ignores the shared thinking configuration.
         /// </summary>
         public SessionThinkingConfig Thinking { get; set; } = new();

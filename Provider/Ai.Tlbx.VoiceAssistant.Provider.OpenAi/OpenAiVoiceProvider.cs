@@ -141,7 +141,8 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi
                 {
                     Type = "realtime",
                     Model = _settings.Model.ToApiString(),
-                    Instructions = _settings.Instructions
+                    Instructions = BuildInstructions(_settings),
+                    Reasoning = BuildReasoningConfig(_settings)
                 }
             };
 
@@ -414,7 +415,7 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi
                 Session = new SessionConfig
                 {
                     OutputModalities = new List<string> { "audio" },
-                    Instructions = _settings.Instructions,
+                    Instructions = BuildInstructions(_settings),
                     MaxOutputTokens = _settings.MaxTokens?.ToString() ?? "inf",
                     Truncation = new TruncationConfig
                     {
@@ -425,6 +426,7 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi
                     Tools = _settings.Tools.Select(tool =>
                         (ToolDefinition)_toolTranslator.TranslateToolDefinition(tool, ToolSchemaInferrer.InferSchema(tool.ArgsType))
                     ).ToList(),
+                    Reasoning = BuildReasoningConfig(_settings),
                     Audio = new AudioConfig
                     {
                         Input = new AudioInputConfig
@@ -461,6 +463,69 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi
             _logAction(LogLevel.Info, $"Sending explicit session config to OpenAI:\n{jsonMessage}");
             await SendMessageAsync(jsonMessage);
             _logAction(LogLevel.Info, "Session configuration sent to OpenAI");
+        }
+
+        private static OpenAiReasoningConfig? BuildReasoningConfig(OpenAiVoiceSettings settings)
+        {
+            if (settings.Model != OpenAiRealtimeModel.GptRealtime2 || !settings.ReasoningEffort.HasValue)
+            {
+                return null;
+            }
+
+            var effort = settings.ReasoningEffort.Value switch
+            {
+                SessionReasoningEffort.Low => "low",
+                SessionReasoningEffort.Medium => "medium",
+                SessionReasoningEffort.High => "high",
+                _ => null
+            };
+
+            return effort == null
+                ? null
+                : new OpenAiReasoningConfig { Effort = effort };
+        }
+
+        private static string BuildInstructions(OpenAiVoiceSettings settings)
+        {
+            var preambleInstructions = BuildToolCallPreambleInstructions(settings.ToolCallPreambleMode);
+            if (string.IsNullOrWhiteSpace(preambleInstructions))
+            {
+                return settings.Instructions;
+            }
+
+            return string.Join(
+                Environment.NewLine + Environment.NewLine,
+                settings.Instructions,
+                preambleInstructions);
+        }
+
+        private static string? BuildToolCallPreambleInstructions(ToolCallPreambleMode mode)
+        {
+            return mode switch
+            {
+                ToolCallPreambleMode.ProviderDefault => null,
+                ToolCallPreambleMode.Disabled =>
+                    "# Tool call preambles" + Environment.NewLine +
+                    "- Do not speak a preamble before tool calls." + Environment.NewLine +
+                    "- Call tools directly when the user's intent is clear.",
+                ToolCallPreambleMode.BeforeToolBurst =>
+                    "# Tool call preambles" + Environment.NewLine +
+                    "- If a user request requires a burst of multiple tool calls, say one short bridge sentence before the first call." + Environment.NewLine +
+                    "- Summarize the overall action, not each individual tool call." + Environment.NewLine +
+                    "- Do not narrate every tool call in the burst; keep working quietly until you have the final result or need clarification." + Environment.NewLine +
+                    "- For a single lightweight tool call, call the tool silently unless the user would benefit from an update.",
+                ToolCallPreambleMode.ForLongRunningTools =>
+                    "# Tool call preambles" + Environment.NewLine +
+                    "- Say one short bridge sentence before a tool call only when it may take noticeable time or affects visible external state." + Environment.NewLine +
+                    "- Do not speak preambles for quick lookups or lightweight tool calls." + Environment.NewLine +
+                    "- Describe the action, not internal reasoning.",
+                ToolCallPreambleMode.BeforeEveryToolCall =>
+                    "# Tool call preambles" + Environment.NewLine +
+                    "- Before any tool call, say one short natural sentence describing the action, then call the tool immediately." + Environment.NewLine +
+                    "- Vary wording and avoid filler." + Environment.NewLine +
+                    "- Describe the action, not internal reasoning.",
+                _ => null
+            };
         }
 
         private async Task SendMessageAsync(string message)

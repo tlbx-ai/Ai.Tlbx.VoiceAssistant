@@ -98,5 +98,16 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.Google.Models
         public int? TopK { get; set; }
 
         public NoiseReductionMode NoiseReduction { get; set; } = NoiseReductionMode.FarField;
+
+        /// <summary>
+        /// Google Live models currently ignore provider-neutral reasoning effort.
+        /// Use <see cref="Thinking"/> for Google-specific thinking controls.
+        /// </summary>
+        public SessionReasoningEffort? ReasoningEffort { get; set; }
+
+        /// <summary>
+        /// Google Live models currently ignore provider-neutral tool-call preamble policy.
+        /// </summary>
+        public ToolCallPreambleMode ToolCallPreambleMode { get; set; } = ToolCallPreambleMode.ProviderDefault;
     }
 }

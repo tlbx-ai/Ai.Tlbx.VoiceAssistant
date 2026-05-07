@@ -31,6 +31,18 @@ namespace Ai.Tlbx.VoiceAssistant.Interfaces
         NoiseReductionMode NoiseReduction { get; set; }
 
         /// <summary>
+        /// Optional provider-neutral reasoning effort for models that support it.
+        /// Providers and models that do not support reasoning effort should ignore it.
+        /// </summary>
+        SessionReasoningEffort? ReasoningEffort { get; set; }
+
+        /// <summary>
+        /// Optional provider-neutral policy for spoken bridge messages around tool calls.
+        /// Providers and models that do not support tool-call preambles should ignore it.
+        /// </summary>
+        ToolCallPreambleMode ToolCallPreambleMode { get; set; }
+
+        /// <summary>
         /// Optional provider-neutral thinking configuration for the session.
         /// Providers that do not support thinking controls should ignore it.
         /// </summary>

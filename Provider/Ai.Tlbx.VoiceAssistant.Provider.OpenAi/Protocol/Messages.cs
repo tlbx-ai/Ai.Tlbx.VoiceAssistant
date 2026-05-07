@@ -34,6 +34,9 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi.Protocol
 
         [JsonPropertyName("instructions")]
         public string? Instructions { get; set; }
+
+        [JsonPropertyName("reasoning")]
+        public OpenAiReasoningConfig? Reasoning { get; set; }
     }
 
     #endregion
@@ -203,7 +206,7 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi.Protocol
     public class SessionConfig
     {
         [JsonPropertyName("type")]
-        public string Type { get; } = "realtime";
+        public string Type { get; set; } = "realtime";
 
         [JsonPropertyName("output_modalities")]
         public List<string>? OutputModalities { get; set; }
@@ -225,6 +228,18 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi.Protocol
 
         [JsonPropertyName("audio")]
         public AudioConfig? Audio { get; set; }
+
+        [JsonPropertyName("reasoning")]
+        public OpenAiReasoningConfig? Reasoning { get; set; }
+
+        [JsonPropertyName("include")]
+        public List<string>? Include { get; set; }
+    }
+
+    public class OpenAiReasoningConfig
+    {
+        [JsonPropertyName("effort")]
+        public string? Effort { get; set; }
     }
 
     public class TruncationConfig
@@ -247,6 +262,9 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi.Protocol
 
     public class AudioInputConfig
     {
+        [JsonPropertyName("format")]
+        public AudioInputFormatConfig? Format { get; set; }
+
         [JsonPropertyName("noise_reduction")]
         public NoiseReductionConfig? NoiseReduction { get; set; }
 
@@ -255,6 +273,15 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi.Protocol
 
         [JsonPropertyName("turn_detection")]
         public TurnDetectionConfig? TurnDetection { get; set; }
+    }
+
+    public class AudioInputFormatConfig
+    {
+        [JsonPropertyName("type")]
+        public string Type { get; set; } = "audio/pcm";
+
+        [JsonPropertyName("rate")]
+        public int Rate { get; set; } = 24000;
     }
 
     public class NoiseReductionConfig
@@ -270,6 +297,9 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi.Protocol
 
         [JsonPropertyName("prompt")]
         public string? Prompt { get; set; }
+
+        [JsonPropertyName("language")]
+        public string? Language { get; set; }
     }
 
     public class TurnDetectionConfig
@@ -303,34 +333,6 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi.Protocol
 
         [JsonPropertyName("voice")]
         public string? Voice { get; set; }
-    }
-
-    #endregion
-
-    #region Transcription Session
-
-    public class TranscriptionSessionUpdateMessage
-    {
-        [JsonPropertyName("type")]
-        public string Type { get; } = "transcription_session.update";
-
-        [JsonPropertyName("session")]
-        public TranscriptionSessionConfig? Session { get; set; }
-    }
-
-    public class TranscriptionSessionConfig
-    {
-        [JsonPropertyName("input_audio_format")]
-        public string InputAudioFormat { get; set; } = "pcm16";
-
-        [JsonPropertyName("input_audio_transcription")]
-        public TranscriptionConfig? InputAudioTranscription { get; set; }
-
-        [JsonPropertyName("turn_detection")]
-        public TurnDetectionConfig? TurnDetection { get; set; }
-
-        [JsonPropertyName("input_audio_noise_reduction")]
-        public NoiseReductionConfig? InputAudioNoiseReduction { get; set; }
     }
 
     #endregion
