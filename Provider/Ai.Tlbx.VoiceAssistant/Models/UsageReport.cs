@@ -37,21 +37,22 @@ namespace Ai.Tlbx.VoiceAssistant.Models
         public int? OutputAudioTokens { get; init; }
 
         /// <summary>
-        /// Number of tokens used for cache creation (OpenAI-specific).
+        /// Number of tokens used for cache creation (OpenAI-specific billing modifier).
+        /// Cache tokens are a subset of input tokens and are not added to TotalInputTokens.
         /// </summary>
         public int? CacheCreationInputTokens { get; init; }
 
         /// <summary>
-        /// Number of cached tokens read from cache (OpenAI-specific).
+        /// Number of cached tokens read from cache (OpenAI-specific billing modifier).
+        /// Cache tokens are a subset of input tokens and are not added to TotalInputTokens.
         /// </summary>
         public int? CacheReadInputTokens { get; init; }
 
         /// <summary>
-        /// Total input tokens including text, audio, and cache tokens.
+        /// Total input tokens including text and audio tokens.
         /// </summary>
         public int TotalInputTokens =>
-            (InputTokens ?? 0) + (InputAudioTokens ?? 0) +
-            (CacheCreationInputTokens ?? 0) + (CacheReadInputTokens ?? 0);
+            (InputTokens ?? 0) + (InputAudioTokens ?? 0);
 
         /// <summary>
         /// Total output tokens including text and audio.

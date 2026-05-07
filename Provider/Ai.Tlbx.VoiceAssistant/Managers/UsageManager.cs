@@ -78,6 +78,20 @@ namespace Ai.Tlbx.VoiceAssistant.Managers
         }
 
         /// <summary>
+        /// Gets the total text input tokens across all reports.
+        /// </summary>
+        public int TextInputTokens
+        {
+            get
+            {
+                lock (_lock)
+                {
+                    return _reports.Sum(r => r.InputTokens ?? 0);
+                }
+            }
+        }
+
+        /// <summary>
         /// Gets the total output tokens across all reports.
         /// </summary>
         public int TotalOutputTokens
@@ -87,6 +101,20 @@ namespace Ai.Tlbx.VoiceAssistant.Managers
                 lock (_lock)
                 {
                     return _reports.Sum(r => r.TotalOutputTokens);
+                }
+            }
+        }
+
+        /// <summary>
+        /// Gets the total text output tokens across all reports.
+        /// </summary>
+        public int TextOutputTokens
+        {
+            get
+            {
+                lock (_lock)
+                {
+                    return _reports.Sum(r => r.OutputTokens ?? 0);
                 }
             }
         }
@@ -120,6 +148,20 @@ namespace Ai.Tlbx.VoiceAssistant.Managers
                 lock (_lock)
                 {
                     return _reports.Sum(r => r.OutputAudioTokens ?? 0);
+                }
+            }
+        }
+
+        /// <summary>
+        /// Gets the total cached input tokens across all reports.
+        /// </summary>
+        public int TotalCachedInputTokens
+        {
+            get
+            {
+                lock (_lock)
+                {
+                    return _reports.Sum(r => (r.CacheCreationInputTokens ?? 0) + (r.CacheReadInputTokens ?? 0));
                 }
             }
         }

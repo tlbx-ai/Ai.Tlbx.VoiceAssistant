@@ -41,7 +41,17 @@ namespace Ai.Tlbx.VoiceAssistant.Models
         public TimeSpan LocalSessionDuration { get; init; }
 
         /// <summary>
-        /// Cumulative total input tokens (text + audio + cache).
+        /// Cumulative text input tokens.
+        /// </summary>
+        public int TextInputTokens { get; init; }
+
+        /// <summary>
+        /// Cumulative text output tokens.
+        /// </summary>
+        public int TextOutputTokens { get; init; }
+
+        /// <summary>
+        /// Cumulative total input tokens (text + audio).
         /// </summary>
         public int TotalInputTokens { get; init; }
 
@@ -64,5 +74,11 @@ namespace Ai.Tlbx.VoiceAssistant.Models
         /// Cumulative total tokens (input + output).
         /// </summary>
         public int TotalTokens { get; init; }
+
+        /// <summary>
+        /// Cumulative cached input tokens used as a billing modifier.
+        /// Cache tokens are a subset of input tokens.
+        /// </summary>
+        public int TotalCachedInputTokens { get; init; }
     }
 }

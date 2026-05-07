@@ -635,11 +635,14 @@ namespace Ai.Tlbx.VoiceAssistant
             {
                 Trigger = trigger,
                 LocalSessionDuration = DateTime.UtcNow - _sessionStartTime.Value,
+                TextInputTokens = _usageManager.TextInputTokens,
+                TextOutputTokens = _usageManager.TextOutputTokens,
                 TotalInputTokens = _usageManager.TotalInputTokens,
                 TotalOutputTokens = _usageManager.TotalOutputTokens,
                 TotalAudioInputTokens = _usageManager.TotalAudioInputTokens,
                 TotalAudioOutputTokens = _usageManager.TotalAudioOutputTokens,
-                TotalTokens = _usageManager.TotalTokens
+                TotalTokens = _usageManager.TotalTokens,
+                TotalCachedInputTokens = _usageManager.TotalCachedInputTokens
             };
 
             _lastUsageUpdateTime = DateTime.UtcNow;
