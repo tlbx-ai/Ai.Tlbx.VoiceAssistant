@@ -380,6 +380,18 @@ Run it locally:
 dotnet watch run --project Demo/Ai.Tlbx.VoiceAssistant.Demo.Web/Ai.Tlbx.VoiceAssistant.Demo.Web.csproj --launch-profile https
 ```
 
+For native Windows/Linux validation, run the terminal demo:
+
+```bash
+dotnet run --project Demo/Ai.Tlbx.VoiceAssistant.Demo.Console/Ai.Tlbx.VoiceAssistant.Demo.Console.csproj -c Release
+```
+
+The terminal demo uses `Spectre.Console` and mirrors the web demo's operational controls: provider, model, voice, microphone, speech speed, OpenAI reasoning effort, Google thinking options, tool preamble policy, built-in tool toggles, microphone test, voice chat, streaming transcription, hold-to-transcribe, interrupt, logs, and diagnostics. A non-interactive startup check is available for build/release gates:
+
+```bash
+dotnet run --project Demo/Ai.Tlbx.VoiceAssistant.Demo.Console/Ai.Tlbx.VoiceAssistant.Demo.Console.csproj -c Release -- --smoke-test
+```
+
 ### Built-in Tools
 - `TimeTool` — Current time in any timezone
 - `WeatherTool` — Mock weather (demo)
@@ -416,7 +428,9 @@ _assistant.OnSessionUsageUpdated = update =>
 
 ## Native Apps (Windows/Linux)
 
-> **Note:** Native desktop support works but is less polished than the web implementation. Good for experiments and prototypes.
+Native desktop support now shares the same provider/model surface as the web demo through the terminal demo. Windows is the primary native target; Linux follows the same API path through ALSA.
+
+The native hardware providers honor each provider's requested input sample rate: Google captures at 16 kHz, while OpenAI/xAI capture at 24 kHz. Playback devices are also configured to the audio sample rate passed by the provider.
 
 ```csharp
 // Windows (requires Windows 10+)

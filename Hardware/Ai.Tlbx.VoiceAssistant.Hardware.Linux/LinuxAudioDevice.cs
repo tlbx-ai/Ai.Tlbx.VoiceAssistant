@@ -9,7 +9,8 @@ namespace Ai.Tlbx.VoiceAssistant.Hardware.Linux
     /// </summary>
     public class LinuxAudioDevice : IAudioHardwareAccess
     {
-        private const int DEFAULT_SAMPLE_RATE = 16000;
+        private const int DEFAULT_CAPTURE_SAMPLE_RATE = 24000;
+        private const int DEFAULT_PLAYBACK_SAMPLE_RATE = 24000;
         private const uint DEFAULT_CHANNELS = 1; // Mono
         private const int DEFAULT_PERIOD_SIZE = 1024; // Frames per period
         private const int DEFAULT_BUFFER_SIZE = 8192; // Total buffer size in frames
@@ -25,6 +26,9 @@ namespace Ai.Tlbx.VoiceAssistant.Hardware.Linux
         private MicrophoneAudioReceivedEventHandler? _audioDataHandler = null;
         private Action<LogLevel, string>? _logger;
         private DiagnosticLevel _diagnosticLevel = DiagnosticLevel.Basic;
+        private uint _captureSampleRate = DEFAULT_CAPTURE_SAMPLE_RATE;
+        private uint _playbackSampleRate = DEFAULT_PLAYBACK_SAMPLE_RATE;
+        private AudioSampleRate _lastRecordingTargetSampleRate = AudioSampleRate.Rate24000;
         
         /// <summary>
         /// Event that fires when an audio error occurs in the ALSA hardware
@@ -161,7 +165,7 @@ namespace Ai.Tlbx.VoiceAssistant.Hardware.Linux
             Log(LogLevel.Info, $"Capture device opened: {_currentMicrophoneId}");
             
             // Set hardware parameters
-            ConfigurePcmDevice(_captureHandle, DEFAULT_SAMPLE_RATE, DEFAULT_CHANNELS, "capture");
+            ConfigurePcmDevice(_captureHandle, _captureSampleRate, DEFAULT_CHANNELS, "capture");
         }
 
         private void InitializePlayback()
@@ -187,7 +191,34 @@ namespace Ai.Tlbx.VoiceAssistant.Hardware.Linux
             Log(LogLevel.Info, "Playback device opened: default");
             
             // Set hardware parameters
-            ConfigurePcmDevice(_playbackHandle, DEFAULT_SAMPLE_RATE, DEFAULT_CHANNELS, "playback");
+            ConfigurePcmDevice(_playbackHandle, _playbackSampleRate, DEFAULT_CHANNELS, "playback");
+        }
+
+        private void ReinitializeCapture(uint sampleRate)
+        {
+            if (_captureHandle != IntPtr.Zero)
+            {
+                AlsaNative.snd_pcm_close(_captureHandle);
+                _captureHandle = IntPtr.Zero;
+            }
+
+            _captureSampleRate = sampleRate;
+            InitializeCapture();
+            Log(LogLevel.Info, $"Capture sample rate set to {_captureSampleRate}Hz");
+        }
+
+        private void ReinitializePlayback(uint sampleRate)
+        {
+            if (_playbackHandle != IntPtr.Zero)
+            {
+                AlsaNative.snd_pcm_drop(_playbackHandle);
+                AlsaNative.snd_pcm_close(_playbackHandle);
+                _playbackHandle = IntPtr.Zero;
+            }
+
+            _playbackSampleRate = sampleRate;
+            InitializePlayback();
+            Log(LogLevel.Info, $"Playback sample rate set to {_playbackSampleRate}Hz");
         }
 
         private void ConfigurePcmDevice(IntPtr pcmHandle, uint sampleRate, uint channels, string deviceType)
@@ -563,13 +594,13 @@ namespace Ai.Tlbx.VoiceAssistant.Hardware.Linux
                 }
                 
                 // Configure the new device
-                ConfigurePcmDevice(_captureHandle, DEFAULT_SAMPLE_RATE, DEFAULT_CHANNELS, "capture");
+                ConfigurePcmDevice(_captureHandle, _captureSampleRate, DEFAULT_CHANNELS, "capture");
                 
                 // Restart recording if it was active
                 if (wasRecording && savedHandler != null)
                 {
                     Log(LogLevel.Info, "Restarting recording with new device");
-                    await StartRecordingAudio(savedHandler);
+                    await StartRecordingAudio(savedHandler, _lastRecordingTargetSampleRate);
                 }
                 
                 Log(LogLevel.Info, $"Microphone successfully changed to: {deviceId}");
@@ -602,6 +633,13 @@ namespace Ai.Tlbx.VoiceAssistant.Hardware.Linux
 
             try
             {
+                var requestedSampleRate = (uint)(int)targetSampleRate;
+                _lastRecordingTargetSampleRate = targetSampleRate;
+                if (_captureSampleRate != requestedSampleRate)
+                {
+                    ReinitializeCapture(requestedSampleRate);
+                }
+
                 _audioDataHandler = audioDataReceivedHandler ?? throw new ArgumentNullException(nameof(audioDataReceivedHandler));
                 _recordingCts = new CancellationTokenSource();
                 
@@ -635,10 +673,8 @@ namespace Ai.Tlbx.VoiceAssistant.Hardware.Linux
                                 "snd_pcm_start");
                         }
                         
-                        // Calculate buffer size (100ms of audio at 16kHz, 16-bit mono)
-                        // 2 bytes per sample * 1 channel * 16000 samples per second * 0.1 seconds = 3200 bytes
                         int bytesPerFrame = 2 * (int)DEFAULT_CHANNELS; // 16-bit = 2 bytes per sample
-                        int framesPerBuffer = DEFAULT_SAMPLE_RATE / 10; // 100ms of audio
+                        int framesPerBuffer = (int)_captureSampleRate / 10; // 100ms of audio
                         int bufferSize = framesPerBuffer * bytesPerFrame;
                         
                         byte[] buffer = new byte[bufferSize];
@@ -869,11 +905,15 @@ namespace Ai.Tlbx.VoiceAssistant.Hardware.Linux
                     return false;
                 }
                 
-                // Check if sample rate matches our device settings
-                if (sampleRate != DEFAULT_SAMPLE_RATE)
+                if (sampleRate <= 0)
                 {
-                    Log(LogLevel.Warn, $"Sample rate mismatch: Audio is {sampleRate}Hz, device is {DEFAULT_SAMPLE_RATE}Hz");
-                    // In a production system, we would implement resampling here
+                    Log(LogLevel.Warn, $"Invalid playback sample rate {sampleRate}Hz");
+                    return false;
+                }
+
+                if (_playbackSampleRate != (uint)sampleRate)
+                {
+                    ReinitializePlayback((uint)sampleRate);
                 }
                 
                 // Make sure the playback device is prepared
@@ -904,7 +944,9 @@ namespace Ai.Tlbx.VoiceAssistant.Hardware.Linux
                 while (framesRemaining > 0)
                 {
                     // Try to write all remaining frames
-                    framesWritten = AlsaNative.snd_pcm_writei(_playbackHandle, audioData, framesRemaining);
+                    var chunk = new byte[(int)framesRemaining * bytesPerFrame];
+                    Buffer.BlockCopy(audioData, offset, chunk, 0, chunk.Length);
+                    framesWritten = AlsaNative.snd_pcm_writei(_playbackHandle, chunk, framesRemaining);
                     
                     // Handle errors
                     if (framesWritten < 0)
@@ -1289,4 +1331,4 @@ namespace Ai.Tlbx.VoiceAssistant.Hardware.Linux
         }
 
     }
-} 
+}

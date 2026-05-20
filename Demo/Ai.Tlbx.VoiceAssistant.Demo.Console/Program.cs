@@ -1,640 +1,797 @@
-using System.Collections.ObjectModel;
-using System.Diagnostics;
-using System.Text;
-using Terminal.Gui;
+using System.ComponentModel;
+using System.Runtime.InteropServices;
 using Ai.Tlbx.VoiceAssistant;
+using Ai.Tlbx.VoiceAssistant.BuiltInTools;
+using Ai.Tlbx.VoiceAssistant.Hardware.Linux;
+using Ai.Tlbx.VoiceAssistant.Hardware.Windows;
 using Ai.Tlbx.VoiceAssistant.Interfaces;
 using Ai.Tlbx.VoiceAssistant.Models;
-using Ai.Tlbx.VoiceAssistant.Hardware.Windows;
-using Ai.Tlbx.VoiceAssistant.Provider.OpenAi;
-using Ai.Tlbx.VoiceAssistant.Provider.OpenAi.Models;
 using Ai.Tlbx.VoiceAssistant.Provider.Google;
 using Ai.Tlbx.VoiceAssistant.Provider.Google.Models;
+using Ai.Tlbx.VoiceAssistant.Provider.OpenAi;
+using Ai.Tlbx.VoiceAssistant.Provider.OpenAi.Models;
 using Ai.Tlbx.VoiceAssistant.Provider.XAi;
 using Ai.Tlbx.VoiceAssistant.Provider.XAi.Models;
-using Ai.Tlbx.VoiceAssistant.BuiltInTools;
+using Spectre.Console;
 
 namespace Ai.Tlbx.VoiceAssistant.Demo.Console;
 
-public class Program
+internal static class Program
 {
-    private static VoiceAssistant? _assistant;
-    private static WindowsAudioHardware? _audioHardware;
-    private static TextView? _chatView;
-    private static TextView? _logView;
-    private static Button? _talkButton;
-    private static Button? _micTestButton;
-    private static Label? _statusLabel;
-    private static ComboBox? _providerCombo;
-    private static ComboBox? _voiceCombo;
-    private static ComboBox? _micCombo;
-    private static readonly StringBuilder _chatHistory = new();
-    private static readonly StringBuilder _logHistory = new();
-    private static readonly List<IVoiceTool> _tools = new();
-    private static List<AudioDeviceInfo> _microphones = new();
-    private static bool _isConnected = false;
-
-    private static readonly string[] _providers = { "OpenAI", "Google", "xAI" };
-    private static readonly string[][] _voices =
+    private enum ProviderChoice
     {
-        new[] { "Alloy", "Ash", "Coral", "Echo", "Sage", "Shimmer" },
-        new[] { "Aoede", "Charon", "Fenrir", "Kore", "Puck" },
-        new[] { "Ara", "Rex", "Sal", "Eve", "Leo" }
-    };
-
-    public static void Main(string[] args)
-    {
-        Debug.WriteLine("[TUI] Starting application...");
-
-        Application.Init();
-        Debug.WriteLine("[TUI] Application.Init() completed");
-
-        _tools.Add(new TimeTool());
-        _tools.Add(new WeatherTool());
-        _tools.Add(new CalculatorTool());
-
-        var mainWindow = new Window
-        {
-            Title = "AI Voice Assistant [Enter=Start/Stop] [Ctrl+Q=Quit]",
-            X = 0,
-            Y = 0,
-            Width = Dim.Fill(),
-            Height = Dim.Fill()
-        };
-
-        // Left panel - Settings (compact)
-        var settingsFrame = new FrameView
-        {
-            Title = "Settings",
-            X = 0,
-            Y = 0,
-            Width = 32,
-            Height = 9
-        };
-
-        // Provider
-        var providerLabel = new Label { Text = "Provider:", X = 1, Y = 0 };
-        _providerCombo = new ComboBox
-        {
-            X = 1,
-            Y = 1,
-            Width = 28,
-            Height = 1,
-            CanFocus = true,
-            TabStop = TabBehavior.TabStop
-        };
-        _providerCombo.SetSource(new ObservableCollection<string>(_providers));
-        _providerCombo.SelectedItem = 0; // OpenAI
-        _providerCombo.SelectedItemChanged += (_, _) => UpdateVoiceOptions();
-        _providerCombo.HasFocusChanged += (_, e) => Debug.WriteLine($"[TUI] Provider combo focus: {e.NewValue}");
-
-        // Voice
-        var voiceLabel = new Label { Text = "Voice:", X = 1, Y = 2 };
-        _voiceCombo = new ComboBox
-        {
-            X = 1,
-            Y = 3,
-            Width = 28,
-            Height = 1,
-            CanFocus = true,
-            TabStop = TabBehavior.TabStop
-        };
-        _voiceCombo.SetSource(new ObservableCollection<string>(_voices[0]));
-        _voiceCombo.SelectedItem = 5; // Shimmer
-        _voiceCombo.HasFocusChanged += (_, e) => Debug.WriteLine($"[TUI] Voice combo focus: {e.NewValue}");
-
-        // Microphone
-        var micLabel = new Label { Text = "Microphone:", X = 1, Y = 4 };
-        _micCombo = new ComboBox
-        {
-            X = 1,
-            Y = 5,
-            Width = 28,
-            Height = 1,
-            CanFocus = true,
-            TabStop = TabBehavior.TabStop
-        };
-        _micCombo.SetSource(new ObservableCollection<string> { "(Loading...)" });
-        _micCombo.SelectedItemChanged += OnMicrophoneChanged;
-        _micCombo.HasFocusChanged += (_, e) => Debug.WriteLine($"[TUI] Mic combo focus: {e.NewValue}");
-
-        settingsFrame.Add(providerLabel, _providerCombo, voiceLabel, _voiceCombo, micLabel, _micCombo);
-
-        // API Keys status
-        var keysFrame = new FrameView
-        {
-            Title = "API Keys",
-            X = 0,
-            Y = Pos.Bottom(settingsFrame),
-            Width = 32,
-            Height = 5
-        };
-
-        var openAiKey = new Label { Text = GetKeyStatus("OPENAI_API_KEY"), X = 1, Y = 0 };
-        var googleKey = new Label { Text = GetKeyStatus("GOOGLE_API_KEY"), X = 1, Y = 1 };
-        var xaiKey = new Label { Text = GetKeyStatus("XAI_API_KEY"), X = 1, Y = 2 };
-        keysFrame.Add(openAiKey, googleKey, xaiKey);
-
-        // Controls
-        var controlsFrame = new FrameView
-        {
-            Title = "Controls",
-            X = 0,
-            Y = Pos.Bottom(keysFrame),
-            Width = 32,
-            Height = 5
-        };
-
-        _talkButton = new Button
-        {
-            Text = "Start [Enter]",
-            X = 1,
-            Y = 0
-        };
-        _talkButton.Accepting += (_, _) => OnTalkButtonClicked();
-
-        _micTestButton = new Button
-        {
-            Text = "Mic Test [F5]",
-            X = 15,
-            Y = 0
-        };
-        _micTestButton.Accepting += (_, _) => OnMicTestClicked();
-
-        _statusLabel = new Label
-        {
-            Text = "Ready",
-            X = 1,
-            Y = 2,
-            Width = 28
-        };
-
-        controlsFrame.Add(_talkButton, _micTestButton, _statusLabel);
-
-        // Chat panel (right side, top)
-        var chatFrame = new FrameView
-        {
-            Title = "Conversation",
-            X = 32,
-            Y = 0,
-            Width = Dim.Fill(),
-            Height = Dim.Percent(70)
-        };
-
-        _chatView = new TextView
-        {
-            X = 0,
-            Y = 0,
-            Width = Dim.Fill(),
-            Height = Dim.Fill(),
-            ReadOnly = true,
-            WordWrap = true
-        };
-        chatFrame.Add(_chatView);
-
-        // Log panel (right side, bottom)
-        var logFrame = new FrameView
-        {
-            Title = "Logs",
-            X = 32,
-            Y = Pos.Bottom(chatFrame),
-            Width = Dim.Fill(),
-            Height = Dim.Fill()
-        };
-
-        _logView = new TextView
-        {
-            X = 0,
-            Y = 0,
-            Width = Dim.Fill(),
-            Height = Dim.Fill(),
-            ReadOnly = true,
-            WordWrap = true
-        };
-        logFrame.Add(_logView);
-
-        mainWindow.Add(settingsFrame, keysFrame, controlsFrame, chatFrame, logFrame);
-
-        // Keyboard shortcuts - Enter to start/stop, F5 for mic test, Ctrl+Q to quit
-        mainWindow.KeyDown += (_, e) =>
-        {
-            Debug.WriteLine($"[TUI] Key pressed: {e.KeyCode}");
-            if (e.KeyCode == KeyCode.Enter)
-            {
-                OnTalkButtonClicked();
-                e.Handled = true;
-            }
-            else if (e.KeyCode == KeyCode.F5)
-            {
-                OnMicTestClicked();
-                e.Handled = true;
-            }
-            else if (e.KeyCode == (KeyCode.Q | KeyCode.CtrlMask))
-            {
-                Application.RequestStop();
-                e.Handled = true;
-            }
-            else if (e.KeyCode == (KeyCode.C | KeyCode.CtrlMask))
-            {
-                ClearChat();
-                e.Handled = true;
-            }
-        };
-
-        // Load microphones async after UI is ready
-        Application.Invoke(async () => await LoadMicrophonesAsync());
-
-        Debug.WriteLine("[TUI] Starting Application.Run(mainWindow)...");
-        Application.Run(mainWindow);
-
-        mainWindow.Dispose();
-        Application.Shutdown();
-
-        CleanupAsync().GetAwaiter().GetResult();
-        Debug.WriteLine("[TUI] Application exited");
+        OpenAI,
+        Google,
+        XAi
     }
 
-    private static async Task LoadMicrophonesAsync()
+    private enum SessionMode
+    {
+        None,
+        Voice,
+        Transcription
+    }
+
+    private static readonly List<IVoiceTool> AllTools =
+    [
+        new TimeTool(),
+        new WeatherTool(),
+        new CalculatorTool()
+    ];
+
+    private static readonly List<LogEntry> Logs = [];
+    private static readonly List<ChatMessage> Messages = [];
+
+    private static IAudioHardwareAccess? hardware;
+    private static VoiceAssistant? assistant;
+    private static OpenAiHttpLiveTranscriber? pttTranscriber;
+    private static CancellationTokenSource? pttCts;
+    private static Task? pttTask;
+    private static List<AudioDeviceInfo> microphones = [];
+    private static string selectedMicrophoneId = string.Empty;
+    private static ProviderChoice selectedProvider = ProviderChoice.OpenAI;
+    private static string selectedVoice = nameof(AssistantVoice.Alloy);
+    private static string selectedModel = nameof(OpenAiRealtimeModel.GptRealtime2);
+    private static OpenAiTranscriptionModel transcriptionModel = OpenAiTranscriptionModel.GptRealtimeWhisper;
+    private static bool includeTranscriptionLogProbabilities;
+    private static double talkingSpeed = 1.0;
+    private static SessionReasoningEffort? reasoningEffort = SessionReasoningEffort.Medium;
+    private static SessionThinkingConfig thinking = new();
+    private static ToolCallPreambleMode toolCallPreambleMode = ToolCallPreambleMode.BeforeToolBurst;
+    private static DiagnosticLevel diagnosticLevel = DiagnosticLevel.Basic;
+    private static readonly HashSet<string> enabledTools = AllTools.Select(t => t.Name).ToHashSet(StringComparer.Ordinal);
+    private static SessionMode mode = SessionMode.None;
+    private static string status = "Ready";
+    private static string pttTranscript = string.Empty;
+
+    public static async Task<int> Main(string[] args)
     {
         try
         {
-            Debug.WriteLine("[TUI] Loading microphones...");
-            var tempHardware = new WindowsAudioHardware();
-            _microphones = await tempHardware.GetAvailableMicrophonesAsync();
+            hardware = CreateHardware();
+            hardware.SetLogAction(Log);
+            await hardware.SetDiagnosticLevelAsync(diagnosticLevel);
+            await RefreshMicrophonesAsync(requestPermission: false);
 
-            var micNames = _microphones.Select(m => m.IsDefault ? $"* {m.Name}" : m.Name).ToList();
-            if (micNames.Count == 0)
+            if (args.Any(arg => string.Equals(arg, "--smoke-test", StringComparison.OrdinalIgnoreCase)))
             {
-                micNames.Add("(No microphones found)");
+                AnsiConsole.MarkupLine("[green]Console demo smoke test passed.[/]");
+                AnsiConsole.MarkupLine($"Platform: {Markup.Escape(RuntimeInformation.OSDescription)}");
+                AnsiConsole.MarkupLine($"Microphones: {microphones.Count}");
+                AnsiConsole.MarkupLine($"Selected microphone: {Markup.Escape(GetSelectedMicrophoneName())}");
+                return 0;
             }
 
-            Application.Invoke(() =>
-            {
-                _micCombo?.SetSource(new ObservableCollection<string>(micNames));
-                var defaultIndex = _microphones.FindIndex(m => m.IsDefault);
-                if (_micCombo != null && defaultIndex >= 0)
-                {
-                    _micCombo.SelectedItem = defaultIndex;
-                }
-            });
-
-            Debug.WriteLine($"[TUI] Loaded {_microphones.Count} microphones");
+            await RunMenuAsync();
+            return 0;
         }
         catch (Exception ex)
         {
-            Debug.WriteLine($"[TUI] Failed to load microphones: {ex.Message}");
-        }
-    }
-
-    private static async void OnMicrophoneChanged(object? sender, ListViewItemEventArgs e)
-    {
-        if (_audioHardware == null || _micCombo == null) return;
-        if (_micCombo.SelectedItem < 0 || _micCombo.SelectedItem >= _microphones.Count) return;
-
-        var mic = _microphones[_micCombo.SelectedItem];
-        Debug.WriteLine($"[TUI] Switching to microphone: {mic.Name}");
-        await _audioHardware.SetMicrophoneDeviceAsync(mic.Id);
-    }
-
-    private static async Task CleanupAsync()
-    {
-        if (_assistant != null)
-        {
-            _assistant.OnMessageAdded = null;
-            _assistant.OnConnectionStatusChanged = null;
-            await _assistant.DisposeAsync();
-            _assistant = null;
-        }
-    }
-
-    private static void UpdateVoiceOptions()
-    {
-        if (_providerCombo == null || _voiceCombo == null) return;
-
-        var providerIndex = _providerCombo.SelectedItem;
-        if (providerIndex >= 0 && providerIndex < _voices.Length)
-        {
-            _voiceCombo.SetSource(new ObservableCollection<string>(_voices[providerIndex]));
-            _voiceCombo.SelectedItem = 0;
-        }
-    }
-
-    private static string GetKeyStatus(string envVar)
-    {
-        var key = Environment.GetEnvironmentVariable(envVar);
-        var status = string.IsNullOrEmpty(key) ? "X" : "OK";
-        var shortName = envVar.Replace("_API_KEY", "");
-        return $"[{status}] {shortName}";
-    }
-
-    private static async void OnTalkButtonClicked()
-    {
-        Debug.WriteLine($"[TUI] Talk button clicked, isConnected={_isConnected}");
-        if (_isConnected)
-        {
-            await StopAsync();
-        }
-        else
-        {
-            await StartAsync();
-        }
-    }
-
-    private static async void OnMicTestClicked()
-    {
-        // Don't allow mic test while connected to a provider
-        if (_isConnected)
-        {
-            UpdateStatus("Stop session first");
-            return;
-        }
-
-        Debug.WriteLine("[TUI] Starting mic test (beep -> record -> beep -> playback)");
-
-        Application.Invoke(() =>
-        {
-            _micTestButton!.Text = "Testing...";
-            _micTestButton.Enabled = false;
-        });
-
-        try
-        {
-            // Create audio hardware
-            _audioHardware = new WindowsAudioHardware();
-            _audioHardware.SetLogAction(Log);
-
-            // Set selected microphone
-            if (_micCombo != null && _micCombo.SelectedItem >= 0 && _micCombo.SelectedItem < _microphones.Count)
-            {
-                var mic = _microphones[_micCombo.SelectedItem];
-                await _audioHardware.SetMicrophoneDeviceAsync(mic.Id);
-            }
-
-            // Create a temporary VoiceAssistant just for mic testing (no provider needed for test)
-            // We need a dummy provider, so let's use the hardware test directly
-            var testAssistant = new VoiceAssistant(_audioHardware, null!, Log);
-
-            var success = await testAssistant.TestMicrophoneAsync();
-
-            Application.Invoke(() =>
-            {
-                if (success)
-                {
-                    UpdateStatus("Mic test passed!");
-                    AppendChat("[System]: Microphone test completed successfully.");
-                }
-                else
-                {
-                    UpdateStatus("Mic test failed");
-                    AppendChat("[System]: Microphone test failed - check logs.");
-                }
-            });
-
-            await testAssistant.DisposeAsync();
-        }
-        catch (Exception ex)
-        {
-            Debug.WriteLine($"[TUI] Mic test error: {ex.Message}");
-            Application.Invoke(() =>
-            {
-                UpdateStatus($"Mic test error: {ex.Message}");
-            });
+            AnsiConsole.WriteException(ex);
+            return 1;
         }
         finally
         {
-            _audioHardware = null;
-            Application.Invoke(() =>
+            await StopPttAsync();
+            await DisposeAssistantAsync();
+
+            if (hardware != null)
             {
-                _micTestButton!.Text = "Mic Test [F5]";
-                _micTestButton.Enabled = true;
-            });
+                await hardware.DisposeAsync();
+            }
         }
     }
 
-    private static async Task StartAsync()
+    private static IAudioHardwareAccess CreateHardware()
     {
-        if (_providerCombo == null || _voiceCombo == null || _talkButton == null || _statusLabel == null)
+        if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
+        {
+            return new WindowsAudioHardware();
+        }
+
+        if (RuntimeInformation.IsOSPlatform(OSPlatform.Linux))
+        {
+            return new LinuxAudioDevice();
+        }
+
+        throw new PlatformNotSupportedException("The console demo currently supports Windows and Linux audio hardware.");
+    }
+
+    private static async Task RunMenuAsync()
+    {
+        while (true)
+        {
+            RenderDashboard();
+
+            var choices = new List<string>
+            {
+                mode == SessionMode.Voice ? "Stop voice session" : "Start voice session",
+                mode == SessionMode.Transcription ? "Stop streaming transcription" : "Start streaming transcription",
+                "Hold-to-transcribe once",
+                "Interrupt current response",
+                "Test microphone",
+                "Provider / model / voice",
+                "Reasoning / thinking / tools",
+                "Microphone / diagnostics",
+                "Clear chat and logs",
+                "Quit"
+            };
+
+            var selected = AnsiConsole.Prompt(
+                new SelectionPrompt<string>()
+                    .Title("Action")
+                    .PageSize(12)
+                    .AddChoices(choices));
+
+            switch (selected)
+            {
+                case "Start voice session":
+                    await StartVoiceSessionAsync();
+                    break;
+                case "Stop voice session":
+                    await StopAssistantSessionAsync();
+                    break;
+                case "Start streaming transcription":
+                    await StartStreamingTranscriptionAsync();
+                    break;
+                case "Stop streaming transcription":
+                    await StopAssistantSessionAsync();
+                    break;
+                case "Hold-to-transcribe once":
+                    await RunPushToTalkTranscriptionAsync();
+                    break;
+                case "Interrupt current response":
+                    await InterruptAsync();
+                    break;
+                case "Test microphone":
+                    await TestMicrophoneAsync();
+                    break;
+                case "Provider / model / voice":
+                    await ConfigureProviderAsync();
+                    break;
+                case "Reasoning / thinking / tools":
+                    await ConfigureBehaviorAsync();
+                    break;
+                case "Microphone / diagnostics":
+                    await ConfigureHardwareAsync();
+                    break;
+                case "Clear chat and logs":
+                    Messages.Clear();
+                    Logs.Clear();
+                    pttTranscript = string.Empty;
+                    break;
+                case "Quit":
+                    return;
+            }
+        }
+    }
+
+    private static void RenderDashboard()
+    {
+        AnsiConsole.Clear();
+
+        var title = new Rule("[bold]AI Voice Assistant Terminal Demo[/]").RuleStyle("grey").Centered();
+        AnsiConsole.Write(title);
+
+        var grid = new Grid().AddColumn().AddColumn();
+        grid.AddRow(BuildSettingsPanel(), BuildStatusPanel());
+        grid.AddRow(BuildConversationPanel(), BuildLogPanel());
+        AnsiConsole.Write(grid);
+    }
+
+    private static Panel BuildSettingsPanel()
+    {
+        var tools = enabledTools.Count == AllTools.Count
+            ? "all"
+            : string.Join(", ", enabledTools);
+
+        var table = new Table().NoBorder().AddColumn("Key").AddColumn("Value");
+        table.AddRow("Provider", selectedProvider.ToString());
+        table.AddRow("Model", Markup.Escape(selectedModel));
+        table.AddRow("Voice", Markup.Escape(selectedVoice));
+        table.AddRow("Speed", talkingSpeed.ToString("0.00"));
+        table.AddRow("Reasoning", reasoningEffort?.ToString() ?? "default");
+        table.AddRow("Thinking", FormatThinking());
+        table.AddRow("Tool preambles", toolCallPreambleMode.ToString());
+        table.AddRow("Tools", Markup.Escape(tools));
+        table.AddRow("Mic", Markup.Escape(GetSelectedMicrophoneName()));
+        table.AddRow("Diagnostics", diagnosticLevel.ToString());
+        table.AddRow("Transcription", $"{transcriptionModel}, logprobs={includeTranscriptionLogProbabilities}");
+        return new Panel(table).Header("Settings").Expand();
+    }
+
+    private static Panel BuildStatusPanel()
+    {
+        var table = new Table().NoBorder().AddColumn("Key").AddColumn("Value");
+        table.AddRow("Mode", mode.ToString());
+        table.AddRow("Status", Markup.Escape(status));
+        table.AddRow("Platform", RuntimeInformation.OSDescription);
+        table.AddRow("API keys", $"OpenAI={HasKey("OPENAI_API_KEY")}, Google={HasKey("GOOGLE_API_KEY")}, xAI={HasKey("XAI_API_KEY")}");
+
+        if (!string.IsNullOrWhiteSpace(pttTranscript))
+        {
+            table.AddRow("Hold transcript", Markup.Escape(pttTranscript));
+        }
+
+        return new Panel(table).Header("Runtime").Expand();
+    }
+
+    private static Panel BuildConversationPanel()
+    {
+        var lines = Messages.Count == 0
+            ? "No messages yet."
+            : string.Join(Environment.NewLine + Environment.NewLine, Messages.TakeLast(10).Select(m => $"{m.Role}: {m.Content}"));
+
+        return new Panel(Markup.Escape(lines)).Header("Conversation").Expand();
+    }
+
+    private static Panel BuildLogPanel()
+    {
+        var lines = Logs.Count == 0
+            ? "No logs yet."
+            : string.Join(Environment.NewLine, Logs.TakeLast(16).Select(l => $"[{l.Timestamp:HH:mm:ss}] {l.Level}: {l.Message}"));
+
+        return new Panel(Markup.Escape(lines)).Header("Logs").Expand();
+    }
+
+    private static async Task ConfigureProviderAsync()
+    {
+        EnsureNotRunning();
+
+        selectedProvider = AnsiConsole.Prompt(
+            new SelectionPrompt<ProviderChoice>()
+                .Title("Provider")
+                .AddChoices(Enum.GetValues<ProviderChoice>()));
+
+        selectedVoice = selectedProvider switch
+        {
+            ProviderChoice.OpenAI => PromptEnum("OpenAI voice", AssistantVoice.Alloy).ToString(),
+            ProviderChoice.Google => PromptEnum("Google voice", GoogleVoice.Puck).ToString(),
+            ProviderChoice.XAi => PromptEnum("xAI voice", XaiVoice.Ara).ToString(),
+            _ => selectedVoice
+        };
+
+        selectedModel = selectedProvider switch
+        {
+            ProviderChoice.OpenAI => PromptEnum("OpenAI realtime model", OpenAiRealtimeModel.GptRealtime2, includeObsolete: true).ToString(),
+            ProviderChoice.Google => PromptEnum("Google Live model", GoogleModel.Gemini31FlashLivePreview, includeObsolete: true).ToString(),
+            ProviderChoice.XAi => PromptEnum("xAI realtime model", XaiVoiceModel.GrokVoiceThinkFast10).ToString(),
+            _ => selectedModel
+        };
+
+        talkingSpeed = AnsiConsole.Prompt(
+            new TextPrompt<double>("Talking speed")
+                .DefaultValue(talkingSpeed)
+                .Validate(v => v is >= 0.25 and <= 1.5
+                    ? ValidationResult.Success()
+                    : ValidationResult.Error("Use a value between 0.25 and 1.5.")));
+
+        await Task.CompletedTask;
+    }
+
+    private static async Task ConfigureBehaviorAsync()
+    {
+        EnsureNotRunning();
+
+        var reasoningChoices = new[] { "Provider default" }
+            .Concat(Enum.GetNames<SessionReasoningEffort>())
+            .ToArray();
+        var reasoning = AnsiConsole.Prompt(
+            new SelectionPrompt<string>()
+                .Title("Reasoning effort")
+                .AddChoices(reasoningChoices));
+        reasoningEffort = reasoning == "Provider default"
+            ? null
+            : Enum.Parse<SessionReasoningEffort>(reasoning);
+
+        toolCallPreambleMode = PromptEnum("Tool preamble mode", toolCallPreambleMode);
+
+        var thinkingLevelChoices = new[] { "Provider default" }
+            .Concat(Enum.GetNames<SessionThinkingLevel>())
+            .ToArray();
+        var levelText = AnsiConsole.Prompt(
+            new SelectionPrompt<string>()
+                .Title("Google thinking level")
+                .AddChoices(thinkingLevelChoices));
+        var level = levelText == "Provider default"
+            ? (SessionThinkingLevel?)null
+            : Enum.Parse<SessionThinkingLevel>(levelText);
+
+        var budgetText = AnsiConsole.Prompt(
+            new TextPrompt<string>("Google thinking budget (-1/default/number)")
+                .DefaultValue(thinking.Budget?.ToString() ?? "default"));
+        var budget = string.Equals(budgetText, "default", StringComparison.OrdinalIgnoreCase) ||
+            string.IsNullOrWhiteSpace(budgetText)
+                ? (int?)null
+                : int.Parse(budgetText);
+
+        var includeThoughts = AnsiConsole.Confirm("Include Google thought summaries?", thinking.IncludeThoughts);
+        thinking = new SessionThinkingConfig
+        {
+            Level = level,
+            Budget = budget,
+            IncludeThoughts = includeThoughts
+        };
+
+        enabledTools.Clear();
+        foreach (var tool in AllTools)
+        {
+            if (AnsiConsole.Confirm($"Enable tool {tool.Name}?", enabledTools.Contains(tool.Name)))
+            {
+                enabledTools.Add(tool.Name);
+            }
+        }
+
+        transcriptionModel = PromptEnum("Transcription model", transcriptionModel, includeObsolete: true);
+        includeTranscriptionLogProbabilities = AnsiConsole.Confirm("Include transcription log probabilities when supported?", includeTranscriptionLogProbabilities);
+
+        await Task.CompletedTask;
+    }
+
+    private static async Task ConfigureHardwareAsync()
+    {
+        EnsureNotRunning();
+
+        var reload = AnsiConsole.Confirm("Request/refresh microphone list?", true);
+        await RefreshMicrophonesAsync(requestPermission: reload);
+
+        if (microphones.Count > 0)
+        {
+            var selected = AnsiConsole.Prompt(
+                new SelectionPrompt<AudioDeviceInfo>()
+                    .Title("Microphone")
+                    .UseConverter(m => $"{(m.IsDefault ? "* " : "")}{m.Name} [{m.Id}]")
+                    .AddChoices(microphones));
+
+            selectedMicrophoneId = selected.Id;
+            await hardware!.SetMicrophoneDeviceAsync(selectedMicrophoneId);
+        }
+
+        diagnosticLevel = PromptEnum("Diagnostic level", diagnosticLevel);
+        await hardware!.SetDiagnosticLevelAsync(diagnosticLevel);
+    }
+
+    private static async Task StartVoiceSessionAsync()
+    {
+        EnsureNotRunning();
+
+        var (provider, settings) = CreateProviderAndSettings();
+        await CreateAssistantAsync(provider);
+        await ApplySelectedMicrophoneAsync();
+
+        mode = SessionMode.Voice;
+        status = "Starting voice session...";
+        await assistant!.StartAsync(settings);
+        status = "Voice session active";
+    }
+
+    private static async Task StartStreamingTranscriptionAsync()
+    {
+        EnsureNotRunning();
+        EnsureOpenAiKey();
+
+        var provider = new OpenAiTranscriptionProvider(logAction: Log);
+        await CreateAssistantAsync(provider);
+        await ApplySelectedMicrophoneAsync();
+
+        var settings = BuildTranscriptionSettings();
+        mode = SessionMode.Transcription;
+        status = "Starting streaming transcription...";
+        await assistant!.StartAsync(settings);
+        status = "Streaming transcription active";
+    }
+
+    private static async Task RunPushToTalkTranscriptionAsync()
+    {
+        EnsureNotRunning();
+        EnsureOpenAiKey();
+        await ApplySelectedMicrophoneAsync();
+
+        pttTranscript = string.Empty;
+        pttCts = new CancellationTokenSource();
+        pttTranscriber = new OpenAiHttpLiveTranscriber(
+            hardware!,
+            BuildPttOptions(),
+            logAction: Log);
+
+        AnsiConsole.MarkupLine("[yellow]Recording. Press Enter to stop.[/]");
+        pttTask = pttTranscriber.TranscribeLive(text =>
+        {
+            pttTranscript = text;
+            Log(LogLevel.Info, $"PTT transcript: {text}");
+        }, pttCts.Token);
+
+        await Task.Run(System.Console.ReadLine);
+        await StopPttAsync();
+    }
+
+    private static async Task StopPttAsync()
+    {
+        var transcriber = pttTranscriber;
+        var task = pttTask;
+        var cts = pttCts;
+
+        pttTranscriber = null;
+        pttTask = null;
+        pttCts = null;
+
+        cts?.Cancel();
+
+        if (transcriber != null)
+        {
+            await transcriber.StopAsync();
+        }
+
+        if (task != null)
+        {
+            try { await task; }
+            catch (OperationCanceledException) { }
+        }
+
+        cts?.Dispose();
+
+        if (transcriber != null)
+        {
+            await transcriber.DisposeAsync();
+        }
+    }
+
+    private static async Task InterruptAsync()
+    {
+        if (assistant == null || mode == SessionMode.None)
+        {
+            status = "No active session";
             return;
-
-        try
-        {
-            Debug.WriteLine("[TUI] StartAsync beginning...");
-            UpdateStatus("Initializing...");
-
-            _audioHardware = new WindowsAudioHardware();
-            _audioHardware.SetLogAction(Log);
-
-            // Set selected microphone
-            if (_micCombo != null && _micCombo.SelectedItem >= 0 && _micCombo.SelectedItem < _microphones.Count)
-            {
-                var mic = _microphones[_micCombo.SelectedItem];
-                await _audioHardware.SetMicrophoneDeviceAsync(mic.Id);
-                Debug.WriteLine($"[TUI] Using microphone: {mic.Name}");
-            }
-
-            var (provider, settings) = CreateProviderAndSettings(
-                _providerCombo.SelectedItem,
-                _voiceCombo.SelectedItem);
-
-            if (provider == null || settings == null)
-            {
-                UpdateStatus("Missing API key!");
-                return;
-            }
-
-            Debug.WriteLine($"[TUI] Creating VoiceAssistant with {provider.GetType().Name}");
-            _assistant = new VoiceAssistant(_audioHardware, provider, Log);
-
-            _assistant.OnMessageAdded = message =>
-            {
-                Debug.WriteLine($"[TUI] Message: {message.Role}");
-                Application.Invoke(() =>
-                {
-                    var prefix = message.Role == ChatMessage.UserRole ? "You" : "AI";
-                    AppendChat($"[{prefix}]: {message.Content}");
-                });
-            };
-
-            _assistant.OnConnectionStatusChanged = status =>
-            {
-                Debug.WriteLine($"[TUI] Status: {status}");
-                Application.Invoke(() => UpdateStatus(status));
-            };
-
-            await _assistant.StartAsync(settings);
-
-            _isConnected = true;
-            Application.Invoke(() =>
-            {
-                _talkButton.Text = "Stop [Enter]";
-                UpdateStatus("Listening...");
-            });
         }
-        catch (Exception ex)
-        {
-            Debug.WriteLine($"[TUI] StartAsync error: {ex}");
-            Log(LogLevel.Error, $"Failed to start: {ex.Message}");
-            UpdateStatus($"Error: {ex.Message}");
-        }
+
+        await assistant.InterruptAsync();
+        status = "Interrupt sent";
     }
 
-    private static async Task StopAsync()
+    private static async Task TestMicrophoneAsync()
     {
-        if (_assistant == null || _talkButton == null) return;
+        EnsureNotRunning();
 
-        try
-        {
-            Debug.WriteLine("[TUI] StopAsync...");
-            await _assistant.StopAsync();
-            _assistant.OnMessageAdded = null;
-            _assistant.OnConnectionStatusChanged = null;
-            await _assistant.DisposeAsync();
-            _assistant = null;
-            _audioHardware = null;
+        await CreateAssistantAsync(provider: null);
+        await ApplySelectedMicrophoneAsync();
 
-            _isConnected = false;
-            Application.Invoke(() =>
-            {
-                _talkButton.Text = "Start [Enter]";
-                UpdateStatus("Stopped");
-            });
-        }
-        catch (Exception ex)
-        {
-            Debug.WriteLine($"[TUI] StopAsync error: {ex}");
-            Log(LogLevel.Error, $"Failed to stop: {ex.Message}");
-        }
+        status = "Running microphone test...";
+        var ok = await assistant!.TestMicrophoneAsync();
+        status = ok ? "Microphone test passed" : "Microphone test failed";
+        await DisposeAssistantAsync();
     }
 
-    private static (IVoiceProvider?, IVoiceSettings?) CreateProviderAndSettings(int providerIndex, int voiceIndex)
+    private static async Task StopAssistantSessionAsync()
     {
-        return providerIndex switch
+        if (assistant == null)
         {
-            0 => CreateOpenAi(voiceIndex),
-            1 => CreateGoogle(voiceIndex),
-            2 => CreateXai(voiceIndex),
-            _ => (null, null)
+            mode = SessionMode.None;
+            status = "Ready";
+            return;
+        }
+
+        await assistant.StopAsync();
+        await DisposeAssistantAsync();
+        mode = SessionMode.None;
+        status = "Stopped";
+    }
+
+    private static async Task CreateAssistantAsync(IVoiceProvider? provider)
+    {
+        await DisposeAssistantAsync();
+        assistant = new VoiceAssistant(hardware!, provider, Log);
+        assistant.OnConnectionStatusChanged = s => status = s;
+        assistant.OnMessageAdded = message =>
+        {
+            Messages.Add(message);
+            Log(LogLevel.Info, $"{message.Role}: {message.Content}");
+        };
+        assistant.OnTranscriptionDelta = transcript => status = $"Transcribing: {transcript}";
+        assistant.OnTranscriptionCompleted = transcript =>
+        {
+            pttTranscript = transcript;
+            Log(LogLevel.Info, $"Transcript: {transcript}");
+        };
+        assistant.OnSessionUsageUpdated = usage =>
+            Log(LogLevel.Info, $"Usage update: {usage.LocalSessionDuration.TotalMinutes:F1} min, {usage.TotalTokens} tokens");
+    }
+
+    private static async Task DisposeAssistantAsync()
+    {
+        if (assistant == null)
+        {
+            return;
+        }
+
+        assistant.OnConnectionStatusChanged = null;
+        assistant.OnMessageAdded = null;
+        assistant.OnTranscriptionDelta = null;
+        assistant.OnTranscriptionCompleted = null;
+        assistant.OnSessionUsageUpdated = null;
+        await assistant.DisposeAsync();
+        assistant = null;
+    }
+
+    private static (IVoiceProvider Provider, IVoiceSettings Settings) CreateProviderAndSettings()
+    {
+        return selectedProvider switch
+        {
+            ProviderChoice.OpenAI => CreateOpenAi(),
+            ProviderChoice.Google => CreateGoogle(),
+            ProviderChoice.XAi => CreateXai(),
+            _ => throw new InvalidOperationException($"Unsupported provider: {selectedProvider}")
         };
     }
 
-    private static (IVoiceProvider?, IVoiceSettings?) CreateOpenAi(int voiceIndex)
+    private static (IVoiceProvider Provider, IVoiceSettings Settings) CreateOpenAi()
     {
-        var apiKey = Environment.GetEnvironmentVariable("OPENAI_API_KEY");
-        if (string.IsNullOrEmpty(apiKey))
-        {
-            Log(LogLevel.Error, "OPENAI_API_KEY not set");
-            return (null, null);
-        }
-
-        var voices = new[] { AssistantVoice.Alloy, AssistantVoice.Ash, AssistantVoice.Coral,
-                             AssistantVoice.Echo, AssistantVoice.Sage, AssistantVoice.Shimmer };
-
-        var provider = new OpenAiVoiceProvider(apiKey, Log);
+        EnsureOpenAiKey();
+        var voice = ParseOrDefault(selectedVoice, AssistantVoice.Alloy);
+        var model = ParseOrDefault(selectedModel, OpenAiRealtimeModel.GptRealtime2);
         var settings = new OpenAiVoiceSettings
         {
-            Voice = voices[Math.Clamp(voiceIndex, 0, voices.Length - 1)],
-            Instructions = "You are a helpful assistant. Keep responses concise.",
-            Tools = _tools
+            Voice = voice,
+            Model = model,
+            Instructions = DefaultInstructions,
+            InputAudioTranscription = new InputAudioTranscription
+            {
+                Model = OpenAiTranscriptionModel.GptRealtimeWhisper,
+                Prompt = "Expect German with slight accent",
+                Enabled = true
+            },
+            TalkingSpeed = talkingSpeed,
+            ReasoningEffort = reasoningEffort,
+            ToolCallPreambleMode = toolCallPreambleMode,
+            Thinking = thinking,
+            Tools = GetEnabledTools(),
+            MostLikelySpokenLanguage = "de"
         };
 
-        return (provider, settings);
+        return (new OpenAiVoiceProvider(logAction: Log), settings);
     }
 
-    private static (IVoiceProvider?, IVoiceSettings?) CreateGoogle(int voiceIndex)
+    private static (IVoiceProvider Provider, IVoiceSettings Settings) CreateGoogle()
     {
-        var apiKey = Environment.GetEnvironmentVariable("GOOGLE_API_KEY");
-        if (string.IsNullOrEmpty(apiKey))
-        {
-            Log(LogLevel.Error, "GOOGLE_API_KEY not set");
-            return (null, null);
-        }
-
-        var voices = new[] { GoogleVoice.Aoede, GoogleVoice.Charon, GoogleVoice.Fenrir,
-                             GoogleVoice.Kore, GoogleVoice.Puck };
-
-        var provider = new GoogleVoiceProvider(apiKey, Log);
+        EnsureKey("GOOGLE_API_KEY");
+        var voice = ParseOrDefault(selectedVoice, GoogleVoice.Puck);
+        var model = ParseOrDefault(selectedModel, GoogleModel.Gemini31FlashLivePreview);
         var settings = new GoogleVoiceSettings
         {
-            Voice = voices[Math.Clamp(voiceIndex, 0, voices.Length - 1)],
-            Instructions = "You are a helpful assistant. Keep responses concise.",
-            Tools = _tools
+            Voice = voice,
+            Model = model,
+            Instructions = DefaultInstructions,
+            TalkingSpeed = talkingSpeed,
+            ReasoningEffort = reasoningEffort,
+            ToolCallPreambleMode = toolCallPreambleMode,
+            Thinking = thinking,
+            ResponseModality = "AUDIO",
+            LanguageCode = "de-DE",
+            Tools = GetEnabledTools(),
+            TranscriptionConfig = new AudioTranscriptionConfig
+            {
+                EnableInputTranscription = true,
+                EnableOutputTranscription = true
+            }
         };
 
-        return (provider, settings);
+        return (new GoogleVoiceProvider(logAction: Log), settings);
     }
 
-    private static (IVoiceProvider?, IVoiceSettings?) CreateXai(int voiceIndex)
+    private static (IVoiceProvider Provider, IVoiceSettings Settings) CreateXai()
     {
-        var apiKey = Environment.GetEnvironmentVariable("XAI_API_KEY");
-        if (string.IsNullOrEmpty(apiKey))
-        {
-            Log(LogLevel.Error, "XAI_API_KEY not set");
-            return (null, null);
-        }
-
-        var voices = new[] { XaiVoice.Ara, XaiVoice.Rex, XaiVoice.Sal, XaiVoice.Eve, XaiVoice.Leo };
-
-        var provider = new XaiVoiceProvider(apiKey, Log);
+        EnsureKey("XAI_API_KEY");
+        var voice = ParseOrDefault(selectedVoice, XaiVoice.Ara);
+        var model = ParseOrDefault(selectedModel, XaiVoiceModel.GrokVoiceThinkFast10);
         var settings = new XaiVoiceSettings
         {
-            Voice = voices[Math.Clamp(voiceIndex, 0, voices.Length - 1)],
-            Instructions = "You are a helpful assistant. Keep responses concise.",
-            Tools = _tools
+            Voice = voice,
+            Model = model,
+            Instructions = DefaultInstructions,
+            TalkingSpeed = talkingSpeed,
+            ReasoningEffort = reasoningEffort,
+            ToolCallPreambleMode = toolCallPreambleMode,
+            Thinking = thinking,
+            Tools = GetEnabledTools(),
+            EnableWebSearch = false,
+            EnableXSearch = false,
+            InputAudioLanguage = "de"
         };
 
-        return (provider, settings);
+        return (new XaiVoiceProvider(logAction: Log), settings);
+    }
+
+    private static OpenAiTranscriptionSettings BuildTranscriptionSettings()
+    {
+        return new OpenAiTranscriptionSettings
+        {
+            TranscriptionModel = transcriptionModel,
+            TranscriptionPrompt = transcriptionModel.SupportsTranscriptionPrompt()
+                ? "Expect German with slight accent, business/IT/construction terms"
+                : null,
+            Language = "de",
+            IncludeLogProbabilities = includeTranscriptionLogProbabilities &&
+                transcriptionModel.SupportsTranscriptionLogProbabilities()
+        };
+    }
+
+    private static OpenAiHttpLiveTranscriptionOptions BuildPttOptions()
+    {
+        return new OpenAiHttpLiveTranscriptionOptions
+        {
+            TranscriptionModel = transcriptionModel,
+            Language = "de",
+            Prompt = transcriptionModel.SupportsTranscriptionPrompt()
+                ? "Expect German with slight accent, business/IT/construction terms"
+                : null,
+            IncludeLogProbabilities = false,
+            SnapshotInterval = TimeSpan.FromMilliseconds(250),
+            MinimumUtteranceDuration = TimeSpan.FromMilliseconds(120),
+            LeadingTrimDuration = TimeSpan.FromMilliseconds(120),
+            PrefixPadding = TimeSpan.FromMilliseconds(250),
+            SilenceDuration = TimeSpan.FromMilliseconds(180),
+            VadThreshold = 0.28
+        };
+    }
+
+    private static async Task RefreshMicrophonesAsync(bool requestPermission)
+    {
+        if (hardware == null)
+        {
+            return;
+        }
+
+        microphones = requestPermission
+            ? await hardware.RequestMicrophonePermissionAndGetDevicesAsync()
+            : await hardware.GetAvailableMicrophonesAsync();
+
+        if (microphones.Count == 0)
+        {
+            selectedMicrophoneId = string.Empty;
+            return;
+        }
+
+        var selectedStillExists = microphones.Any(m => string.Equals(m.Id, selectedMicrophoneId, StringComparison.Ordinal));
+        if (!selectedStillExists)
+        {
+            selectedMicrophoneId = microphones.FirstOrDefault(m => m.IsDefault)?.Id ?? microphones[0].Id;
+        }
+
+        await hardware.SetMicrophoneDeviceAsync(selectedMicrophoneId);
+    }
+
+    private static async Task ApplySelectedMicrophoneAsync()
+    {
+        if (hardware == null || string.IsNullOrWhiteSpace(selectedMicrophoneId))
+        {
+            return;
+        }
+
+        await hardware.SetMicrophoneDeviceAsync(selectedMicrophoneId);
+    }
+
+    private static List<IVoiceTool> GetEnabledTools()
+    {
+        return AllTools
+            .Where(t => enabledTools.Contains(t.Name))
+            .ToList();
+    }
+
+    private static T PromptEnum<T>(string title, T current, bool includeObsolete = false)
+        where T : struct, Enum
+    {
+        var values = Enum.GetValues<T>()
+            .Where(v => includeObsolete || typeof(T).GetField(v.ToString())?.GetCustomAttributes(typeof(ObsoleteAttribute), false).Length == 0)
+            .ToArray();
+
+        return AnsiConsole.Prompt(
+            new SelectionPrompt<T>()
+                .Title(title)
+                .UseConverter(v => v.ToString())
+                .AddChoices(values)
+                .HighlightStyle("green")
+                .MoreChoicesText("[grey](Move up and down to reveal more choices)[/]"));
+    }
+
+    private static T ParseOrDefault<T>(string value, T fallback)
+        where T : struct, Enum
+    {
+        return Enum.TryParse<T>(value, out var parsed)
+            ? parsed
+            : fallback;
+    }
+
+    private static void EnsureNotRunning()
+    {
+        if (mode != SessionMode.None)
+        {
+            throw new InvalidOperationException("Stop the active session before changing this setting.");
+        }
+    }
+
+    private static void EnsureOpenAiKey()
+    {
+        EnsureKey("OPENAI_API_KEY");
+    }
+
+    private static void EnsureKey(string variable)
+    {
+        if (string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable(variable)))
+        {
+            throw new InvalidOperationException($"{variable} is not set.");
+        }
+    }
+
+    private static string HasKey(string variable)
+    {
+        return string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable(variable))
+            ? "[red]missing[/]"
+            : "[green]set[/]";
+    }
+
+    private static string GetSelectedMicrophoneName()
+    {
+        if (microphones.Count == 0)
+        {
+            return "none";
+        }
+
+        var mic = microphones.FirstOrDefault(m => string.Equals(m.Id, selectedMicrophoneId, StringComparison.Ordinal));
+        return mic == null ? "default" : $"{(mic.IsDefault ? "* " : "")}{mic.Name}";
+    }
+
+    private static string FormatThinking()
+    {
+        var parts = new List<string>();
+        if (thinking.Level.HasValue)
+        {
+            parts.Add($"level={thinking.Level.Value}");
+        }
+
+        if (thinking.Budget.HasValue)
+        {
+            parts.Add($"budget={thinking.Budget.Value}");
+        }
+
+        if (thinking.IncludeThoughts)
+        {
+            parts.Add("thought summaries");
+        }
+
+        return parts.Count == 0 ? "provider default" : string.Join(", ", parts);
     }
 
     private static void Log(LogLevel level, string message)
     {
-        var timestamp = DateTime.Now.ToString("HH:mm:ss");
-        var levelStr = level switch
+        Logs.Add(new LogEntry(DateTime.Now, level, message));
+        if (Logs.Count > 500)
         {
-            LogLevel.Error => "ERR",
-            LogLevel.Warn => "WRN",
-            _ => "INF"
-        };
-
-        var logLine = $"[{timestamp}] [{levelStr}] {message}";
-        Debug.WriteLine($"[VA] {logLine}");
-
-        Application.Invoke(() =>
-        {
-            _logHistory.AppendLine(logLine);
-            if (_logView != null)
-            {
-                _logView.Text = _logHistory.ToString();
-                _logView.MoveEnd();
-            }
-        });
-    }
-
-    private static void AppendChat(string message)
-    {
-        _chatHistory.AppendLine(message);
-        _chatHistory.AppendLine();
-
-        if (_chatView != null)
-        {
-            _chatView.Text = _chatHistory.ToString();
-            _chatView.MoveEnd();
+            Logs.RemoveRange(0, Logs.Count - 500);
         }
     }
 
-    private static void UpdateStatus(string status)
-    {
-        if (_statusLabel != null)
-        {
-            _statusLabel.Text = status;
-        }
-    }
+    private const string DefaultInstructions =
+        "Du bist ein hilfreicher Voice Assistant. Antworte kurz, klar und auf Deutsch, ausser der Nutzer spricht Englisch. " +
+        "Unterbrich dich, wenn der Nutzer neu spricht, und nutze Tools nur wenn es passt.";
 
-    private static void ClearChat()
-    {
-        _chatHistory.Clear();
-        if (_chatView != null)
-        {
-            _chatView.Text = "";
-        }
-    }
+    private sealed record LogEntry(DateTime Timestamp, LogLevel Level, string Message);
 }

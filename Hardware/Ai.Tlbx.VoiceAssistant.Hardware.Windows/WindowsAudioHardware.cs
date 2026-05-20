@@ -13,8 +13,10 @@ namespace Ai.Tlbx.VoiceAssistant.Hardware.Windows
         private readonly int _sampleRate;
         private readonly int _channelCount;
         private readonly int _bitsPerSample;
+        private int _currentRecordingSampleRate;
         private WaveOutEvent? _waveOut;
         private BufferedWaveProvider? _bufferedWaveProvider;
+        private int _playbackSampleRate;
         private MicrophoneAudioReceivedEventHandler? _audioDataReceivedHandler;
         private bool _isInitialized = false;
         private int _selectedDeviceNumber = 0;
@@ -40,6 +42,8 @@ namespace Ai.Tlbx.VoiceAssistant.Hardware.Windows
             _sampleRate = sampleRate;
             _channelCount = channelCount;
             _bitsPerSample = bitsPerSample;
+            _currentRecordingSampleRate = sampleRate;
+            _playbackSampleRate = sampleRate;
             _isRecording = false;
 
             // Unbounded channel ensures we never block on write, single reader for ordering
@@ -126,6 +130,7 @@ namespace Ai.Tlbx.VoiceAssistant.Hardware.Windows
 
                     try
                     {
+                        EnsurePlaybackFormat(sampleRate);
                         byte[] audioData = Convert.FromBase64String(audio);
 
                         if (_bufferedWaveProvider != null)
@@ -158,6 +163,27 @@ namespace Ai.Tlbx.VoiceAssistant.Hardware.Windows
             Log(LogLevel.Info, "Audio processor task stopped");
         }
 
+        private void EnsurePlaybackFormat(int sampleRate)
+        {
+            if (_waveOut != null && _bufferedWaveProvider != null && _playbackSampleRate == sampleRate)
+            {
+                return;
+            }
+
+            _waveOut?.Stop();
+            _waveOut?.Dispose();
+
+            _playbackSampleRate = sampleRate;
+            _waveOut = new WaveOutEvent();
+            _bufferedWaveProvider = new BufferedWaveProvider(new WaveFormat(_playbackSampleRate, _bitsPerSample, _channelCount))
+            {
+                DiscardOnBufferOverflow = true,
+                BufferDuration = TimeSpan.FromSeconds(5)
+            };
+            _waveOut.Init(_bufferedWaveProvider);
+            Log(LogLevel.Info, $"Playback format set to {_playbackSampleRate}Hz");
+        }
+
         public async Task<bool> StartRecordingAudio(MicrophoneAudioReceivedEventHandler audioDataReceivedHandler, AudioSampleRate targetSampleRate = AudioSampleRate.Rate24000)
         {
             if (_isRecording)
@@ -179,7 +205,8 @@ namespace Ai.Tlbx.VoiceAssistant.Hardware.Windows
                 // Reset playback session logging for new recording session
                 _playbackSessionLogged = false;
 
-                Log(LogLevel.Info, $"Starting audio recording (device: {_selectedDeviceNumber}, rate: {_sampleRate})");
+                _currentRecordingSampleRate = (int)targetSampleRate;
+                Log(LogLevel.Info, $"Starting audio recording (device: {_selectedDeviceNumber}, rate: {_currentRecordingSampleRate})");
 
                 _audioDataReceivedHandler = audioDataReceivedHandler;
                 _recordingCts = new CancellationTokenSource();
@@ -187,7 +214,7 @@ namespace Ai.Tlbx.VoiceAssistant.Hardware.Windows
                 _waveIn = new WaveInEvent
                 {
                     DeviceNumber = _selectedDeviceNumber,
-                    WaveFormat = new WaveFormat(_sampleRate, _bitsPerSample, _channelCount),
+                    WaveFormat = new WaveFormat(_currentRecordingSampleRate, _bitsPerSample, _channelCount),
                     BufferMilliseconds = 50
                 };
 
