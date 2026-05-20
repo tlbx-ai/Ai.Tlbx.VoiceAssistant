@@ -15,6 +15,12 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.Google.Models
         Gemini31FlashLivePreview,
 
         /// <summary>
+        /// Rolling Gemini 2.5 Flash native audio Live API model.
+        /// Model: gemini-2.5-flash-native-audio-latest
+        /// </summary>
+        Gemini25FlashNativeAudioLatest,
+
+        /// <summary>
         /// Legacy alias retained for compatibility with older integrations.
         /// </summary>
         [Obsolete("Use Gemini31FlashLivePreview. This legacy alias is kept only for compatibility.")]
@@ -64,6 +70,7 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.Google.Models
             return model switch
             {
                 GoogleModel.Gemini31FlashLivePreview => "models/gemini-3.1-flash-live-preview",
+                GoogleModel.Gemini25FlashNativeAudioLatest => "models/gemini-2.5-flash-native-audio-latest",
                 GoogleModel.GeminiLive25FlashNativeAudio => "models/gemini-live-2.5-flash-native-audio",
                 GoogleModel.Gemini25FlashNativeAudio => "models/gemini-2.5-flash-native-audio-preview-12-2025",
                 GoogleModel.Gemini25FlashNativeAudioPreview202509 => "models/gemini-2.5-flash-native-audio-preview-09-2025",

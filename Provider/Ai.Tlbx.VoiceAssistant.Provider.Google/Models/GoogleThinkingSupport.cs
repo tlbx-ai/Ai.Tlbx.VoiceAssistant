@@ -15,6 +15,7 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.Google.Models
         {
             return model is
                 GoogleModel.GeminiLive25FlashNativeAudio or
+                GoogleModel.Gemini25FlashNativeAudioLatest or
                 GoogleModel.Gemini25FlashNativeAudio or
                 GoogleModel.Gemini25FlashNativeAudioPreview202509 or
                 GoogleModel.GeminiLive25Flash;

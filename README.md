@@ -188,7 +188,7 @@ new XaiVoiceSettings
 ### Current model guidance
 
 - OpenAI: `OpenAiRealtimeModel.GptRealtime2` is the production default for the latest reasoning voice model. `OpenAiRealtimeModel.GptRealtime15` remains available as an A/B baseline, and legacy `gpt-4o-realtime-preview-*` enums remain available but are marked obsolete.
-- Google: `GoogleModel.Gemini31FlashLivePreview` is the current default. `Gemini25FlashNativeAudio` remains supported for compatibility checks and is marked obsolete.
+- Google: `GoogleModel.Gemini31FlashLivePreview` is the current default for the Gemini Live API. `GoogleModel.Gemini25FlashNativeAudioLatest` is also available for testing Google's rolling native-audio Live API alias. The `gemini-3.1-flash-tts-preview` and older `gemini-2.5-*-tts` models are text-to-speech `generateContent` models, not realtime `bidiGenerateContent` voice-session models, so they are not exposed through this realtime provider.
 - xAI: `XaiVoiceModel.GrokVoiceThinkFast10` is the default and recommended model. `XaiVoiceModel.GrokVoiceFast10` remains available as an A/B baseline.
 
 ### xAI Tool Continuations

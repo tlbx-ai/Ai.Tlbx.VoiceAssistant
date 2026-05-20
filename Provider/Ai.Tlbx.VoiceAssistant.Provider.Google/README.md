@@ -16,7 +16,8 @@ dotnet add package Ai.Tlbx.VoiceAssistant.Provider.Google
 var provider = factory.CreateGoogle(apiKey);
 var settings = new GoogleVoiceSettings
 {
-    Voice = GeminiVoice.Puck,
+    Voice = GoogleVoice.Puck,
+    Model = GoogleModel.Gemini31FlashLivePreview,
     Instructions = "You are a helpful assistant."
 };
 
@@ -29,3 +30,9 @@ await assistant.StartAsync(settings);
 See the main package for complete documentation:
 
 **[Ai.Tlbx.VoiceAssistant on NuGet](https://www.nuget.org/packages/Ai.Tlbx.VoiceAssistant#readme-body-tab)**
+
+## Google Live Models
+
+- `GoogleModel.Gemini31FlashLivePreview` is the default Gemini Live API model.
+- `GoogleModel.Gemini25FlashNativeAudioLatest` targets Google's rolling native-audio Live API alias.
+- Google TTS-only models such as `gemini-3.1-flash-tts-preview` use `generateContent`, not realtime `bidiGenerateContent`, and are intentionally not exposed through this realtime voice provider.
