@@ -1,6 +1,6 @@
 # AI Voice Assistant Toolkit
 
-**Real-time voice conversations with AI in .NET — OpenAI, Google Gemini, and xAI Grok in one unified API.**
+**Real-time voice conversations and speech-to-text in .NET — OpenAI, Google Gemini, and xAI Grok in one unified API.**
 
 [![NuGet](https://img.shields.io/nuget/v/Ai.Tlbx.VoiceAssistant.svg?label=nuget&color=blue)](https://www.nuget.org/packages/Ai.Tlbx.VoiceAssistant/)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
@@ -96,7 +96,7 @@ builder.Services.AddScoped<IAudioHardwareAccess, WebAudioAccess>();
 | Package | Purpose | NuGet |
 |---------|---------|-------|
 | `Ai.Tlbx.VoiceAssistant` | Core orchestrator | [![NuGet](https://img.shields.io/nuget/v/Ai.Tlbx.VoiceAssistant.svg)](https://www.nuget.org/packages/Ai.Tlbx.VoiceAssistant/) |
-| `...Provider.OpenAi` | OpenAI Realtime API | [![NuGet](https://img.shields.io/nuget/v/Ai.Tlbx.VoiceAssistant.Provider.OpenAi.svg)](https://www.nuget.org/packages/Ai.Tlbx.VoiceAssistant.Provider.OpenAi/) |
+| `...Provider.OpenAi` | OpenAI realtime voice and transcription | [![NuGet](https://img.shields.io/nuget/v/Ai.Tlbx.VoiceAssistant.Provider.OpenAi.svg)](https://www.nuget.org/packages/Ai.Tlbx.VoiceAssistant.Provider.OpenAi/) |
 | `...Provider.Google` | Google Gemini Live API | [![NuGet](https://img.shields.io/nuget/v/Ai.Tlbx.VoiceAssistant.Provider.Google.svg)](https://www.nuget.org/packages/Ai.Tlbx.VoiceAssistant.Provider.Google/) |
 | `...Provider.XAi` | xAI Grok Voice Agent API | [![NuGet](https://img.shields.io/nuget/v/Ai.Tlbx.VoiceAssistant.Provider.XAi.svg)](https://www.nuget.org/packages/Ai.Tlbx.VoiceAssistant.Provider.XAi/) |
 | `...Hardware.Web` | Browser audio (Blazor) | [![NuGet](https://img.shields.io/nuget/v/Ai.Tlbx.VoiceAssistant.Hardware.Web.svg)](https://www.nuget.org/packages/Ai.Tlbx.VoiceAssistant.Hardware.Web/) |
@@ -194,6 +194,92 @@ new XaiVoiceSettings
 ### xAI Tool Continuations
 
 The xAI provider waits for queued audio playback to drain before sending `response.create` after a custom tool result. This follows xAI Voice Agent guidance and avoids the model starting a follow-up response while the previous audio is still playing.
+
+---
+
+## Speech-to-Text Only
+
+The OpenAI provider package also includes speech-to-text APIs when you want transcription without an assistant voice response. Install the same core, OpenAI provider, and hardware packages:
+
+```bash
+dotnet add package Ai.Tlbx.VoiceAssistant
+dotnet add package Ai.Tlbx.VoiceAssistant.Provider.OpenAi
+dotnet add package Ai.Tlbx.VoiceAssistant.Hardware.Web       # or .Hardware.Windows / .Hardware.Linux
+```
+
+### Realtime Transcription Stream
+
+Use `OpenAiTranscriptionProvider` with `VoiceAssistant` for low-latency streaming transcript deltas over OpenAI's realtime transcription WebSocket. The hardware layer captures PCM16 microphone audio at the provider's required 24 kHz input rate.
+
+```csharp
+var provider = new OpenAiTranscriptionProvider("sk-...");
+var assistant = new VoiceAssistant(audioHardware, provider);
+
+assistant.OnTranscriptionDelta = delta =>
+{
+    Console.Write(delta);
+};
+
+assistant.OnTranscriptionCompleted = transcript =>
+{
+    Console.WriteLine();
+    Console.WriteLine($"Final: {transcript}");
+};
+
+await assistant.StartAsync(new OpenAiTranscriptionSettings
+{
+    TranscriptionModel = OpenAiTranscriptionModel.GptRealtimeWhisper,
+    Language = "de",
+    IncludeLogProbabilities = true
+});
+
+// Later:
+await assistant.StopAsync();
+```
+
+`OnTranscriptionDelta` fires as partial text arrives. `OnTranscriptionCompleted` fires when the utterance is finalized; `VoiceAssistant` also adds the final transcript to chat history as a user message through `OnMessageAdded`.
+
+### Push-to-Talk / Near-Live HTTP Transcription
+
+Use `OpenAiHttpLiveTranscriber` when you want a hold-to-transcribe UI without keeping a realtime WebSocket session open. It records microphone audio through `IAudioHardwareAccess`, repeatedly uploads the current utterance to OpenAI's HTTP transcription endpoint, and calls back with the latest hypothesis so your UI can replace the current line as the model revises earlier words.
+
+```csharp
+await using var transcriber = new OpenAiHttpLiveTranscriber(
+    audioHardware,
+    new OpenAiHttpLiveTranscriptionOptions
+    {
+        TranscriptionModel = OpenAiTranscriptionModel.Gpt4oTranscribe,
+        Language = "de",
+        Prompt = "Expect German with business and IT terms",
+        SnapshotInterval = TimeSpan.FromMilliseconds(700),
+        MinimumUtteranceDuration = TimeSpan.FromMilliseconds(350)
+    },
+    apiKey: "sk-...");
+
+using var cts = new CancellationTokenSource();
+
+var liveTask = transcriber.TranscribeLive(text =>
+{
+    Console.Write($"\r{text}");
+}, cts.Token);
+
+// Stop when the user releases the push-to-talk button.
+cts.Cancel();
+await transcriber.StopAsync();
+await liveTask;
+```
+
+### Transcription Models
+
+| Model enum | Best fit | Notes |
+|------------|----------|-------|
+| `GptRealtimeWhisper` | Low-latency realtime transcription | Default. Does not accept `TranscriptionPrompt` and omits server-side turn detection. |
+| `Gpt4oTranscribe` | Higher-quality realtime or HTTP transcription | Supports prompt steering and log probabilities. |
+| `Gpt4oMiniTranscribe` | Lower-cost realtime or HTTP transcription | Supports prompt steering and log probabilities. |
+| `Gpt4oTranscribeDiarize` | HTTP transcription with speaker labels | Use the HTTP transcriber path; it is not supported by the realtime transcription stream. |
+| `Whisper1` | Legacy compatibility | Available but obsolete; it does not support streamed HTTP transcription responses. |
+
+The web and terminal demos expose both transcription modes: streaming transcription and hold-to-transcribe.
 
 ---
 
