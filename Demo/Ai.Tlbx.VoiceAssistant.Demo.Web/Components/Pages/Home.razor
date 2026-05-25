@@ -322,7 +322,7 @@
                                                 @ontouchend="OnPushToTalkUp"
                                                 @ontouchcancel="OnPushToTalkUp"
                                                 @oncontextmenu:preventDefault
-                                                disabled="@((voiceAssistant?.IsRecording ?? false) || _isPttProcessing)">
+                                                disabled="@((voiceAssistant?.IsRecording ?? false) || _isPttProcessing || !SelectedTranscriptionModelSupportsHttpStreaming)">
                                             @if (_isPttRecording)
                                             {
                                                 <div class="relative h-3 w-3 mr-2">
@@ -588,6 +588,7 @@
         .Select(v => v.ToString()).ToList();
     private OpenAiTranscriptionModel SelectedTranscriptionModel => GetSelectedTranscriptionModelOrDefault();
     private bool SelectedTranscriptionModelSupportsRealtime => SelectedTranscriptionModel.SupportsRealtimeTranscription();
+    private bool SelectedTranscriptionModelSupportsHttpStreaming => SelectedTranscriptionModel.SupportsHttpStreamingTranscription();
     private bool SelectedTranscriptionModelSupportsLogProbabilities => SelectedTranscriptionModel.SupportsTranscriptionLogProbabilities();
 
     private static List<TEnum> GetSelectableEnumValues<TEnum>() where TEnum : struct, Enum
@@ -1056,9 +1057,9 @@
         return SelectedTranscriptionModel switch
         {
             OpenAiTranscriptionModel.GptRealtimeWhisper => "Default for low-latency live transcript deltas; priced by audio duration.",
-            OpenAiTranscriptionModel.Gpt4oTranscribe => "Best accuracy for German/business transcription; supports Realtime stream and Hold.",
-            OpenAiTranscriptionModel.Gpt4oMiniTranscribe => "Lower latency and cost; supports Realtime stream and Hold.",
-            OpenAiTranscriptionModel.Gpt4oMiniTranscribe20251215 => "Pinned mini snapshot for compatibility checks.",
+            OpenAiTranscriptionModel.Gpt4oTranscribe => "Higher-accuracy HTTP transcription. Use Hold; OpenAI does not recommend this for ongoing Realtime microphone streams.",
+            OpenAiTranscriptionModel.Gpt4oMiniTranscribe => "Current recommended lower-cost HTTP transcription model. Use Hold.",
+            OpenAiTranscriptionModel.Gpt4oMiniTranscribe20251215 => "Pinned current mini snapshot for HTTP transcription compatibility checks. Use Hold.",
             OpenAiTranscriptionModel.Gpt4oTranscribeDiarize => "Speaker diarization. OpenAI currently supports this only through the HTTP Transcription API, so use Hold.",
             _ => "Legacy or compatibility model."
         };
@@ -1461,6 +1462,11 @@
     {
         if (_isPttRecording || _isPttProcessing) return;
         if (voiceAssistant?.IsRecording ?? false) return;
+        if (!SelectedTranscriptionModelSupportsHttpStreaming)
+        {
+            Log(LogLevel.Warn, $"{SelectedTranscriptionModel} is not supported by the streamed HTTP transcription path. Use Stream instead.");
+            return;
+        }
 
         _isPttRecording = true;
         _pttReceivedText = false;

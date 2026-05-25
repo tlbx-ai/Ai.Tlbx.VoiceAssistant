@@ -6,8 +6,6 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi.Models
     {
         GptRealtimeWhisper,
         Gpt4oMiniTranscribe,
-        [Obsolete("Pinned legacy snapshot. Prefer GptRealtimeWhisper for realtime streaming or Gpt4oMiniTranscribe for HTTP transcription.")]
-        Gpt4oMiniTranscribe20250320,
         Gpt4oMiniTranscribe20251215,
         Gpt4oTranscribe,
         Gpt4oTranscribeDiarize,
@@ -24,7 +22,6 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi.Models
             {
                 OpenAiTranscriptionModel.GptRealtimeWhisper => "gpt-realtime-whisper",
                 OpenAiTranscriptionModel.Gpt4oMiniTranscribe => "gpt-4o-mini-transcribe",
-                OpenAiTranscriptionModel.Gpt4oMiniTranscribe20250320 => "gpt-4o-mini-transcribe-2025-03-20",
                 OpenAiTranscriptionModel.Gpt4oMiniTranscribe20251215 => "gpt-4o-mini-transcribe-2025-12-15",
                 OpenAiTranscriptionModel.Gpt4oTranscribe => "gpt-4o-transcribe",
                 OpenAiTranscriptionModel.Gpt4oTranscribeDiarize => "gpt-4o-transcribe-diarize",
@@ -36,14 +33,15 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi.Models
 
         public static bool SupportsRealtimeTranscription(this OpenAiTranscriptionModel model)
         {
-            return model != OpenAiTranscriptionModel.Gpt4oTranscribeDiarize;
+            return model == OpenAiTranscriptionModel.GptRealtimeWhisper;
         }
 
         public static bool SupportsHttpStreamingTranscription(this OpenAiTranscriptionModel model)
         {
-#pragma warning disable CS0618
-            return model != OpenAiTranscriptionModel.Whisper1;
-#pragma warning restore CS0618
+            return model == OpenAiTranscriptionModel.Gpt4oTranscribe ||
+                model == OpenAiTranscriptionModel.Gpt4oMiniTranscribe ||
+                model == OpenAiTranscriptionModel.Gpt4oMiniTranscribe20251215 ||
+                model == OpenAiTranscriptionModel.Gpt4oTranscribeDiarize;
         }
 
         public static bool SupportsDiarizedJson(this OpenAiTranscriptionModel model)

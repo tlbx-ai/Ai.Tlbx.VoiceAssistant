@@ -342,7 +342,7 @@ internal static class Program
             }
         }
 
-        transcriptionModel = PromptEnum("Transcription model", transcriptionModel, includeObsolete: true);
+        transcriptionModel = PromptEnum("Transcription model", transcriptionModel);
         includeTranscriptionLogProbabilities = AnsiConsole.Confirm("Include transcription log probabilities when supported?", includeTranscriptionLogProbabilities);
 
         await Task.CompletedTask;
@@ -389,6 +389,10 @@ internal static class Program
     {
         EnsureNotRunning();
         EnsureOpenAiKey();
+        if (!transcriptionModel.SupportsRealtimeTranscription())
+        {
+            throw new InvalidOperationException($"{transcriptionModel} is not supported by OpenAI's realtime transcription stream. Use hold-to-transcribe.");
+        }
 
         var provider = new OpenAiTranscriptionProvider(logAction: Log);
         await CreateAssistantAsync(provider);
@@ -405,6 +409,11 @@ internal static class Program
     {
         EnsureNotRunning();
         EnsureOpenAiKey();
+        if (!transcriptionModel.SupportsHttpStreamingTranscription())
+        {
+            throw new InvalidOperationException($"{transcriptionModel} is not supported by streamed HTTP transcription. Use streaming transcription.");
+        }
+
         await ApplySelectedMicrophoneAsync();
 
         pttTranscript = string.Empty;

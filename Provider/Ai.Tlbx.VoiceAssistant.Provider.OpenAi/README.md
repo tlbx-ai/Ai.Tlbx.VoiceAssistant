@@ -57,13 +57,14 @@ current line as the model revises earlier words.
 
 For low-latency live transcript deltas use `GptRealtimeWhisper`, the current
 default for realtime transcription. For higher-quality file/HTTP transcription
-use `Gpt4oTranscribe`; for lower cost use `Gpt4oMiniTranscribe`.
+use `Gpt4oTranscribe`; for lower cost use `Gpt4oMiniTranscribe` or the pinned
+current `Gpt4oMiniTranscribe20251215` snapshot.
 `Gpt4oTranscribeDiarize` enables speaker labels through the HTTP transcription
 endpoint and is not supported by OpenAI's Realtime transcription stream.
 Realtime Whisper does not accept the `prompt` parameter, so the provider omits
 prompt steering and server-side turn detection for that model.
-`Whisper1` remains available as a legacy model, but it does not support
-streamed HTTP transcription responses.
+`Whisper1` remains available for OpenAI's bounded transcription API, but it does
+not support the streamed HTTP responses used by `OpenAiHttpLiveTranscriber`.
 
 ## Full Documentation
 

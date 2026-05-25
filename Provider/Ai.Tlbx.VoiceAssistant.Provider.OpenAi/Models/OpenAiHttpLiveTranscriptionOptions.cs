@@ -9,9 +9,9 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi.Models
     public sealed class OpenAiHttpLiveTranscriptionOptions
     {
         /// <summary>
-        /// The transcription model to use. Defaults to the low-latency realtime transcription model.
+        /// The transcription model to use. Defaults to OpenAI's current recommended HTTP transcription model.
         /// </summary>
-        public OpenAiTranscriptionModel TranscriptionModel { get; set; } = OpenAiTranscriptionModel.GptRealtimeWhisper;
+        public OpenAiTranscriptionModel TranscriptionModel { get; set; } = OpenAiTranscriptionModel.Gpt4oMiniTranscribe;
 
         /// <summary>
         /// Optional spoken language hint (for example "en" or "de").

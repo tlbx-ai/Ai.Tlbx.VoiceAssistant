@@ -273,11 +273,12 @@ await liveTask;
 
 | Model enum | Best fit | Notes |
 |------------|----------|-------|
-| `GptRealtimeWhisper` | Low-latency realtime transcription | Default. Does not accept `TranscriptionPrompt` and omits server-side turn detection. |
-| `Gpt4oTranscribe` | Higher-quality realtime or HTTP transcription | Supports prompt steering and log probabilities. |
-| `Gpt4oMiniTranscribe` | Lower-cost realtime or HTTP transcription | Supports prompt steering and log probabilities. |
+| `GptRealtimeWhisper` | Low-latency realtime transcription | Default for live microphone deltas. Does not accept `TranscriptionPrompt` and omits server-side turn detection. |
+| `Gpt4oTranscribe` | Higher-quality HTTP transcription | Use for request-response or hold-to-transcribe workflows. Supports prompt steering and log probabilities. |
+| `Gpt4oMiniTranscribe` | Lower-cost HTTP transcription | Current recommended HTTP transcription model. Supports prompt steering and log probabilities. |
+| `Gpt4oMiniTranscribe20251215` | Pinned lower-cost HTTP transcription snapshot | Use for compatibility checks against the current mini snapshot. Supports prompt steering and log probabilities. |
 | `Gpt4oTranscribeDiarize` | HTTP transcription with speaker labels | Use the HTTP transcriber path; it is not supported by the realtime transcription stream. |
-| `Whisper1` | Legacy compatibility | Available but obsolete; it does not support streamed HTTP transcription responses. |
+| `Whisper1` | Legacy compatibility | Available in OpenAI's bounded transcription API, but not exposed by the demos because they rely on live deltas or streamed HTTP responses. |
 
 The web and terminal demos expose both transcription modes: streaming transcription and hold-to-transcribe.
 
