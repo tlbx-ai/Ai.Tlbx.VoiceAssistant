@@ -301,6 +301,37 @@ namespace Ai.Tlbx.VoiceAssistant
         }
 
         /// <summary>
+        /// Updates provider settings for the active connection without changing recording state.
+        /// Use this for runtime prompt/tool changes such as Realtime session.update.
+        /// </summary>
+        /// <param name="settings">Provider-specific settings to apply.</param>
+        /// <returns>A task representing the update operation.</returns>
+        public async Task UpdateSettingsAsync(IVoiceSettings settings)
+        {
+            if (_provider == null)
+            {
+                throw new InvalidOperationException("Cannot update voice assistant settings: no provider configured.");
+            }
+
+            if (!_isInitialized || !_provider.IsConnected)
+            {
+                throw new InvalidOperationException("Cannot update voice assistant settings: provider is not connected.");
+            }
+
+            try
+            {
+                await _provider.UpdateSettingsAsync(settings);
+                _logAction(LogLevel.Info, "Voice assistant settings updated for active provider session");
+            }
+            catch (Exception ex)
+            {
+                _lastErrorMessage = ex.Message;
+                _logAction(LogLevel.Error, $"Failed to update voice assistant settings: {ex.Message}");
+                throw;
+            }
+        }
+
+        /// <summary>
         /// Stops the voice assistant and disconnects from the AI provider.
         /// </summary>
         /// <returns>A task representing the stop operation.</returns>

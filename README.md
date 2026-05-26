@@ -185,6 +185,11 @@ new XaiVoiceSettings
 | Context management | `AutomaticContextTruncation` | `AutomaticContextCompression` | — |
 | Web search | — | — | `EnableWebSearch`, `EnableXSearch` |
 
+Runtime changes can be applied to an active provider connection with
+`await assistant.UpdateSettingsAsync(settings);`. For OpenAI this sends a
+Realtime `session.update`, which is useful for changing the active prompt,
+tool list, reasoning effort, or voice settings without restarting audio.
+
 ### Current model guidance
 
 - OpenAI: `OpenAiRealtimeModel.GptRealtime2` is the production default for the latest reasoning voice model. `OpenAiRealtimeModel.GptRealtime15` remains available as an A/B baseline, and legacy `gpt-4o-realtime-preview-*` enums remain available but are marked obsolete.
