@@ -8,6 +8,7 @@ using System.Globalization;
 using System.Linq;
 using System.Reflection;
 using System.Text.RegularExpressions;
+using Ai.Tlbx.VoiceAssistant.Attributes;
 using Ai.Tlbx.VoiceAssistant.Models;
 
 namespace Ai.Tlbx.VoiceAssistant.Reflection
@@ -129,6 +130,15 @@ namespace Ai.Tlbx.VoiceAssistant.Reflection
             {
                 param.Type = ToolParameterType.String;
                 param.Enum = Enum.GetNames(type).Select(ToSnakeCase).ToList();
+            }
+
+            var enumValues = GetAttribute<ToolEnumValuesAttribute>(parameterInfo, propertyInfo);
+            if (enumValues?.Values is { Length: > 0 })
+            {
+                param.Enum = enumValues.Values
+                    .Where(value => !string.IsNullOrWhiteSpace(value))
+                    .Distinct(StringComparer.Ordinal)
+                    .ToList();
             }
 
             if (TryGetCollectionElementType(type, out var elementType))
