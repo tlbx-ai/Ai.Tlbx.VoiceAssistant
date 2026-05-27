@@ -223,6 +223,9 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi.Protocol
         [JsonPropertyName("tool_choice")]
         public string? ToolChoice { get; set; }
 
+        [JsonPropertyName("parallel_tool_calls")]
+        public bool? ParallelToolCalls { get; set; }
+
         [JsonPropertyName("tools")]
         public List<ToolDefinition>? Tools { get; set; }
 

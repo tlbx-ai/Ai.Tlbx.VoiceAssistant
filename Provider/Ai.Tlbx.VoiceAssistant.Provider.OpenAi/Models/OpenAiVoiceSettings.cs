@@ -21,6 +21,13 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi.Models
         public List<IVoiceTool> Tools { get; set; } = new();
 
         /// <summary>
+        /// Whether OpenAI may issue multiple tool calls in parallel.
+        /// Disabled by default because many voice-agent tools operate on shared,
+        /// stateful UI/session targets and should be executed in conversational order.
+        /// </summary>
+        public bool ParallelToolCalls { get; set; } = false;
+
+        /// <summary>
         /// The OpenAI model to use for the conversation.
         /// </summary>
         public OpenAiRealtimeModel Model { get; set; } = OpenAiRealtimeModel.GptRealtime2;

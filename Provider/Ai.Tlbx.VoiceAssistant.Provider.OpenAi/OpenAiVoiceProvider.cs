@@ -423,6 +423,7 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi
                         RetentionRatio = _settings.AutomaticContextTruncation ? _settings.RetentionRatio : null
                     },
                     ToolChoice = "auto",
+                    ParallelToolCalls = _settings.ParallelToolCalls,
                     Tools = _settings.Tools.Select(tool =>
                         (ToolDefinition)_toolTranslator.TranslateToolDefinition(tool, ToolSchemaInferrer.InferSchema(tool.ArgsType))
                     ).ToList(),
