@@ -472,17 +472,12 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi
                 return null;
             }
 
-            var effort = settings.ReasoningEffort.Value switch
+            if (settings.ReasoningEffort.Value == SessionReasoningEffort.None)
             {
-                SessionReasoningEffort.Low => "low",
-                SessionReasoningEffort.Medium => "medium",
-                SessionReasoningEffort.High => "high",
-                _ => null
-            };
+                return null;
+            }
 
-            return effort == null
-                ? null
-                : new OpenAiReasoningConfig { Effort = effort };
+            return new OpenAiReasoningConfig { Effort = settings.ReasoningEffort.Value.ToApiString() };
         }
 
         private static string BuildInstructions(OpenAiVoiceSettings settings)
