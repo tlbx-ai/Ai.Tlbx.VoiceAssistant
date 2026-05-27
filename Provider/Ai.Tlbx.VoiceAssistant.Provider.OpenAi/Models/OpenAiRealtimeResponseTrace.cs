@@ -16,10 +16,23 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi.Models
         public string? OutputText { get; set; }
         public string? OutputAudioTranscript { get; set; }
         public List<string> OutputPhases { get; } = new();
+        public List<OpenAiRealtimeOutputTrace> Outputs { get; } = new();
         public List<OpenAiRealtimeToolCallTrace> ToolCalls { get; } = new();
         public UsageReport? Usage { get; set; }
         public DateTimeOffset StartedAt { get; set; } = DateTimeOffset.UtcNow;
         public DateTimeOffset? CompletedAt { get; set; }
+    }
+
+    /// <summary>
+    /// Captures one output item within an OpenAI Realtime response, including its response phase.
+    /// </summary>
+    public sealed class OpenAiRealtimeOutputTrace
+    {
+        public string? Id { get; set; }
+        public string? Type { get; set; }
+        public string? Phase { get; set; }
+        public string? Text { get; set; }
+        public string? AudioTranscript { get; set; }
     }
 
     /// <summary>

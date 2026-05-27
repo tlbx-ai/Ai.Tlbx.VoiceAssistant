@@ -998,6 +998,7 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi
             if (response.TryGetProperty("output", out var output) &&
                 output.ValueKind == JsonValueKind.Array)
             {
+                trace.Outputs.Clear();
                 foreach (var item in output.EnumerateArray())
                 {
                     var phase = TryGetString(item, "phase");
@@ -1006,20 +1007,30 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi
                         trace.OutputPhases.Add(phase);
                     }
 
-                    CaptureOutputItemText(item, trace);
+                    CaptureOutputItemText(item, trace, phase);
                 }
             }
         }
 
-        private static void CaptureOutputItemText(JsonElement item, OpenAiRealtimeResponseTrace trace)
+        private static void CaptureOutputItemText(JsonElement item, OpenAiRealtimeResponseTrace trace, string? phase)
         {
+            var outputTrace = new OpenAiRealtimeOutputTrace
+            {
+                Id = TryGetString(item, "id"),
+                Type = TryGetString(item, "type"),
+                Phase = phase
+            };
+
             if (!item.TryGetProperty("content", out var content) || content.ValueKind != JsonValueKind.Array)
             {
+                trace.Outputs.Add(outputTrace);
                 return;
             }
 
             var textBuilder = new StringBuilder(trace.OutputText ?? string.Empty);
             var audioBuilder = new StringBuilder(trace.OutputAudioTranscript ?? string.Empty);
+            var itemTextBuilder = new StringBuilder();
+            var itemAudioBuilder = new StringBuilder();
 
             foreach (var part in content.EnumerateArray())
             {
@@ -1031,6 +1042,7 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi
                     {
                         textBuilder.Append(text);
                     }
+                    itemTextBuilder.Append(text);
                 }
                 else if (type == "output_audio")
                 {
@@ -1039,11 +1051,15 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi
                     {
                         audioBuilder.Append(transcript);
                     }
+                    itemAudioBuilder.Append(transcript);
                 }
             }
 
             trace.OutputText = textBuilder.Length > 0 ? textBuilder.ToString() : trace.OutputText;
             trace.OutputAudioTranscript = audioBuilder.Length > 0 ? audioBuilder.ToString() : trace.OutputAudioTranscript;
+            outputTrace.Text = itemTextBuilder.Length > 0 ? itemTextBuilder.ToString() : null;
+            outputTrace.AudioTranscript = itemAudioBuilder.Length > 0 ? itemAudioBuilder.ToString() : null;
+            trace.Outputs.Add(outputTrace);
         }
 
         private static bool TryExtractTextDelta(JsonElement deltaElem, out string text)
