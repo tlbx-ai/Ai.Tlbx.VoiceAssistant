@@ -46,6 +46,10 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi
         private readonly StringBuilder _currentFunctionArgs = new();
         private string _currentFunctionName = string.Empty;
         private string _currentCallId = string.Empty;
+        private OpenAiRealtimeResponseTrace? _currentResponseTrace;
+        private readonly StringBuilder _currentResponseOutputText = new();
+        private string? _currentResponseAudioTranscript;
+        private string? _lastInputTranscript;
 
         /// <summary>
         /// Gets a value indicating whether the provider is connected and ready.
@@ -102,6 +106,11 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi
         public Action<UsageReport>? OnUsageReceived { get; set; }
         public Action<string>? OnTranscriptionDelta { get; set; }
         public Action<string>? OnTranscriptionCompleted { get; set; }
+
+        /// <summary>
+        /// Callback invoked when an OpenAI Realtime response completes with trace details.
+        /// </summary>
+        public Action<OpenAiRealtimeResponseTrace>? OnResponseTraceCompleted { get; set; }
 
         /// <summary>
         /// Initializes a new instance of the <see cref="OpenAiVoiceProvider"/> class.
@@ -736,6 +745,13 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi
                 ? (callIdElement.GetString() ?? _currentCallId)
                 : _currentCallId;
             var argumentsJson = _currentFunctionArgs.ToString();
+            var toolTrace = new OpenAiRealtimeToolCallTrace
+            {
+                Name = functionName,
+                CallId = callId,
+                ArgumentsJson = argumentsJson
+            };
+            _currentResponseTrace?.ToolCalls.Add(toolTrace);
 
             _logAction(LogLevel.Info, $"[Tool] Function call complete: {functionName}");
             _logAction(LogLevel.Info, $"[Tool] Call ID: {callId}");
@@ -744,6 +760,7 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi
             if (string.IsNullOrEmpty(functionName))
             {
                 _logAction(LogLevel.Error, "[Tool] ERROR: Function name is empty");
+                toolTrace.Error = "Function name is empty";
                 _currentFunctionArgs.Clear();
                 _currentFunctionName = "";
                 _currentCallId = "";
@@ -753,6 +770,7 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi
             if (string.IsNullOrEmpty(callId))
             {
                 _logAction(LogLevel.Error, "[Tool] ERROR: Call ID is empty");
+                toolTrace.Error = "Call ID is empty";
                 _currentFunctionArgs.Clear();
                 _currentFunctionName = "";
                 _currentCallId = "";
@@ -771,6 +789,7 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi
                     _logAction(LogLevel.Info, $"[Tool] Executing tool: {functionName}");
                     var result = await tool.ExecuteAsync(argumentsJson);
                     _logAction(LogLevel.Info, $"[Tool] Execution result: {result}");
+                    toolTrace.OutputJson = result;
 
                     // Send the tool result back to OpenAI
                     await SendToolResultAsync(callId, functionName, result);
@@ -788,13 +807,16 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi
                 {
                     _logAction(LogLevel.Error, $"[Tool] ERROR executing {functionName}: {ex.Message}");
                     _logAction(LogLevel.Error, $"[Tool] Stack trace: {ex.StackTrace}");
+                    toolTrace.Error = ex.Message;
                     await SendToolResultAsync(callId, functionName, $"Error: {ex.Message}");
                 }
             }
             else
             {
                 _logAction(LogLevel.Warn, $"[Tool] Tool not found: {functionName}");
-                await SendToolResultAsync(callId, functionName, $"Tool not found: {functionName}");
+                var error = $"Tool not found: {functionName}";
+                toolTrace.Error = error;
+                await SendToolResultAsync(callId, functionName, error);
             }
 
             // Clear the buffers
@@ -857,6 +879,11 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi
                 if (!string.IsNullOrEmpty(text))
                 {
                     _logAction(LogLevel.Info, $"Audio transcript: {text}");
+                    _currentResponseAudioTranscript = text;
+                    if (_currentResponseTrace != null)
+                    {
+                        _currentResponseTrace.OutputAudioTranscript = text;
+                    }
                     
                     // Send the transcript as an assistant message
                     var message = ChatMessage.CreateAssistantMessage(text);
@@ -873,6 +900,7 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi
                 if (!string.IsNullOrEmpty(text))
                 {
                     _logAction(LogLevel.Info, $"User transcript: {text}");
+                    _lastInputTranscript = text;
                     
                     // Send the transcript as a user message
                     var message = ChatMessage.CreateUserMessage(text);
@@ -883,11 +911,15 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi
 
         private void HandleTextDelta(JsonElement root)
         {
-            if (root.TryGetProperty("delta", out var deltaElem) && 
-                deltaElem.TryGetProperty("text", out var textElem))
+            if (root.TryGetProperty("delta", out var deltaElem) &&
+                TryExtractTextDelta(deltaElem, out var deltaText))
             {
-                string deltaText = textElem.GetString() ?? string.Empty;
                 _currentAiMessage.Append(deltaText);
+                _currentResponseOutputText.Append(deltaText);
+                if (_currentResponseTrace != null)
+                {
+                    _currentResponseTrace.OutputText = _currentResponseOutputText.ToString();
+                }
             }
         }
         
@@ -898,6 +930,14 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi
             {
                 _currentResponseId = idElement.GetString() ?? "";
                 _hasActiveResponse = true;
+                _currentResponseOutputText.Clear();
+                _currentResponseAudioTranscript = null;
+                _currentResponseTrace = new OpenAiRealtimeResponseTrace
+                {
+                    ResponseId = _currentResponseId,
+                    InputTranscript = _lastInputTranscript,
+                    StartedAt = DateTimeOffset.UtcNow
+                };
                 _logAction(LogLevel.Info, $"New response started: {_currentResponseId}");
             }
         }
@@ -907,17 +947,129 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi
             _hasActiveResponse = false;
             _logAction(LogLevel.Info, "Response completed");
 
-            // Parse usage from response.done event
+            UsageReport? report = null;
+            OpenAiRealtimeResponseTrace? trace = _currentResponseTrace;
+
             if (root.TryGetProperty("response", out var response) &&
                 response.TryGetProperty("usage", out var usage))
             {
-                var report = CreateUsageReport(usage);
+                report = CreateUsageReport(usage);
 
                 _logAction(LogLevel.Info, $"Usage: text_in={report.InputTokens}, text_out={report.OutputTokens}, audio_in={report.InputAudioTokens}, audio_out={report.OutputAudioTokens}, cached_in={report.CacheReadInputTokens}");
                 OnUsageReceived?.Invoke(report);
             }
 
+            if (trace != null)
+            {
+                PopulateResponseTrace(root, trace, report);
+                OnResponseTraceCompleted?.Invoke(trace);
+            }
+
+            _currentResponseTrace = null;
+            _currentResponseOutputText.Clear();
+            _currentResponseAudioTranscript = null;
+
             await Task.CompletedTask;
+        }
+
+        private void PopulateResponseTrace(JsonElement root, OpenAiRealtimeResponseTrace trace, UsageReport? usage)
+        {
+            trace.CompletedAt = DateTimeOffset.UtcNow;
+            trace.Usage = usage;
+            trace.OutputText ??= _currentResponseOutputText.Length > 0 ? _currentResponseOutputText.ToString() : null;
+            trace.OutputAudioTranscript ??= _currentResponseAudioTranscript;
+            trace.InputTranscript ??= _lastInputTranscript;
+
+            if (!root.TryGetProperty("response", out var response))
+            {
+                return;
+            }
+
+            trace.ResponseId ??= TryGetString(response, "id") ?? _currentResponseId;
+            trace.Status = TryGetString(response, "status");
+
+            if (response.TryGetProperty("status_details", out var statusDetails) &&
+                statusDetails.ValueKind != JsonValueKind.Null &&
+                statusDetails.ValueKind != JsonValueKind.Undefined)
+            {
+                trace.StatusDetailsJson = statusDetails.GetRawText();
+            }
+
+            if (response.TryGetProperty("output", out var output) &&
+                output.ValueKind == JsonValueKind.Array)
+            {
+                foreach (var item in output.EnumerateArray())
+                {
+                    var phase = TryGetString(item, "phase");
+                    if (!string.IsNullOrWhiteSpace(phase) && !trace.OutputPhases.Contains(phase, StringComparer.Ordinal))
+                    {
+                        trace.OutputPhases.Add(phase);
+                    }
+
+                    CaptureOutputItemText(item, trace);
+                }
+            }
+        }
+
+        private static void CaptureOutputItemText(JsonElement item, OpenAiRealtimeResponseTrace trace)
+        {
+            if (!item.TryGetProperty("content", out var content) || content.ValueKind != JsonValueKind.Array)
+            {
+                return;
+            }
+
+            var textBuilder = new StringBuilder(trace.OutputText ?? string.Empty);
+            var audioBuilder = new StringBuilder(trace.OutputAudioTranscript ?? string.Empty);
+
+            foreach (var part in content.EnumerateArray())
+            {
+                var type = TryGetString(part, "type");
+                if (type == "output_text")
+                {
+                    var text = TryGetString(part, "text");
+                    if (!string.IsNullOrEmpty(text) && !textBuilder.ToString().Contains(text, StringComparison.Ordinal))
+                    {
+                        textBuilder.Append(text);
+                    }
+                }
+                else if (type == "output_audio")
+                {
+                    var transcript = TryGetString(part, "transcript");
+                    if (!string.IsNullOrEmpty(transcript) && !audioBuilder.ToString().Contains(transcript, StringComparison.Ordinal))
+                    {
+                        audioBuilder.Append(transcript);
+                    }
+                }
+            }
+
+            trace.OutputText = textBuilder.Length > 0 ? textBuilder.ToString() : trace.OutputText;
+            trace.OutputAudioTranscript = audioBuilder.Length > 0 ? audioBuilder.ToString() : trace.OutputAudioTranscript;
+        }
+
+        private static bool TryExtractTextDelta(JsonElement deltaElem, out string text)
+        {
+            if (deltaElem.ValueKind == JsonValueKind.String)
+            {
+                text = deltaElem.GetString() ?? string.Empty;
+                return text.Length > 0;
+            }
+
+            if (deltaElem.ValueKind == JsonValueKind.Object &&
+                deltaElem.TryGetProperty("text", out var textElem))
+            {
+                text = textElem.GetString() ?? string.Empty;
+                return text.Length > 0;
+            }
+
+            text = string.Empty;
+            return false;
+        }
+
+        private static string? TryGetString(JsonElement element, string propertyName)
+        {
+            return element.TryGetProperty(propertyName, out var property) && property.ValueKind == JsonValueKind.String
+                ? property.GetString()
+                : null;
         }
 
         private static UsageReport CreateUsageReport(JsonElement usage)
