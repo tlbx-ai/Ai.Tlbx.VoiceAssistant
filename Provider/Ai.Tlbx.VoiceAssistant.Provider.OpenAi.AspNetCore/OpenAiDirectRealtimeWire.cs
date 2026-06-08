@@ -74,6 +74,13 @@ internal sealed class DirectRealtimeErrorMessage
     public string Message { get; set; } = "";
 }
 
+internal sealed class DirectRealtimeSessionErrorResponse
+{
+    public string Error { get; set; } = "";
+
+    public int? UpstreamStatus { get; set; }
+}
+
 [JsonSerializable(typeof(OpenAiDirectRealtimeSessionRequest))]
 [JsonSerializable(typeof(OpenAiDirectRealtimeSessionResponse))]
 [JsonSerializable(typeof(OpenAiDirectRealtimeClientEvent))]
@@ -84,6 +91,7 @@ internal sealed class DirectRealtimeErrorMessage
 [JsonSerializable(typeof(DirectRealtimeToolResultMessage))]
 [JsonSerializable(typeof(DirectRealtimeStatusMessage))]
 [JsonSerializable(typeof(DirectRealtimeErrorMessage))]
+[JsonSerializable(typeof(DirectRealtimeSessionErrorResponse))]
 [JsonSerializable(typeof(ExpiresAfter))]
 [JsonSerializable(typeof(SessionConfig))]
 [JsonSerializable(typeof(TruncationConfig))]

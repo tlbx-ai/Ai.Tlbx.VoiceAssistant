@@ -36,7 +36,7 @@ export class OpenAiDirectRealtimeClient
 
         if (!sessionResponse.ok)
         {
-            throw new Error(`Direct realtime session failed: ${sessionResponse.status}`);
+            throw new Error(`Direct realtime session failed: ${sessionResponse.status}${await formatSessionError(sessionResponse)}`);
         }
 
         this.session = await sessionResponse.json();
@@ -452,4 +452,26 @@ function safeJsonParse(text)
     {
         return {};
     }
+}
+
+async function formatSessionError(response)
+{
+    let text = '';
+    try
+    {
+        text = await response.text();
+    }
+    catch
+    {
+        return '';
+    }
+
+    if (!text)
+    {
+        return '';
+    }
+
+    const json = safeJsonParse(text);
+    const message = json.error ?? json.message ?? json.title ?? text;
+    return message ? ` - ${message}` : '';
 }

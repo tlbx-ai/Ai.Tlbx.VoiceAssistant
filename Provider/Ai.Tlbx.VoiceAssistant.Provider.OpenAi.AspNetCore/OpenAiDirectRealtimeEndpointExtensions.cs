@@ -1,4 +1,5 @@
 using System.Net.Http.Headers;
+using System.Net;
 using System.Net.WebSockets;
 using System.Text;
 using System.Text.Json;
@@ -101,6 +102,33 @@ public static class OpenAiDirectRealtimeEndpointExtensions
             };
 
             return Results.Json(response, OpenAiDirectRealtimeJsonContext.Default.OpenAiDirectRealtimeSessionResponse);
+        }
+        catch (OpenAiDirectRealtimeClientSecretException ex)
+        {
+            await registry.RemoveAsync(voiceSessionId, cancellationToken);
+            var response = new DirectRealtimeSessionErrorResponse
+            {
+                Error = ex.Message,
+                UpstreamStatus = (int)ex.StatusCode
+            };
+
+            return Results.Json(
+                response,
+                OpenAiDirectRealtimeJsonContext.Default.DirectRealtimeSessionErrorResponse,
+                statusCode: StatusCodes.Status502BadGateway);
+        }
+        catch (InvalidOperationException ex)
+        {
+            await registry.RemoveAsync(voiceSessionId, cancellationToken);
+            var response = new DirectRealtimeSessionErrorResponse
+            {
+                Error = ex.Message
+            };
+
+            return Results.Json(
+                response,
+                OpenAiDirectRealtimeJsonContext.Default.DirectRealtimeSessionErrorResponse,
+                statusCode: StatusCodes.Status500InternalServerError);
         }
         catch
         {
@@ -287,7 +315,7 @@ public static class OpenAiDirectRealtimeEndpointExtensions
         {
             var error = await response.Content.ReadAsStringAsync(cancellationToken);
             options.Log?.Invoke(LogLevel.Error, $"Failed to create OpenAI direct realtime client secret: {response.StatusCode} - {error}");
-            throw new InvalidOperationException($"Failed to create OpenAI direct realtime client secret: {response.StatusCode}");
+            throw new OpenAiDirectRealtimeClientSecretException(response.StatusCode, $"Failed to create OpenAI direct realtime client secret: {(int)response.StatusCode} {response.StatusCode} - {NormalizeError(error)}");
         }
 
         var json = await response.Content.ReadAsStringAsync(cancellationToken);
@@ -304,6 +332,16 @@ public static class OpenAiDirectRealtimeEndpointExtensions
     {
         return options.AuthorizeRequest?.Invoke(httpContext)
             ?? httpContext.User.Identity?.IsAuthenticated == true;
+    }
+
+    private static string NormalizeError(string error)
+    {
+        if (string.IsNullOrWhiteSpace(error))
+        {
+            return "OpenAI returned an empty error response.";
+        }
+
+        return error.Length <= 500 ? error : error[..500];
     }
 
     private static JsonElement CreateEmptyJsonObject()
@@ -365,4 +403,15 @@ public static class OpenAiDirectRealtimeEndpointExtensions
         var trimmed = routePrefix.Trim().TrimEnd('/');
         return trimmed.StartsWith("/", StringComparison.Ordinal) ? trimmed : "/" + trimmed;
     }
+}
+
+internal sealed class OpenAiDirectRealtimeClientSecretException : Exception
+{
+    public OpenAiDirectRealtimeClientSecretException(HttpStatusCode statusCode, string message)
+        : base(message)
+    {
+        StatusCode = statusCode;
+    }
+
+    public HttpStatusCode StatusCode { get; }
 }
