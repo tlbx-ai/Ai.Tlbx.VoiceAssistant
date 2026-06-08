@@ -167,7 +167,7 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi.Models
     /// </summary>
     public class InputAudioTranscription
     {
-        public OpenAiTranscriptionModel Model { get; set; } = OpenAiTranscriptionModel.GptRealtimeWhisper;
+        public OpenAiTranscriptionModel Model { get; set; } = OpenAiTranscriptionModel.Gpt4oTranscribe;
 
         /// <summary>
         /// Whether to enable transcription.

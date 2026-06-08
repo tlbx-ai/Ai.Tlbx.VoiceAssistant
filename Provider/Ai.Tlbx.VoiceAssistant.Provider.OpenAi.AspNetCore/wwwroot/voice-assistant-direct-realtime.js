@@ -11,6 +11,10 @@ export class OpenAiDirectRealtimeClient
         this.mediaStream = null;
         this.voiceSessionId = null;
         this.session = null;
+        this.audioElement = null;
+        this.ownsAudioElement = false;
+        this.audioMonitor = null;
+        this.recentChats = [];
         this.clientActionHandlers = new Map();
         this.pendingFunctionArgs = new Map();
         this.pendingFunctionNames = new Map();
@@ -83,6 +87,16 @@ export class OpenAiDirectRealtimeClient
             this.mediaStream = null;
         }
 
+        this.stopAudioLevelMonitor();
+
+        if (this.ownsAudioElement && this.audioElement)
+        {
+            this.audioElement.remove();
+        }
+
+        this.audioElement = null;
+        this.ownsAudioElement = false;
+
         this.emitStatus('Disconnected');
     }
 
@@ -147,12 +161,40 @@ export class OpenAiDirectRealtimeClient
     {
         const audioElement = this.options.audioElement ?? document.createElement('audio');
         audioElement.autoplay = true;
+        audioElement.playsInline = true;
+        audioElement.muted = false;
+        this.audioElement = audioElement;
+        this.ownsAudioElement = !this.options.audioElement;
+        if (this.ownsAudioElement)
+        {
+            audioElement.style.display = 'none';
+            document.body.appendChild(audioElement);
+        }
 
         this.peerConnection = new RTCPeerConnection(this.options.rtcConfiguration);
         this.peerConnection.ontrack = event =>
         {
             audioElement.srcObject = event.streams[0];
+            void audioElement.play().catch(error =>
+            {
+                this.emitDiagnostic('remote_audio.play_failed', {
+                    message: error instanceof Error ? error.message : String(error)
+                });
+            });
             this.emitStatus('Speaking');
+        };
+        this.peerConnection.onconnectionstatechange = () =>
+        {
+            this.emitDiagnostic('peer_connection.state', {
+                connectionState: this.peerConnection?.connectionState,
+                iceConnectionState: this.peerConnection?.iceConnectionState
+            });
+        };
+        this.peerConnection.oniceconnectionstatechange = () =>
+        {
+            this.emitDiagnostic('peer_connection.ice_state', {
+                iceConnectionState: this.peerConnection?.iceConnectionState
+            });
         };
 
         this.dataChannel = this.peerConnection.createDataChannel('oai-events');
@@ -164,10 +206,24 @@ export class OpenAiDirectRealtimeClient
             audio: this.buildAudioConstraints(config)
         });
 
-        for (const track of this.mediaStream.getAudioTracks())
+        const audioTracks = this.mediaStream.getAudioTracks();
+        if (audioTracks.length === 0)
+        {
+            throw new Error('Browser returned no microphone audio track');
+        }
+
+        for (const track of audioTracks)
         {
             this.peerConnection.addTrack(track, this.mediaStream);
+            this.emitDiagnostic('microphone.track', {
+                id: track.id,
+                label: track.label,
+                enabled: track.enabled,
+                muted: track.muted,
+                readyState: track.readyState
+            });
         }
+        this.startAudioLevelMonitor(this.mediaStream);
 
         const offer = await this.peerConnection.createOffer();
         await this.peerConnection.setLocalDescription(offer);
@@ -219,10 +275,16 @@ export class OpenAiDirectRealtimeClient
                 this.emitStatus('Listening');
                 break;
 
+            case 'input_audio_buffer.speech_stopped':
+            case 'input_audio_buffer.committed':
+                this.emitStatus('Processing');
+                break;
+
             case 'response.created':
                 this.emitStatus('Processing');
                 break;
 
+            case 'response.output_audio.delta':
             case 'response.audio.delta':
                 this.emitStatus('Speaking');
                 break;
@@ -231,6 +293,7 @@ export class OpenAiDirectRealtimeClient
                 this.emitChat('user', event.transcript ?? '');
                 break;
 
+            case 'response.output_audio_transcript.done':
             case 'response.audio_transcript.done':
             case 'response.output_text.done':
                 this.emitChat('assistant', event.transcript ?? event.text ?? '');
@@ -244,9 +307,134 @@ export class OpenAiDirectRealtimeClient
                 void this.executeServerTool(event);
                 break;
 
+            case 'error':
+                this.options.onError?.(formatRealtimeError(event));
+                this.emitStatus('Error');
+                break;
+
             case 'response.done':
+                this.emitAssistantMessagesFromResponse(event);
                 this.emitStatus('Listening');
                 break;
+        }
+    }
+
+    startAudioLevelMonitor(stream)
+    {
+        this.stopAudioLevelMonitor();
+
+        const AudioContextClass = window.AudioContext ?? window.webkitAudioContext;
+        if (!AudioContextClass)
+        {
+            return;
+        }
+
+        try
+        {
+            const audioContext = new AudioContextClass();
+            const source = audioContext.createMediaStreamSource(stream);
+            const analyser = audioContext.createAnalyser();
+            analyser.fftSize = 512;
+            source.connect(analyser);
+
+            const data = new Uint8Array(analyser.fftSize);
+            const startedAt = performance.now();
+            let frameCount = 0;
+            let meaningfulFrameCount = 0;
+            let lastLevelEmit = 0;
+            let warnedSilent = false;
+
+            const tick = () =>
+            {
+                analyser.getByteTimeDomainData(data);
+                let peak = 0;
+                for (let index = 0; index < data.length; index++)
+                {
+                    peak = Math.max(peak, Math.abs(data[index] - 128) / 128);
+                }
+
+                frameCount++;
+                if (peak > 0.015)
+                {
+                    meaningfulFrameCount++;
+                }
+
+                const now = performance.now();
+                if (now - lastLevelEmit > 1000)
+                {
+                    this.emitDiagnostic('microphone.level', {
+                        peak,
+                        frameCount,
+                        meaningfulFrameCount
+                    });
+                    lastLevelEmit = now;
+                }
+
+                if (!warnedSilent && now - startedAt > 4000 && meaningfulFrameCount === 0)
+                {
+                    warnedSilent = true;
+                    this.emitDiagnostic('microphone.silent', {
+                        frameCount,
+                        meaningfulFrameCount
+                    });
+                }
+
+                this.audioMonitor.raf = window.requestAnimationFrame(tick);
+            };
+
+            this.audioMonitor = {
+                audioContext,
+                source,
+                raf: window.requestAnimationFrame(tick)
+            };
+        }
+        catch (error)
+        {
+            this.emitDiagnostic('microphone.monitor_failed', {
+                message: error instanceof Error ? error.message : String(error)
+            });
+        }
+    }
+
+    stopAudioLevelMonitor()
+    {
+        if (!this.audioMonitor)
+        {
+            return;
+        }
+
+        if (this.audioMonitor.raf)
+        {
+            window.cancelAnimationFrame(this.audioMonitor.raf);
+        }
+
+        void this.audioMonitor.audioContext?.close?.();
+        this.audioMonitor = null;
+    }
+
+    emitAssistantMessagesFromResponse(event)
+    {
+        const outputs = event.response?.output;
+        if (!Array.isArray(outputs))
+        {
+            return;
+        }
+
+        for (const output of outputs)
+        {
+            if (output?.type !== 'message' || output?.role !== 'assistant' || !Array.isArray(output.content))
+            {
+                continue;
+            }
+
+            for (const part of output.content)
+            {
+                const text = part?.transcript ?? part?.text;
+                if (text)
+                {
+                    this.emitChat('assistant', text);
+                }
+            }
         }
     }
 
@@ -416,6 +604,14 @@ export class OpenAiDirectRealtimeClient
             toolCallType,
             timestamp: new Date().toISOString()
         };
+        if (this.isDuplicateChat(chat))
+        {
+            return;
+        }
+
+        this.recentChats.push(chat);
+        this.recentChats = this.recentChats.slice(-8);
+
         this.options.onChatMessage?.(chat);
         this.sendControl({
             type: 'event',
@@ -425,6 +621,47 @@ export class OpenAiDirectRealtimeClient
                 content,
                 toolName,
                 toolCallType
+            }
+        });
+    }
+
+    isDuplicateChat(chat)
+    {
+        const chatTime = Date.parse(chat.timestamp);
+        return this.recentChats.some(existing =>
+        {
+            if (existing.role !== chat.role
+                || existing.toolName !== chat.toolName
+                || existing.toolCallType !== chat.toolCallType
+                || existing.content.trim() !== chat.content.trim())
+            {
+                return false;
+            }
+
+            const existingTime = Date.parse(existing.timestamp);
+            if (!Number.isFinite(chatTime) || !Number.isFinite(existingTime))
+            {
+                return true;
+            }
+
+            return Math.abs(chatTime - existingTime) <= 10000;
+        });
+    }
+
+    emitDiagnostic(type, detail)
+    {
+        const diagnostic = {
+            type,
+            detail,
+            timestamp: new Date().toISOString()
+        };
+        this.options.onDiagnostic?.(diagnostic);
+        this.sendControl({
+            type: 'event',
+            event: {
+                type: 'diagnostic',
+                content: type,
+                data: detail
             }
         });
     }
@@ -452,6 +689,12 @@ function safeJsonParse(text)
     {
         return {};
     }
+}
+
+function formatRealtimeError(event)
+{
+    const error = event.error ?? event;
+    return error.message ?? error.code ?? error.type ?? 'OpenAI Realtime error';
 }
 
 async function formatSessionError(response)
