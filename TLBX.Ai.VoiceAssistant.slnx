@@ -12,6 +12,7 @@
   </Folder>
   <Folder Name="/Provider/">
     <Project Path="Provider/Ai.Tlbx.VoiceAssistant.Provider.Google/Ai.Tlbx.VoiceAssistant.Provider.Google.csproj" />
+    <Project Path="Provider/Ai.Tlbx.VoiceAssistant.Provider.OpenAi.AspNetCore/Ai.Tlbx.VoiceAssistant.Provider.OpenAi.AspNetCore.csproj" />
     <Project Path="Provider/Ai.Tlbx.VoiceAssistant.Provider.OpenAi/Ai.Tlbx.VoiceAssistant.Provider.OpenAi.csproj" />
     <Project Path="Provider/Ai.Tlbx.VoiceAssistant.Provider.XAi/Ai.Tlbx.VoiceAssistant.Provider.XAi.csproj" />
     <Project Path="Provider/Ai.Tlbx.VoiceAssistant/Ai.Tlbx.VoiceAssistant.csproj" />

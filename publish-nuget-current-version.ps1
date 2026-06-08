@@ -51,6 +51,7 @@ else
 $projects = @(
     "Provider\Ai.Tlbx.VoiceAssistant\Ai.Tlbx.VoiceAssistant.csproj",
     "Provider\Ai.Tlbx.VoiceAssistant.Provider.OpenAi\Ai.Tlbx.VoiceAssistant.Provider.OpenAi.csproj",
+    "Provider\Ai.Tlbx.VoiceAssistant.Provider.OpenAi.AspNetCore\Ai.Tlbx.VoiceAssistant.Provider.OpenAi.AspNetCore.csproj",
     "Provider\Ai.Tlbx.VoiceAssistant.Provider.Google\Ai.Tlbx.VoiceAssistant.Provider.Google.csproj",
     "Provider\Ai.Tlbx.VoiceAssistant.Provider.XAi\Ai.Tlbx.VoiceAssistant.Provider.XAi.csproj",
     "Hardware\Ai.Tlbx.VoiceAssistant.Hardware.Windows\Ai.Tlbx.VoiceAssistant.Hardware.Windows.csproj",

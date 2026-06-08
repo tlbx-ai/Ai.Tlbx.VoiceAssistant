@@ -1,0 +1,33 @@
+<Project Sdk="Microsoft.NET.Sdk.Razor">
+
+  <PropertyGroup>
+    <TargetFrameworks>net9.0;net10.0</TargetFrameworks>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <WarningsAsErrors />
+    <StaticWebAssetBasePath>_content/Ai.Tlbx.VoiceAssistant.Provider.OpenAi.AspNetCore</StaticWebAssetBasePath>
+
+    <PackageId>Ai.Tlbx.VoiceAssistant.Provider.OpenAi.AspNetCore</PackageId>
+    <Description>ASP.NET Core and browser static assets for direct OpenAI Realtime WebRTC sessions with server-side tools.</Description>
+    <PackageTags>AI;OpenAI;VoiceAssistant;Realtime;WebRTC;ASP.NET Core</PackageTags>
+    <GeneratePackageOnBuild Condition="'$(Configuration)' == 'Release'">true</GeneratePackageOnBuild>
+    <PackageOutputPath>..\..\nupkg</PackageOutputPath>
+    <PackageRequireLicenseAcceptance>false</PackageRequireLicenseAcceptance>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+    <IsAotCompatible>true</IsAotCompatible>
+    <IsTrimmable>true</IsTrimmable>
+    <EnableTrimAnalyzer>true</EnableTrimAnalyzer>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+    <None Include="README.md" Pack="true" PackagePath="\" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Ai.Tlbx.VoiceAssistant\Ai.Tlbx.VoiceAssistant.csproj" />
+    <ProjectReference Include="..\Ai.Tlbx.VoiceAssistant.Provider.OpenAi\Ai.Tlbx.VoiceAssistant.Provider.OpenAi.csproj" />
+  </ItemGroup>
+
+</Project>
