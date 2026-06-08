@@ -446,7 +446,9 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi
                                 ? new TranscriptionConfig
                                 {
                                     Model = _settings.InputAudioTranscription.Model.ToApiString(),
-                                    Prompt = _settings.InputAudioTranscription.Prompt
+                                    Prompt = _settings.InputAudioTranscription.Model.SupportsTranscriptionPrompt()
+                                        ? _settings.InputAudioTranscription.Prompt
+                                        : null
                                 }
                                 : null,
                             TurnDetection = new TurnDetectionConfig

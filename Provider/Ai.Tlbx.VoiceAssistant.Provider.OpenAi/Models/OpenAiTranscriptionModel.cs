@@ -49,11 +49,13 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi.Models
             return model == OpenAiTranscriptionModel.Gpt4oTranscribeDiarize;
         }
 
+#pragma warning disable CS0618
         public static bool SupportsTranscriptionPrompt(this OpenAiTranscriptionModel model)
         {
-            return model != OpenAiTranscriptionModel.GptRealtimeWhisper &&
-                model != OpenAiTranscriptionModel.Gpt4oTranscribeDiarize;
+            return model == OpenAiTranscriptionModel.Gpt4oTranscribe ||
+                model == OpenAiTranscriptionModel.Whisper1;
         }
+#pragma warning restore CS0618
 
         public static bool SupportsRealtimeTurnDetection(this OpenAiTranscriptionModel model)
         {

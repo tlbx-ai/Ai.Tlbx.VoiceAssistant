@@ -98,7 +98,9 @@ internal sealed class OpenAiDirectRealtimeSessionRegistry : IOpenAiDirectRealtim
                         ? new TranscriptionConfig
                         {
                             Model = settings.InputAudioTranscription.Model.ToApiString(),
-                            Prompt = settings.InputAudioTranscription.Prompt ?? settings.TranscriptionHint,
+                            Prompt = settings.InputAudioTranscription.Model.SupportsTranscriptionPrompt()
+                                ? settings.InputAudioTranscription.Prompt ?? settings.TranscriptionHint
+                                : null,
                             Language = settings.MostLikelySpokenLanguage
                         }
                         : null,
