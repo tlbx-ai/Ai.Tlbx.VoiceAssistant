@@ -74,6 +74,7 @@ internal sealed class OpenAiDirectRealtimeSessionRegistry : IOpenAiDirectRealtim
         return new SessionConfig
         {
             Type = "realtime",
+            Model = settings.Model.ToApiString(),
             OutputModalities = ["audio"],
             Instructions = BuildInstructions(settings),
             MaxOutputTokens = settings.MaxTokens?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "inf",

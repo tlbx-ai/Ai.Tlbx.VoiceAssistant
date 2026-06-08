@@ -208,6 +208,9 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi.Protocol
         [JsonPropertyName("type")]
         public string Type { get; set; } = "realtime";
 
+        [JsonPropertyName("model")]
+        public string? Model { get; set; }
+
         [JsonPropertyName("output_modalities")]
         public List<string>? OutputModalities { get; set; }
 

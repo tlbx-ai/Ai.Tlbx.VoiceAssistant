@@ -183,7 +183,7 @@ export class OpenAiDirectRealtimeClient
 
         if (!sdpResponse.ok)
         {
-            throw new Error(`OpenAI Realtime WebRTC call failed: ${sdpResponse.status}`);
+            throw new Error(`OpenAI Realtime WebRTC call failed: ${sdpResponse.status}${await formatSessionError(sdpResponse)}`);
         }
 
         await this.peerConnection.setRemoteDescription({
