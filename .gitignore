@@ -42,3 +42,4 @@ nupkg/
 /external_repos/
 /nul
 tmpclaude-*
+.logs/
