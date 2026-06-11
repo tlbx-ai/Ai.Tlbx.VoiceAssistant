@@ -694,7 +694,7 @@ function safeJsonParse(text)
 function formatRealtimeError(event)
 {
     const error = event.error ?? event;
-    return error.message ?? error.code ?? error.type ?? 'OpenAI Realtime error';
+    return formatErrorValue(error) ?? 'OpenAI Realtime error';
 }
 
 async function formatSessionError(response)
@@ -715,6 +715,58 @@ async function formatSessionError(response)
     }
 
     const json = safeJsonParse(text);
-    const message = json.error ?? json.message ?? json.title ?? text;
+    const message = formatErrorValue(json.error) ?? formatErrorValue(json.message) ?? formatErrorValue(json.title) ?? text;
     return message ? ` - ${message}` : '';
+}
+
+function formatErrorValue(value)
+{
+    if (!value)
+    {
+        return '';
+    }
+
+    if (typeof value === 'string')
+    {
+        return value;
+    }
+
+    if (typeof value !== 'object')
+    {
+        return String(value);
+    }
+
+    const parts = [];
+    const message = value.message;
+    const code = value.code;
+    const type = value.type;
+
+    if (typeof message === 'string' && message.trim())
+    {
+        parts.push(message.trim());
+    }
+
+    if (typeof code === 'string' && code.trim())
+    {
+        parts.push(`code=${code.trim()}`);
+    }
+
+    if (typeof type === 'string' && type.trim())
+    {
+        parts.push(`type=${type.trim()}`);
+    }
+
+    if (parts.length > 0)
+    {
+        return parts.join(' ');
+    }
+
+    try
+    {
+        return JSON.stringify(value);
+    }
+    catch
+    {
+        return String(value);
+    }
 }
