@@ -12,11 +12,13 @@ dotnet add package Ai.Tlbx.VoiceAssistant.Hardware.Web
 
 ## Features
 
-- **48kHz capture** with browser echo cancellation, noise suppression, and auto gain
+- **Browser-native capture** with echo cancellation, noise suppression, and auto gain
 - **De-esser** (high-shelf EQ) to tame sibilance before amplification
 - **Compressor** (8:1 ratio) for consistent loudness across whispers and shouts
-- **Anti-aliasing filter** (Butterworth LPF) before downsampling
-- **Provider-specific sample rates**: 16kHz for Google, 24kHz for OpenAI/xAI
+- **Worklet resampler** from the browser's actual capture rate to provider PCM16 rates
+- **Provider-specific sample rates**: 16kHz for Google, 24kHz for xAI and legacy OpenAI WebSocket paths
+
+OpenAI live voice on Blazor Server should use `Ai.Tlbx.VoiceAssistant.Provider.OpenAi.AspNetCore` for direct browser-to-OpenAI WebRTC audio. This package remains the PCM hardware path for Google, xAI, microphone tests, and transcription workflows.
 
 ## Requirements
 

@@ -5,6 +5,7 @@ using Ai.Tlbx.VoiceAssistant.Hardware.Web;
 using Ai.Tlbx.VoiceAssistant.Interfaces;
 using Ai.Tlbx.VoiceAssistant.Models;
 using Ai.Tlbx.VoiceAssistant.Provider.OpenAi.Extensions;
+using Ai.Tlbx.VoiceAssistant.Provider.OpenAi.AspNetCore;
 using Ai.Tlbx.VoiceAssistant.Provider.Google.Extensions;
 using Ai.Tlbx.VoiceAssistant.BuiltInTools;
 using Ai.Tlbx.VoiceAssistant.Demo.Web.Tools;
@@ -28,12 +29,18 @@ public class Program
 
 
         // Register provider factory
-        builder.Services.AddSingleton<IVoiceProviderFactory, VoiceProviderFactory>();
+        builder.Services.AddScoped<IVoiceProviderFactory, VoiceProviderFactory>();
 
         // Register services needed by VoiceAssistant (without registering VoiceAssistant itself)
         // since we create it manually in Home.razor with the factory pattern
         builder.Services.AddScoped<IAudioHardwareAccess, WebAudioAccess>();
+        builder.Services.AddScoped<OpenAiDirectRealtimeVoiceProvider>();
         builder.Services.AddSingleton<Action<LogLevel, string>>(sp => (level, message) => Debug.WriteLine($"[{level}] {message}"));
+        builder.Services.AddOpenAiDirectRealtimeVoice(options =>
+        {
+            options.AuthorizeRequest = _ => true;
+            options.Log = (level, message) => Debug.WriteLine($"[DirectRealtime:{level}] {message}");
+        });
 
         // Register all built-in tools directly
         builder.Services.AddTransient<IVoiceTool, TimeTool>();
@@ -60,8 +67,10 @@ public class Program
         app.UseHttpsRedirection();
 
         app.UseAntiforgery();
+        app.UseWebSockets();
 
         app.MapStaticAssets();
+        app.MapOpenAiDirectRealtimeVoice();
         app.MapRazorComponents<App>()
             .AddInteractiveServerRenderMode();
 

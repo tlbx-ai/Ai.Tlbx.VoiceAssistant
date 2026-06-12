@@ -1,15 +1,16 @@
-# AI Real-Time Audio Web Demo
+# Ai.Tlbx.VoiceAssistant Web Demo
 
-This is a demo web application showcasing the real-time speech-to-text and text-to-speech capabilities of the Ai.Tlbx.RealTimeAudio library, integrated with OpenAI's API.
+This is a Blazor Server demo for `Ai.Tlbx.VoiceAssistant`.
 
 ## Overview
 
-This demo application has been refactored to use reusable Razor components from the `Ai.Tlbx.RealTime.WebUi` library, offering a more maintainable and modular architecture.
+The demo uses reusable Razor components from `Ai.Tlbx.VoiceAssistant.WebUi` and shows the library's provider switching, microphone selection, live voice sessions, realtime transcription, and tool-call flow.
 
 ## Features
 
 ### Voice Chat Functionality
 - **Real-time voice interaction** with an AI assistant
+- **OpenAI direct WebRTC on Blazor Server**: browser microphone/playback audio goes directly between the browser and OpenAI; the server only prepares ephemeral sessions and executes tools
 - **Provider model selection** with obsolete models kept visible for manual regression checks
 - Start/stop voice recording controls
 - Voice selection for AI responses
@@ -35,14 +36,15 @@ This demo application has been refactored to use reusable Razor components from 
 
 The application uses:
 - Blazor Server for the web framework
-- OpenAI API for AI processing
-- WebAudio API via JS interop for client-side audio capture
-- Reusable UI components from `Ai.Tlbx.RealTime.WebUi`
+- OpenAI Realtime direct WebRTC for Blazor Server voice sessions
+- Google Gemini Live and xAI Grok voice through the normal browser PCM hardware path
+- WebAudio API via JS interop for microphone tests, transcription, and non-direct providers
+- Reusable UI components from `Ai.Tlbx.VoiceAssistant.WebUi`
 
 ## Getting Started
 
-1. Ensure you have .NET 9.0 installed
-2. Configure your OpenAI API key in appsettings.json
+1. Ensure you have .NET 9 SDK or later
+2. Set `OPENAI_API_KEY` for OpenAI voice sessions
 3. Run the application using `dotnet run`
 
 ## Component Usage
@@ -61,7 +63,7 @@ This demo showcases how to use the RCL components:
 ## Implementation Notes
 
 The demo provides a complete reference implementation showing how to:
-- Initialize and configure the OpenAI Real-Time API access
+- Initialize and configure OpenAI direct Realtime browser sessions
 - Handle microphone permissions and device selection
 - Manage voice chat sessions
 - Dynamically enable/disable AI tools per session
@@ -75,19 +77,7 @@ The demo provides a complete reference implementation showing how to:
 
 ## Environmental Variables
 
-Configure these settings in:
-- `appsettings.json` OR
-- User secrets (`dotnet user-secrets`) OR
-- Environment variables
-
-```json
-{
-  "OpenAI": {
-    "ApiKey": "sk-...",
-    "VoiceModel": "tts-1" 
-  }
-}
-```
+Set `OPENAI_API_KEY` in the environment for OpenAI sessions. Set `GOOGLE_API_KEY` or `XAI_API_KEY` when testing those providers.
 
 ## Local Development
 
@@ -97,13 +87,18 @@ Configure these settings in:
 
 ```bash
 dotnet build
-cd Demo/Ai.Tlbx.RealTimeAudio.Demo.Web
-dotnet run
+dotnet run --project Demo/Ai.Tlbx.VoiceAssistant.Demo.Web/Ai.Tlbx.VoiceAssistant.Demo.Web.csproj
+```
+
+Run the automated OpenAI direct-WebRTC browser smoke gate:
+
+```bash
+node tools/direct-demo-browser-smoke.mjs --start-server --configuration=Release
 ```
 
 ## Razor Class Library Integration
 
-This demo uses UI components from the `Ai.Tlbx.RealTime.WebUi` Razor Class Library:
+This demo uses UI components from the `Ai.Tlbx.VoiceAssistant.WebUi` Razor Class Library:
 
 - `ChatWidget` - displays conversation
 - `AiTalkControl` - start/stop buttons
@@ -132,4 +127,5 @@ Try these commands to test the AI tools:
 
 - Microphone permissions must be granted by the browser
 - Web Audio API requires HTTPS in production or localhost for development
+- OpenAI direct WebRTC requires `app.UseWebSockets()`, `app.MapOpenAiDirectRealtimeVoice()`, and `OPENAI_API_KEY`
 - Check browser console for detailed error messages 

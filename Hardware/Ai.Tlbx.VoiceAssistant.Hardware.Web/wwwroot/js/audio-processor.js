@@ -1,62 +1,33 @@
 ﻿// audio-processor.js
-// AudioRecorderProcessor: Captures at 48kHz, downsamples to provider's required rate (16kHz/24kHz)
-
-// Pre-calculated 2nd order Butterworth low-pass filter configs for supported target rates
-// All assume 48kHz capture rate
-const DOWNSAMPLE_CONFIGS = {
-    // 48kHz → 24kHz (ratio 2:1), LPF at 8kHz
-    24000: {
-        ratio: 2,
-        b: [0.1550, 0.3101, 0.1550],
-        a: [-0.6202, 0.2404]
-    },
-    // 48kHz → 16kHz (ratio 3:1), LPF at 6kHz
-    16000: {
-        ratio: 3,
-        b: [0.0976, 0.1953, 0.0976],
-        a: [-0.9428, 0.3333]
-    },
-    // 48kHz → 48kHz (no downsampling), LPF at 16kHz for consistency
-    48000: {
-        ratio: 1,
-        b: [0.2929, 0.5858, 0.2929],
-        a: [-0.0, 0.1716]
-    }
-};
+// AudioRecorderProcessor: captures at the browser's real AudioWorklet sampleRate,
+// applies a light anti-aliasing filter, and resamples to provider PCM16 rate.
 
 class AudioRecorderProcessor extends AudioWorkletProcessor {
     constructor(options) {
         super();
 
-        // Get target sample rate from processor options (default 24kHz for OpenAI)
-        const targetRate = options?.processorOptions?.targetSampleRate || 24000;
-        const config = DOWNSAMPLE_CONFIGS[targetRate];
+        const requestedTargetRate = Number(options?.processorOptions?.targetSampleRate || 24000);
+        this.targetRate = normalizeTargetRate(requestedTargetRate);
+        this.sourceRate = sampleRate;
+        this.resampleStep = this.sourceRate / this.targetRate;
 
-        if (!config) {
-            console.error(`[AudioProcessor] Unsupported target rate: ${targetRate}Hz. Using 24kHz.`);
-            this.config = DOWNSAMPLE_CONFIGS[24000];
-            this.targetRate = 24000;
-        } else {
-            this.config = config;
-            this.targetRate = targetRate;
-        }
+        console.log(`[AudioProcessor] ${this.sourceRate}Hz -> ${this.targetRate}Hz PCM16 (step ${this.resampleStep.toFixed(6)})`);
 
-        console.log(`[AudioProcessor] 48kHz → ${this.targetRate}Hz (ratio ${this.config.ratio}:1)`);
-
-        // Buffer size scales with target rate (base 2048 samples @ 24kHz ≈ 85ms)
-        const bufferSize = Math.floor(2048 * (this.targetRate / 24000));
+        const targetChunkMs = 80;
+        const bufferSize = Math.max(320, Math.round(this.targetRate * targetChunkMs / 1000));
         this.buffer = new Int16Array(bufferSize);
         this.bufferIndex = 0;
         this.isActive = true;
         this.isStopping = false;
         this.stopCountdown = 0;
 
-        // Anti-aliasing filter state
-        this.filterX = [0, 0];
-        this.filterY = [0, 0];
-
-        // Downsampling counter
-        this.sampleIndex = 0;
+        const cutoff = Math.min(this.targetRate * 0.45, this.sourceRate * 0.45);
+        const rc = 1 / (2 * Math.PI * cutoff);
+        const dt = 1 / this.sourceRate;
+        this.lowPassAlpha = dt / (rc + dt);
+        this.lowPassState = 0;
+        this.resampleBuffer = [];
+        this.sourceCursor = 0;
 
         this.port.onmessage = (event) => {
             if (event.data?.command === 'stop') {
@@ -67,24 +38,43 @@ class AudioRecorderProcessor extends AudioWorkletProcessor {
         };
     }
 
-    // 2nd order IIR Butterworth low-pass filter using config coefficients
     applyAntiAliasingFilter(sample) {
-        const b = this.config.b;
-        const a = this.config.a;
+        this.lowPassState += this.lowPassAlpha * (sample - this.lowPassState);
+        return this.lowPassState;
+    }
 
-        const output = b[0] * sample
-                     + b[1] * this.filterX[0]
-                     + b[2] * this.filterX[1]
-                     - a[0] * this.filterY[0]
-                     - a[1] * this.filterY[1];
+    emitPcmSample(sample) {
+        const clamped = Math.max(-1, Math.min(1, sample));
+        const pcmValue = clamped < 0 ? clamped * 32768 : clamped * 32767;
+        this.buffer[this.bufferIndex++] = Math.round(pcmValue);
 
-        // Shift history
-        this.filterX[1] = this.filterX[0];
-        this.filterX[0] = sample;
-        this.filterY[1] = this.filterY[0];
-        this.filterY[0] = output;
+        if (this.bufferIndex >= this.buffer.length) {
+            this.port.postMessage({
+                audioData: this.buffer.slice(0)
+            });
+            this.bufferIndex = 0;
+        }
+    }
 
-        return output;
+    resampleInput(input) {
+        for (let i = 0; i < input.length; i++) {
+            this.resampleBuffer.push(this.applyAntiAliasingFilter(input[i]));
+        }
+
+        while (this.sourceCursor + 1 < this.resampleBuffer.length) {
+            const index = Math.floor(this.sourceCursor);
+            const fraction = this.sourceCursor - index;
+            const current = this.resampleBuffer[index];
+            const next = this.resampleBuffer[index + 1];
+            this.emitPcmSample(current + ((next - current) * fraction));
+            this.sourceCursor += this.resampleStep;
+        }
+
+        const dropCount = Math.max(0, Math.floor(this.sourceCursor) - 1);
+        if (dropCount > 0) {
+            this.resampleBuffer = this.resampleBuffer.slice(dropCount);
+            this.sourceCursor -= dropCount;
+        }
     }
 
     process(inputs, outputs) {
@@ -111,35 +101,19 @@ class AudioRecorderProcessor extends AudioWorkletProcessor {
             return true;
         }
 
-        const ratio = this.config.ratio;
-
-        // Process each sample: apply anti-aliasing filter, then downsample
-        for (let i = 0; i < input.length; i++) {
-            const filtered = this.applyAntiAliasingFilter(input[i]);
-
-            // Downsample N:1 based on config ratio
-            this.sampleIndex++;
-            if (this.sampleIndex >= ratio) {
-                this.sampleIndex = 0;
-
-                // Convert filtered sample to PCM16
-                const clamped = Math.max(-1, Math.min(1, filtered));
-                const pcmValue = clamped < 0 ? clamped * 32768 : clamped * 32767;
-
-                this.buffer[this.bufferIndex++] = Math.floor(pcmValue);
-
-                // Send buffer when full
-                if (this.bufferIndex >= this.buffer.length) {
-                    this.port.postMessage({
-                        audioData: this.buffer.slice(0)
-                    });
-                    this.bufferIndex = 0;
-                }
-            }
-        }
+        this.resampleInput(input);
 
         return true;
     }
+}
+
+function normalizeTargetRate(value) {
+    if (value === 16000 || value === 24000 || value === 44100 || value === 48000) {
+        return value;
+    }
+
+    console.warn(`[AudioProcessor] Unsupported target rate: ${value}Hz. Using 24000Hz.`);
+    return 24000;
 }
 
 registerProcessor('audio-recorder-processor', AudioRecorderProcessor);

@@ -14,6 +14,7 @@
 ```bash
 dotnet add package Ai.Tlbx.VoiceAssistant
 dotnet add package Ai.Tlbx.VoiceAssistant.Provider.OpenAi   # and/or .Google, .XAi
+dotnet add package Ai.Tlbx.VoiceAssistant.Provider.OpenAi.AspNetCore
 dotnet add package Ai.Tlbx.VoiceAssistant.Hardware.Web
 ```
 
@@ -28,12 +29,24 @@ XAI_API_KEY=xai-...
 ```csharp
 // Register audio hardware for Blazor
 builder.Services.AddScoped<IAudioHardwareAccess, WebAudioAccess>();
+
+// OpenAI on Blazor Server uses direct browser-to-OpenAI WebRTC audio.
+// Only ephemeral session creation and tool calls go through your server.
+builder.Services.AddOpenAiDirectRealtimeVoice(options =>
+{
+    options.AuthorizeRequest = context => context.User.Identity?.IsAuthenticated == true;
+});
+builder.Services.AddScoped<OpenAiDirectRealtimeVoiceProvider>();
+
+app.UseWebSockets();
+app.MapOpenAiDirectRealtimeVoice();
 ```
 
 **4. Create a voice page** (`Voice.razor`):
 ```razor
 @page "/voice"
 @inject IAudioHardwareAccess AudioHardware
+@inject IServiceProvider ServiceProvider
 
 <select @bind="_selectedProvider">
     <option value="openai">OpenAI</option>
@@ -65,7 +78,7 @@ builder.Services.AddScoped<IAudioHardwareAccess, WebAudioAccess>();
         var (provider, settings) = _selectedProvider switch
         {
             "openai" => (
-                (IVoiceProvider)new OpenAiVoiceProvider("sk-..."),
+                (IVoiceProvider)ServiceProvider.GetRequiredService<OpenAiDirectRealtimeVoiceProvider>(),
                 (IVoiceSettings)new OpenAiVoiceSettings { Instructions = "You are helpful." }
             ),
             "google" => (
@@ -97,6 +110,7 @@ builder.Services.AddScoped<IAudioHardwareAccess, WebAudioAccess>();
 |---------|---------|-------|
 | `Ai.Tlbx.VoiceAssistant` | Core orchestrator | [![NuGet](https://img.shields.io/nuget/v/Ai.Tlbx.VoiceAssistant.svg)](https://www.nuget.org/packages/Ai.Tlbx.VoiceAssistant/) |
 | `...Provider.OpenAi` | OpenAI realtime voice and transcription | [![NuGet](https://img.shields.io/nuget/v/Ai.Tlbx.VoiceAssistant.Provider.OpenAi.svg)](https://www.nuget.org/packages/Ai.Tlbx.VoiceAssistant.Provider.OpenAi/) |
+| `...Provider.OpenAi.AspNetCore` | Blazor Server direct OpenAI WebRTC transport and server-side tools | [![NuGet](https://img.shields.io/nuget/v/Ai.Tlbx.VoiceAssistant.Provider.OpenAi.AspNetCore.svg)](https://www.nuget.org/packages/Ai.Tlbx.VoiceAssistant.Provider.OpenAi.AspNetCore/) |
 | `...Provider.Google` | Google Gemini Live API | [![NuGet](https://img.shields.io/nuget/v/Ai.Tlbx.VoiceAssistant.Provider.Google.svg)](https://www.nuget.org/packages/Ai.Tlbx.VoiceAssistant.Provider.Google/) |
 | `...Provider.XAi` | xAI Grok Voice Agent API | [![NuGet](https://img.shields.io/nuget/v/Ai.Tlbx.VoiceAssistant.Provider.XAi.svg)](https://www.nuget.org/packages/Ai.Tlbx.VoiceAssistant.Provider.XAi/) |
 | `...Hardware.Web` | Browser audio (Blazor) | [![NuGet](https://img.shields.io/nuget/v/Ai.Tlbx.VoiceAssistant.Hardware.Web.svg)](https://www.nuget.org/packages/Ai.Tlbx.VoiceAssistant.Hardware.Web/) |
@@ -470,6 +484,12 @@ Run it locally:
 
 ```bash
 dotnet watch run --project Demo/Ai.Tlbx.VoiceAssistant.Demo.Web/Ai.Tlbx.VoiceAssistant.Demo.Web.csproj --launch-profile https
+```
+
+For the Blazor Server OpenAI direct-WebRTC path, run the browser smoke gate. It starts the web demo, grants a fake microphone in headless Chrome, clicks Start, and verifies that the browser receives a prepared session, opens the server control WebSocket, and connects directly to OpenAI Realtime:
+
+```bash
+node tools/direct-demo-browser-smoke.mjs --start-server --configuration=Release
 ```
 
 For native Windows/Linux validation, run the terminal demo:

@@ -18,6 +18,7 @@ export class OpenAiDirectRealtimeClient
         this.clientActionHandlers = new Map();
         this.pendingFunctionArgs = new Map();
         this.pendingFunctionNames = new Map();
+        this.pendingRealtimeEvents = [];
     }
 
     registerClientAction(action, handler)
@@ -27,7 +28,17 @@ export class OpenAiDirectRealtimeClient
 
     async start(config)
     {
-        this.emitStatus('Connecting');
+        if (this.peerConnection || this.dataChannel || this.controlSocket || this.mediaStream || this.audioElement)
+        {
+            await this.stop();
+        }
+
+        this.pendingRealtimeEvents = [];
+        this.pendingFunctionArgs.clear();
+        this.pendingFunctionNames.clear();
+        this.recentChats = [];
+
+        this.emitConnectionPhase('session.requesting', 'Requesting OpenAI browser session...');
         const sessionResponse = await fetch(this.options.sessionUrl, {
             method: 'POST',
             credentials: this.options.credentials ?? 'include',
@@ -45,9 +56,10 @@ export class OpenAiDirectRealtimeClient
 
         this.session = await sessionResponse.json();
         this.voiceSessionId = this.session.voiceSessionId;
+        this.emitConnectionPhase('session.ready', 'OpenAI browser session prepared');
         await this.openControlSocket(this.session.controlUrl);
         await this.openRealtimePeerConnection(config);
-        this.emitStatus('Connected');
+        this.emitConnectionPhase('session.connected', 'Connected to OpenAI');
     }
 
     async stop()
@@ -96,6 +108,9 @@ export class OpenAiDirectRealtimeClient
 
         this.audioElement = null;
         this.ownsAudioElement = false;
+        this.pendingRealtimeEvents = [];
+        this.pendingFunctionArgs.clear();
+        this.pendingFunctionNames.clear();
 
         this.emitStatus('Disconnected');
     }
@@ -118,6 +133,7 @@ export class OpenAiDirectRealtimeClient
 
     async openControlSocket(controlUrl)
     {
+        this.emitConnectionPhase('control.connecting', 'Opening server control channel...');
         const url = this.toWebSocketUrl(controlUrl);
         this.controlSocket = new WebSocket(url);
 
@@ -138,6 +154,7 @@ export class OpenAiDirectRealtimeClient
             this.controlSocket.onopen = () =>
             {
                 window.clearTimeout(timeout);
+                this.emitConnectionPhase('control.open', 'Server control channel open');
                 resolve();
             };
 
@@ -159,6 +176,7 @@ export class OpenAiDirectRealtimeClient
 
     async openRealtimePeerConnection(config)
     {
+        this.emitConnectionPhase('webrtc.initializing', 'Preparing browser audio pipeline...');
         const audioElement = this.options.audioElement ?? document.createElement('audio');
         audioElement.autoplay = true;
         audioElement.playsInline = true;
@@ -199,9 +217,15 @@ export class OpenAiDirectRealtimeClient
 
         this.dataChannel = this.peerConnection.createDataChannel('oai-events');
         this.dataChannel.onmessage = event => this.handleRealtimeEvent(JSON.parse(event.data));
-        this.dataChannel.onopen = () => this.emitStatus('Listening');
+        this.dataChannel.onopen = () =>
+        {
+            this.emitConnectionPhase('datachannel.open', 'Realtime event channel open');
+            this.flushPendingRealtimeEvents();
+            this.emitStatus('Listening');
+        };
         this.dataChannel.onerror = () => this.emitStatus('Error');
 
+        this.emitConnectionPhase('microphone.requesting', 'Requesting microphone stream...');
         this.mediaStream = await navigator.mediaDevices.getUserMedia({
             audio: this.buildAudioConstraints(config)
         });
@@ -223,11 +247,14 @@ export class OpenAiDirectRealtimeClient
                 readyState: track.readyState
             });
         }
+        this.emitConnectionPhase('microphone.ready', 'Microphone stream ready');
         this.startAudioLevelMonitor(this.mediaStream);
 
+        this.emitConnectionPhase('webrtc.offer.creating', 'Creating WebRTC offer...');
         const offer = await this.peerConnection.createOffer();
         await this.peerConnection.setLocalDescription(offer);
 
+        this.emitConnectionPhase('openai.connecting', 'Connecting browser audio to OpenAI...');
         const sdpResponse = await fetch(REALTIME_CALLS_URL, {
             method: 'POST',
             body: offer.sdp,
@@ -246,6 +273,43 @@ export class OpenAiDirectRealtimeClient
             type: 'answer',
             sdp: await sdpResponse.text()
         });
+        this.emitConnectionPhase('webrtc.remote_description_set', 'OpenAI WebRTC answer accepted');
+    }
+
+    injectConversationHistory(messages)
+    {
+        if (!Array.isArray(messages))
+        {
+            return;
+        }
+
+        for (const message of messages)
+        {
+            if (!message?.content || (message.role !== 'user' && message.role !== 'assistant'))
+            {
+                continue;
+            }
+
+            this.sendRealtimeEvent({
+                type: 'conversation.item.create',
+                item: {
+                    type: 'message',
+                    role: message.role,
+                    content: [
+                        {
+                            type: message.role === 'user' ? 'input_text' : 'output_text',
+                            text: message.content
+                        }
+                    ]
+                }
+            });
+        }
+    }
+
+    interrupt()
+    {
+        this.sendRealtimeEvent({ type: 'response.cancel' });
+        this.emitStatus('Interrupted');
     }
 
     buildAudioConstraints(config)
@@ -408,6 +472,14 @@ export class OpenAiDirectRealtimeClient
             window.cancelAnimationFrame(this.audioMonitor.raf);
         }
 
+        try
+        {
+            this.audioMonitor.source?.disconnect?.();
+        }
+        catch
+        {
+        }
+
         void this.audioMonitor.audioContext?.close?.();
         this.audioMonitor = null;
     }
@@ -567,6 +639,23 @@ export class OpenAiDirectRealtimeClient
         if (this.dataChannel?.readyState === 'open')
         {
             this.dataChannel.send(JSON.stringify(event));
+            return;
+        }
+
+        this.pendingRealtimeEvents.push(event);
+    }
+
+    flushPendingRealtimeEvents()
+    {
+        if (this.dataChannel?.readyState !== 'open')
+        {
+            return;
+        }
+
+        const pending = this.pendingRealtimeEvents.splice(0);
+        for (const event of pending)
+        {
+            this.dataChannel.send(JSON.stringify(event));
         }
     }
 
@@ -587,6 +676,15 @@ export class OpenAiDirectRealtimeClient
                 type: 'status',
                 content: status
             }
+        });
+    }
+
+    emitConnectionPhase(phase, status)
+    {
+        this.emitStatus(status);
+        this.emitDiagnostic('connection.phase', {
+            phase,
+            status
         });
     }
 
@@ -673,9 +771,52 @@ export class OpenAiDirectRealtimeClient
             return path;
         }
 
-        const absolute = new URL(path, this.options.sessionUrl);
+        const absolute = new URL(path, window.location.href);
         absolute.protocol = absolute.protocol === 'https:' ? 'wss:' : 'ws:';
         return absolute.toString();
+    }
+}
+
+export function createOpenAiDirectRealtimeClient(options, dotNetReference)
+{
+    return new OpenAiDirectRealtimeClient({
+        sessionUrl: options?.sessionUrl ?? '/api/voice/direct/session',
+        credentials: options?.credentials ?? 'include',
+        rtcConfiguration: options?.rtcConfiguration,
+        headers: () => options?.headers ?? {},
+        onStatus: status => invokeDotNet(dotNetReference, 'OnDirectRealtimeStatus', status),
+        onError: error => invokeDotNet(dotNetReference, 'OnDirectRealtimeError', error),
+        onChatMessage: chat => invokeDotNet(dotNetReference, 'OnDirectRealtimeChatMessage', JSON.stringify(chat)),
+        onDiagnostic: diagnostic => invokeDotNet(dotNetReference, 'OnDirectRealtimeDiagnostic', JSON.stringify(diagnostic)),
+        onRealtimeEvent: event =>
+        {
+            if (event?.type === 'input_audio_buffer.speech_started')
+            {
+                invokeDotNet(dotNetReference, 'OnDirectRealtimeSpeechStarted');
+            }
+
+            const usage = event?.response?.usage;
+            if (event?.type === 'response.done' && usage)
+            {
+                invokeDotNet(dotNetReference, 'OnDirectRealtimeUsage', JSON.stringify(usage));
+            }
+        }
+    });
+}
+
+function invokeDotNet(dotNetReference, methodName, ...args)
+{
+    try
+    {
+        const result = dotNetReference?.invokeMethodAsync?.(methodName, ...args);
+        if (result?.catch)
+        {
+            result.catch(error => console.warn(`[OpenAI Direct] .NET callback failed: ${methodName}`, error));
+        }
+    }
+    catch (error)
+    {
+        console.warn(`[OpenAI Direct] .NET callback failed: ${methodName}`, error);
     }
 }
 

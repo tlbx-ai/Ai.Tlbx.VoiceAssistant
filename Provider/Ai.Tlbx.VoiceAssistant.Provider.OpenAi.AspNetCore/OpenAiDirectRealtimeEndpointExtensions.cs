@@ -10,6 +10,7 @@ using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Routing;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 
 namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi.AspNetCore;
 
@@ -25,6 +26,8 @@ public static class OpenAiDirectRealtimeEndpointExtensions
         configure?.Invoke(options);
 
         services.AddSingleton(options);
+        services.AddSingleton<OpenAiDirectRealtimePreparedSessionStore>();
+        services.TryAddSingleton<IOpenAiDirectRealtimeSessionFactory, PreparedOpenAiDirectRealtimeSessionFactory>();
         services.AddSingleton<OpenAiDirectRealtimeSessionRegistry>();
         services.AddSingleton<IOpenAiDirectRealtimeClientActionDispatcher>(sp =>
             sp.GetRequiredService<OpenAiDirectRealtimeSessionRegistry>());
@@ -84,12 +87,12 @@ public static class OpenAiDirectRealtimeEndpointExtensions
         }
 
         var voiceSessionId = Guid.NewGuid().ToString("N");
-        var spec = await sessionFactory.CreateSessionAsync(httpContext, request, voiceSessionId, cancellationToken);
-        var expiresAt = DateTimeOffset.UtcNow.Add(options.SessionTtl);
-        registry.Register(voiceSessionId, spec, expiresAt);
-
         try
         {
+            var spec = await sessionFactory.CreateSessionAsync(httpContext, request, voiceSessionId, cancellationToken);
+            var expiresAt = DateTimeOffset.UtcNow.Add(options.SessionTtl);
+            registry.Register(voiceSessionId, spec, expiresAt);
+
             var clientSecret = await CreateClientSecretAsync(spec, registry, options, cancellationToken);
             var response = new OpenAiDirectRealtimeSessionResponse
             {
@@ -116,6 +119,19 @@ public static class OpenAiDirectRealtimeEndpointExtensions
                 response,
                 OpenAiDirectRealtimeJsonContext.Default.DirectRealtimeSessionErrorResponse,
                 statusCode: StatusCodes.Status502BadGateway);
+        }
+        catch (OpenAiDirectRealtimePreparedSessionException ex)
+        {
+            await registry.RemoveAsync(voiceSessionId, cancellationToken);
+            var response = new DirectRealtimeSessionErrorResponse
+            {
+                Error = ex.Message
+            };
+
+            return Results.Json(
+                response,
+                OpenAiDirectRealtimeJsonContext.Default.DirectRealtimeSessionErrorResponse,
+                statusCode: StatusCodes.Status400BadRequest);
         }
         catch (InvalidOperationException ex)
         {

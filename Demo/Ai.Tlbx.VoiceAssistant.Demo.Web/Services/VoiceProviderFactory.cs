@@ -2,6 +2,7 @@ using System;
 using Ai.Tlbx.VoiceAssistant.Interfaces;
 using Ai.Tlbx.VoiceAssistant.Models;
 using Ai.Tlbx.VoiceAssistant.Provider.OpenAi;
+using Ai.Tlbx.VoiceAssistant.Provider.OpenAi.AspNetCore;
 using Ai.Tlbx.VoiceAssistant.Provider.Google;
 using Ai.Tlbx.VoiceAssistant.Provider.XAi;
 using Microsoft.Extensions.DependencyInjection;
@@ -36,8 +37,7 @@ namespace Ai.Tlbx.VoiceAssistant.Demo.Web.Services
 
             return providerType switch
             {
-                VoiceProviderType.OpenAI => new OpenAiVoiceProvider(
-                    Environment.GetEnvironmentVariable("OPENAI_API_KEY"), logAction),
+                VoiceProviderType.OpenAI => _serviceProvider.GetRequiredService<OpenAiDirectRealtimeVoiceProvider>(),
                 VoiceProviderType.Google => new GoogleVoiceProvider(
                     Environment.GetEnvironmentVariable("GOOGLE_API_KEY"), logAction),
                 VoiceProviderType.XAi => new XaiVoiceProvider(

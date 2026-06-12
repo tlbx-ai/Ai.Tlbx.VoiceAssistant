@@ -141,6 +141,8 @@ namespace Ai.Tlbx.VoiceAssistant
         /// </summary>
         public bool IsProviderConnected => _isInitialized && (_provider?.IsConnected ?? false);
 
+        private bool IsDirectBrowserProvider => _provider is IDirectBrowserVoiceProvider;
+
         /// <summary>
         /// Gets the session start time (UTC) measured locally, or null if no session is active.
         /// </summary>
@@ -208,6 +210,12 @@ namespace Ai.Tlbx.VoiceAssistant
             try
             {
                 _lastErrorMessage = null;
+
+                if (_provider is IDirectBrowserVoiceProvider directBrowserProvider)
+                {
+                    await StartDirectBrowserSessionAsync(directBrowserProvider, settings, cancellationToken);
+                    return;
+                }
 
                 // Initialize hardware and start recording early so audio is captured during connection
                 await _hardwareAccess.InitAudioAsync();
@@ -300,6 +308,51 @@ namespace Ai.Tlbx.VoiceAssistant
             }
         }
 
+        private async Task StartDirectBrowserSessionAsync(
+            IDirectBrowserVoiceProvider directBrowserProvider,
+            IVoiceSettings settings,
+            CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            _isConnecting = true;
+            ReportStatus("Preparing browser voice session...");
+
+            try
+            {
+                var microphoneDeviceId = await _hardwareAccess.GetCurrentMicrophoneDeviceAsync();
+                var history = _chatHistory.GetMessages()
+                    .Where(message => message.Role != ChatMessage.ToolRole)
+                    .ToList();
+
+                if (history.Count > 0 && history[^1].Role == ChatMessage.AssistantRole)
+                {
+                    history.RemoveAt(history.Count - 1);
+                }
+
+                await directBrowserProvider.StartBrowserSessionAsync(
+                    settings,
+                    microphoneDeviceId,
+                    history,
+                    cancellationToken);
+
+                _isInitialized = true;
+                _isConnecting = false;
+                IsRecording = true;
+                _sessionStartTime = DateTime.UtcNow;
+                _lastUsageUpdateTime = DateTime.UtcNow;
+
+                ReportStatus("Listening");
+                _logAction(LogLevel.Info, "Browser-direct voice assistant started successfully");
+            }
+            catch
+            {
+                _isConnecting = false;
+                IsRecording = false;
+                throw;
+            }
+        }
+
         /// <summary>
         /// Updates provider settings for the active connection without changing recording state.
         /// Use this for runtime prompt/tool changes such as Realtime session.update.
@@ -339,18 +392,29 @@ namespace Ai.Tlbx.VoiceAssistant
         {
             try
             {
-                // First stop recording to prevent new audio
-                await _hardwareAccess.StopRecordingAudio();
-                IsRecording = false;
-                
-                // Clear any queued audio immediately
-                await _hardwareAccess.ClearAudioQueueAsync();
-
-                // Then disconnect from provider (if connected)
-                if (_provider != null)
+                if (IsDirectBrowserProvider)
                 {
-                    await _provider.DisconnectAsync();
+                    if (_provider != null)
+                    {
+                        await _provider.DisconnectAsync();
+                    }
                 }
+                else
+                {
+                    // First stop recording to prevent new audio
+                    await _hardwareAccess.StopRecordingAudio();
+                
+                    // Clear any queued audio immediately
+                    await _hardwareAccess.ClearAudioQueueAsync();
+
+                    // Then disconnect from provider (if connected)
+                    if (_provider != null)
+                    {
+                        await _provider.DisconnectAsync();
+                    }
+                }
+
+                IsRecording = false;
 
                 // Fire final session usage update
                 FireSessionUsageUpdate(SessionUsageUpdateTrigger.SessionEnded);
@@ -378,6 +442,12 @@ namespace Ai.Tlbx.VoiceAssistant
         {
             if (_provider == null)
                 throw new InvalidOperationException("Cannot connect: no provider configured.");
+
+            if (_provider is IDirectBrowserVoiceProvider)
+            {
+                await StartAsync(settings);
+                return;
+            }
 
             try
             {
@@ -416,6 +486,17 @@ namespace Ai.Tlbx.VoiceAssistant
         /// </summary>
         public async Task StartRecordingOnlyAsync()
         {
+            if (_provider is IDirectBrowserVoiceProvider directBrowserProvider)
+            {
+                await directBrowserProvider.SetMicrophoneEnabledAsync(true);
+                IsRecording = true;
+                _sessionStartTime ??= DateTime.UtcNow;
+                _lastUsageUpdateTime = DateTime.UtcNow;
+                ReportStatus("Recording...");
+                _logAction(LogLevel.Info, "Browser-direct microphone enabled");
+                return;
+            }
+
             if (_provider == null || !_provider.IsConnected)
                 throw new InvalidOperationException("Provider not connected. Call ConnectProviderAsync first.");
 
@@ -440,6 +521,15 @@ namespace Ai.Tlbx.VoiceAssistant
         {
             if (!IsRecording) return;
 
+            if (_provider is IDirectBrowserVoiceProvider directBrowserProvider)
+            {
+                await directBrowserProvider.SetMicrophoneEnabledAsync(false);
+                IsRecording = false;
+                ReportStatus("Connected (microphone muted)");
+                _logAction(LogLevel.Info, "Browser-direct microphone disabled");
+                return;
+            }
+
             await _hardwareAccess.StopRecordingAudio();
             IsRecording = false;
             ReportStatus("Processing...");
@@ -460,10 +550,16 @@ namespace Ai.Tlbx.VoiceAssistant
                     await _provider.SendInterruptAsync();
                 }
 
-                // Clear any pending audio to stop playback immediately
-                await _hardwareAccess.ClearAudioQueueAsync();
-                
-                _logAction(LogLevel.Info, "Interrupt signal sent to AI provider and audio queue cleared");
+                if (!IsDirectBrowserProvider)
+                {
+                    // Clear any pending audio to stop playback immediately
+                    await _hardwareAccess.ClearAudioQueueAsync();
+                    _logAction(LogLevel.Info, "Interrupt signal sent to AI provider and audio queue cleared");
+                }
+                else
+                {
+                    _logAction(LogLevel.Info, "Interrupt signal sent to browser-direct AI provider");
+                }
             }
             catch (Exception ex)
             {
@@ -713,6 +809,11 @@ namespace Ai.Tlbx.VoiceAssistant
             
             _provider.OnAudioReceived = (base64Audio) =>
             {
+                if (IsDirectBrowserProvider)
+                {
+                    return;
+                }
+
                 try
                 {
                     // Forward audio to hardware for playback at 24kHz (OpenAI default)
@@ -731,7 +832,8 @@ namespace Ai.Tlbx.VoiceAssistant
                 ReportStatus(status);
                 
                 // Handle interruption status from provider
-                if (status.Contains("interrupted", StringComparison.OrdinalIgnoreCase))
+                if (!IsDirectBrowserProvider &&
+                    status.Contains("interrupted", StringComparison.OrdinalIgnoreCase))
                 {
                     try
                     {
@@ -755,6 +857,11 @@ namespace Ai.Tlbx.VoiceAssistant
             // Wire up interruption detection to clear audio immediately
             _provider.OnInterruptDetected = async () =>
             {
+                if (IsDirectBrowserProvider)
+                {
+                    return;
+                }
+
                 try
                 {
                     await _hardwareAccess.ClearAudioQueueAsync();

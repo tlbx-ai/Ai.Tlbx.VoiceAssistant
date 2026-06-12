@@ -20,6 +20,8 @@ public sealed class OpenAiDirectRealtimeOptions
 
 public sealed class OpenAiDirectRealtimeSessionRequest
 {
+    public string? PreparedSessionId { get; set; }
+
     public string? Mode { get; set; }
 
     public string? Provider { get; set; }
