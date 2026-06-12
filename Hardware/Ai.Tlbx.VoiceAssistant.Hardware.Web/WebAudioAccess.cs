@@ -567,7 +567,7 @@ namespace Ai.Tlbx.VoiceAssistant.Hardware.Web
         {
             if (_audioModule == null)
             {
-                await InitAudioAsync();
+                await LoadJavaScriptModule();
             }
 
             if (_audioModule == null)

@@ -199,7 +199,8 @@
                                     <div>
                                         <label class="block text-xs font-medium text-gray-600 mb-1">Microphone</label>
                                         <MicrophoneSelect AvailableMicrophones="availableMicrophones"
-                                                         @bind-SelectedMicrophoneId="selectedMicrophoneId"
+                                                         SelectedMicrophoneId="@selectedMicrophoneId"
+                                                         SelectedMicrophoneIdChanged="OnMicrophoneSelectionChanged"
                                                          MicPermissionGranted="micPermissionGranted"
                                                          OnRequestPermission="RequestMicrophonePermission"
                                                          Disabled="@((voiceAssistant?.IsConnecting ?? false) || (voiceAssistant?.IsRecording ?? false))" />
@@ -380,7 +381,8 @@
                                     <div>
                                         <label class="block text-xs font-medium text-gray-600 mb-1">Microphone</label>
                                         <MicrophoneSelect AvailableMicrophones="availableMicrophones"
-                                                         @bind-SelectedMicrophoneId="selectedMicrophoneId"
+                                                         SelectedMicrophoneId="@selectedMicrophoneId"
+                                                         SelectedMicrophoneIdChanged="OnMicrophoneSelectionChanged"
                                                          MicPermissionGranted="micPermissionGranted"
                                                          OnRequestPermission="RequestMicrophonePermission"
                                                          Disabled="@((voiceAssistant?.IsRecording ?? false) || _isPttRecording || _isPttProcessing)" />
@@ -715,6 +717,122 @@
         }
     }
 
+    private async Task ApplyMicrophoneDevicesAsync(IEnumerable<AudioDeviceInfo> devices, bool preferBestDevice)
+    {
+        availableMicrophones = devices.Select(m => new MicrophoneSelect.MicrophoneInfo
+        {
+            Id = m.Id,
+            Name = m.Name,
+            IsDefault = m.IsDefault
+        }).ToList();
+
+        if (availableMicrophones.Count == 0)
+        {
+            selectedMicrophoneId = string.Empty;
+            return;
+        }
+
+        var selectedStillExists = availableMicrophones.Any(m => m.Id == selectedMicrophoneId);
+        if (!preferBestDevice && selectedStillExists)
+        {
+            await SetSelectedMicrophoneAsync(selectedMicrophoneId, "kept selected microphone");
+            return;
+        }
+
+        var preferred = SelectPreferredMicrophone(availableMicrophones);
+        await SetSelectedMicrophoneAsync(preferred.Id, "auto-selected preferred microphone");
+    }
+
+    private async Task OnMicrophoneSelectionChanged(string deviceId)
+    {
+        await SetSelectedMicrophoneAsync(deviceId, "user-selected microphone");
+        await InvokeAsync(StateHasChanged);
+    }
+
+    private async Task SetSelectedMicrophoneAsync(string deviceId, string reason)
+    {
+        if (string.IsNullOrWhiteSpace(deviceId))
+        {
+            selectedMicrophoneId = string.Empty;
+            return;
+        }
+
+        selectedMicrophoneId = deviceId;
+        var selectedMic = availableMicrophones.FirstOrDefault(m => m.Id == selectedMicrophoneId);
+
+        try
+        {
+            var applied = await HardwareAccess.SetMicrophoneDeviceAsync(deviceId);
+            Log(applied ? LogLevel.Info : LogLevel.Warn, $"{reason}: {selectedMic?.Name ?? deviceId}");
+        }
+        catch (Exception ex)
+        {
+            Log(LogLevel.Error, $"Could not apply selected microphone {selectedMic?.Name ?? deviceId}: {ex.Message}");
+        }
+    }
+
+    private static MicrophoneSelect.MicrophoneInfo SelectPreferredMicrophone(IReadOnlyList<MicrophoneSelect.MicrophoneInfo> microphones)
+    {
+        return microphones
+            .OrderByDescending(GetMicrophonePreferenceScore)
+            .ThenBy(m => m.Name, StringComparer.OrdinalIgnoreCase)
+            .First();
+    }
+
+    private static int GetMicrophonePreferenceScore(MicrophoneSelect.MicrophoneInfo microphone)
+    {
+        var id = microphone.Id ?? string.Empty;
+        var name = microphone.Name ?? string.Empty;
+        var text = $"{id} {name}".ToLowerInvariant();
+        var score = 0;
+
+        if (string.Equals(id, "communications", StringComparison.OrdinalIgnoreCase))
+        {
+            score += 1000;
+        }
+
+        if (text.Contains("communication") || text.Contains("kommunikation"))
+        {
+            score += 900;
+        }
+
+        if (text.Contains("headset") ||
+            text.Contains("headphone") ||
+            text.Contains("kopfh") ||
+            text.Contains("jabra") ||
+            text.Contains("poly") ||
+            text.Contains("plantronics") ||
+            text.Contains("logitech") ||
+            text.Contains("airpods") ||
+            text.Contains("bluetooth") ||
+            text.Contains("usb"))
+        {
+            score += 500;
+        }
+
+        if (microphone.IsDefault || string.Equals(id, "default", StringComparison.OrdinalIgnoreCase))
+        {
+            score += 100;
+        }
+
+        if (text.Contains("built-in") ||
+            text.Contains("built in") ||
+            text.Contains("internal") ||
+            text.Contains("integrated") ||
+            text.Contains("eingebaut") ||
+            text.Contains("array") ||
+            text.Contains("realtek") ||
+            text.Contains("webcam") ||
+            text.Contains("camera") ||
+            text.Contains("monitor") ||
+            text.Contains("display"))
+        {
+            score -= 300;
+        }
+
+        return score;
+    }
+
     private async Task CheckMicrophonePermission()
     {
         try
@@ -733,34 +851,14 @@
 
             if (micPermissionGranted)
             {
-                // If we got devices with real names, permission is granted
-                availableMicrophones = mics.Select(m => new MicrophoneSelect.MicrophoneInfo
-                {
-                    Id = m.Id,
-                    Name = m.Name,
-                    IsDefault = m.IsDefault
-                }).ToList();
-
-                // Select default or first microphone
-                if (availableMicrophones.Count > 0)
-                {
-                    var defaultMic = availableMicrophones.FirstOrDefault(m => m.IsDefault);
-                    selectedMicrophoneId = defaultMic?.Id ?? availableMicrophones[0].Id;
-                    // Note: SetMicrophoneDevice might need to be implemented differently
-
-                    Log(LogLevel.Info, $"Initially selected microphone: {availableMicrophones.FirstOrDefault(m => m.Id == selectedMicrophoneId)?.Name ?? "Unknown"}");
-                }
+                await ApplyMicrophoneDevicesAsync(mics, preferBestDevice: true);
+                Log(LogLevel.Info, $"Initially selected microphone: {availableMicrophones.FirstOrDefault(m => m.Id == selectedMicrophoneId)?.Name ?? "Unknown"}");
             }
             else if (mics.Count > 0)
             {
                 // We have devices but without proper labels - this suggests permission is needed
                 // but we still store them for when permission is granted
-                availableMicrophones = mics.Select(m => new MicrophoneSelect.MicrophoneInfo
-                {
-                    Id = m.Id,
-                    Name = m.Name,
-                    IsDefault = m.IsDefault
-                }).ToList();
+                await ApplyMicrophoneDevicesAsync(mics, preferBestDevice: true);
                 Log(LogLevel.Info, "Microphones found but without proper labels - permission needed");
             }
             else
@@ -798,25 +896,8 @@
 
             if (mics.Count > 0)
             {
-                availableMicrophones = mics.Select(m => new MicrophoneSelect.MicrophoneInfo
-                {
-                    Id = m.Id,
-                    Name = m.Name,
-                    IsDefault = m.IsDefault
-                }).ToList();
-
-                // Select default or first microphone
-                var defaultMic = availableMicrophones.FirstOrDefault(m => m.IsDefault);
-                if (defaultMic != null)
-                {
-                    selectedMicrophoneId = defaultMic.Id;
-                    Log(LogLevel.Info, $"Selected default microphone: {defaultMic.Name}");
-                }
-                else if (availableMicrophones.Count > 0)
-                {
-                    selectedMicrophoneId = availableMicrophones[0].Id;
-                    Log(LogLevel.Info, $"Selected first microphone: {availableMicrophones[0].Name}");
-                }
+                await ApplyMicrophoneDevicesAsync(mics, preferBestDevice: true);
+                Log(LogLevel.Info, $"Selected microphone: {availableMicrophones.FirstOrDefault(m => m.Id == selectedMicrophoneId)?.Name ?? "Unknown"}");
             }
             else
             {
@@ -845,17 +926,8 @@
 
             Log(LogLevel.Info, "Explicitly requesting microphone permission...");
 
-            // Use the new method that explicitly requests permission and gets labeled devices
-            // Request permission by getting devices
-            var deviceInfos = await voiceAssistant.GetAvailableMicrophonesAsync();
-
-            // Convert to MicrophoneInfo objects
-            availableMicrophones = deviceInfos.Select(m => new MicrophoneSelect.MicrophoneInfo
-            {
-                Id = m.Id,
-                Name = m.Name,
-                IsDefault = m.IsDefault
-            }).ToList();
+            var deviceInfos = await HardwareAccess.RequestMicrophonePermissionAndGetDevicesAsync();
+            await ApplyMicrophoneDevicesAsync(deviceInfos, preferBestDevice: true);
 
             // Check if we now have devices with real names (not placeholders)
             micPermissionGranted = deviceInfos.Count > 0 && 
@@ -863,28 +935,10 @@
 
             Log(LogLevel.Info, $"After permission request: Permission granted: {micPermissionGranted}, Found {deviceInfos.Count} microphones");
 
-            // If we have microphones with permission, select one
             if (micPermissionGranted && availableMicrophones.Count > 0)
             {
-                // Try to find default microphone
-                var defaultMic = availableMicrophones.FirstOrDefault(m => m.IsDefault);
-                if (defaultMic != null)
-                {
-                    selectedMicrophoneId = defaultMic.Id;
-                }
-                else if (availableMicrophones.Count > 0)
-                {
-                    // Otherwise use the first microphone
-                    selectedMicrophoneId = availableMicrophones[0].Id;
-                }
-
-                // Set the selected device
-                if (!string.IsNullOrEmpty(selectedMicrophoneId))
-                {
-                    // Note: SetMicrophoneDevice might need to be implemented differently
-                    var selectedMic = availableMicrophones.FirstOrDefault(m => m.Id == selectedMicrophoneId);
-                    Log(LogLevel.Info, $"Selected microphone: {selectedMic?.Name ?? "Unknown"}");
-                }
+                var selectedMic = availableMicrophones.FirstOrDefault(m => m.Id == selectedMicrophoneId);
+                Log(LogLevel.Info, $"Selected microphone: {selectedMic?.Name ?? "Unknown"}");
             }
             else
             {
@@ -1083,13 +1137,7 @@
     {
         InvokeAsync(async () => 
         {
-            availableMicrophones = devices.Select(m => new MicrophoneSelect.MicrophoneInfo
-            {
-                Id = m.Id,
-                Name = m.Name,
-                IsDefault = m.IsDefault
-            }).ToList();
-            await Task.CompletedTask;
+            await ApplyMicrophoneDevicesAsync(devices, preferBestDevice: string.IsNullOrEmpty(selectedMicrophoneId));
             StateHasChanged();
         });
     }

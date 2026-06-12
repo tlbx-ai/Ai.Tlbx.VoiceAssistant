@@ -19,6 +19,7 @@ export class OpenAiDirectRealtimeClient
         this.pendingFunctionArgs = new Map();
         this.pendingFunctionNames = new Map();
         this.pendingRealtimeEvents = [];
+        this.activeResponse = false;
     }
 
     registerClientAction(action, handler)
@@ -37,6 +38,7 @@ export class OpenAiDirectRealtimeClient
         this.pendingFunctionArgs.clear();
         this.pendingFunctionNames.clear();
         this.recentChats = [];
+        this.activeResponse = false;
 
         this.emitConnectionPhase('session.requesting', 'Requesting OpenAI browser session...');
         const sessionResponse = await fetch(this.options.sessionUrl, {
@@ -111,6 +113,7 @@ export class OpenAiDirectRealtimeClient
         this.pendingRealtimeEvents = [];
         this.pendingFunctionArgs.clear();
         this.pendingFunctionNames.clear();
+        this.activeResponse = false;
 
         this.emitStatus('Disconnected');
     }
@@ -226,9 +229,7 @@ export class OpenAiDirectRealtimeClient
         this.dataChannel.onerror = () => this.emitStatus('Error');
 
         this.emitConnectionPhase('microphone.requesting', 'Requesting microphone stream...');
-        this.mediaStream = await navigator.mediaDevices.getUserMedia({
-            audio: this.buildAudioConstraints(config)
-        });
+        this.mediaStream = await this.getMicrophoneStream(config);
 
         const audioTracks = this.mediaStream.getAudioTracks();
         if (audioTracks.length === 0)
@@ -244,7 +245,8 @@ export class OpenAiDirectRealtimeClient
                 label: track.label,
                 enabled: track.enabled,
                 muted: track.muted,
-                readyState: track.readyState
+                readyState: track.readyState,
+                settings: track.getSettings?.() ?? null
             });
         }
         this.emitConnectionPhase('microphone.ready', 'Microphone stream ready');
@@ -308,14 +310,48 @@ export class OpenAiDirectRealtimeClient
 
     interrupt()
     {
-        this.sendRealtimeEvent({ type: 'response.cancel' });
+        if (this.activeResponse)
+        {
+            this.sendRealtimeEvent({ type: 'response.cancel' });
+        }
+
+        this.activeResponse = false;
         this.emitStatus('Interrupted');
     }
 
-    buildAudioConstraints(config)
+    async getMicrophoneStream(config)
+    {
+        try
+        {
+            return await navigator.mediaDevices.getUserMedia({
+                audio: this.buildAudioConstraints(config, true)
+            });
+        }
+        catch (error)
+        {
+            const requestedDevice = config?.microphoneId ?? config?.deviceId;
+            if (!requestedDevice)
+            {
+                throw error;
+            }
+
+            this.emitDiagnostic('microphone.selected_device_failed', {
+                microphoneId: requestedDevice,
+                message: error instanceof Error ? error.message : String(error)
+            });
+
+            return await navigator.mediaDevices.getUserMedia({
+                audio: this.buildAudioConstraints(config, false)
+            });
+        }
+    }
+
+    buildAudioConstraints(config, exactDevice)
     {
         const deviceId = config?.microphoneId ?? config?.deviceId;
         const audio = {
+            channelCount: { ideal: 1 },
+            sampleRate: { ideal: 48000 },
             echoCancellation: true,
             noiseSuppression: true,
             autoGainControl: true
@@ -323,7 +359,7 @@ export class OpenAiDirectRealtimeClient
 
         if (deviceId)
         {
-            audio.deviceId = { exact: deviceId };
+            audio.deviceId = exactDevice ? { exact: deviceId } : { ideal: deviceId };
         }
 
         return audio;
@@ -336,6 +372,14 @@ export class OpenAiDirectRealtimeClient
         switch (event.type)
         {
             case 'input_audio_buffer.speech_started':
+                if (this.activeResponse)
+                {
+                    this.sendRealtimeEvent({ type: 'response.cancel' });
+                    this.activeResponse = false;
+                    this.emitStatus('Interrupted');
+                    break;
+                }
+
                 this.emitStatus('Listening');
                 break;
 
@@ -345,6 +389,7 @@ export class OpenAiDirectRealtimeClient
                 break;
 
             case 'response.created':
+                this.activeResponse = true;
                 this.emitStatus('Processing');
                 break;
 
@@ -372,15 +417,34 @@ export class OpenAiDirectRealtimeClient
                 break;
 
             case 'error':
+                this.activeResponse = false;
+                if (this.isBenignResponseCancelError(event))
+                {
+                    this.emitDiagnostic('response.cancel.ignored', {
+                        message: formatRealtimeError(event)
+                    });
+                    break;
+                }
+
                 this.options.onError?.(formatRealtimeError(event));
                 this.emitStatus('Error');
                 break;
 
             case 'response.done':
+                this.activeResponse = false;
                 this.emitAssistantMessagesFromResponse(event);
                 this.emitStatus('Listening');
                 break;
         }
+    }
+
+    isBenignResponseCancelError(event)
+    {
+        const error = event?.error ?? event;
+        return error?.code === 'response_cancel_not_active' ||
+            error?.type === 'response_cancel_not_active' ||
+            (typeof error?.message === 'string' &&
+                error.message.toLowerCase().includes('no active response'));
     }
 
     startAudioLevelMonitor(stream)
