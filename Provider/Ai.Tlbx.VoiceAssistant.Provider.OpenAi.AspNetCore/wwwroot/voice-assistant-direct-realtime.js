@@ -1,4 +1,6 @@
 const REALTIME_CALLS_URL = 'https://api.openai.com/v1/realtime/calls';
+const TOOL_CALL_TIMEOUT_MS = 120000;
+const RESPONSE_WATCHDOG_MS = 120000;
 
 export class OpenAiDirectRealtimeClient
 {
@@ -20,6 +22,8 @@ export class OpenAiDirectRealtimeClient
         this.pendingFunctionNames = new Map();
         this.pendingRealtimeEvents = [];
         this.activeResponse = false;
+        this.responseWatchdog = null;
+        this.closed = false;
     }
 
     registerClientAction(action, handler)
@@ -39,6 +43,8 @@ export class OpenAiDirectRealtimeClient
         this.pendingFunctionNames.clear();
         this.recentChats = [];
         this.activeResponse = false;
+        this.closed = false;
+        this.clearResponseWatchdog();
 
         this.emitConnectionPhase('session.requesting', 'Requesting OpenAI browser session...');
         const sessionResponse = await fetch(this.options.sessionUrl, {
@@ -76,18 +82,29 @@ export class OpenAiDirectRealtimeClient
 
         if (this.dataChannel)
         {
+            this.dataChannel.onopen = null;
+            this.dataChannel.onmessage = null;
+            this.dataChannel.onerror = null;
+            this.dataChannel.onclose = null;
             this.dataChannel.close();
             this.dataChannel = null;
         }
 
         if (this.controlSocket)
         {
+            this.controlSocket.onopen = null;
+            this.controlSocket.onmessage = null;
+            this.controlSocket.onerror = null;
+            this.controlSocket.onclose = null;
             this.controlSocket.close();
             this.controlSocket = null;
         }
 
         if (this.peerConnection)
         {
+            this.peerConnection.ontrack = null;
+            this.peerConnection.onconnectionstatechange = null;
+            this.peerConnection.oniceconnectionstatechange = null;
             this.peerConnection.close();
             this.peerConnection = null;
         }
@@ -114,6 +131,8 @@ export class OpenAiDirectRealtimeClient
         this.pendingFunctionArgs.clear();
         this.pendingFunctionNames.clear();
         this.activeResponse = false;
+        this.clearResponseWatchdog();
+        this.closed = true;
 
         this.emitStatus('Disconnected');
     }
@@ -164,7 +183,18 @@ export class OpenAiDirectRealtimeClient
             this.controlSocket.onerror = () =>
             {
                 window.clearTimeout(timeout);
-                reject(new Error('Control socket error'));
+                const error = new Error('Control socket error');
+                this.handleConnectionLost('control_socket.error', error.message);
+                reject(error);
+            };
+
+            this.controlSocket.onclose = event =>
+            {
+                window.clearTimeout(timeout);
+                if (!this.closed)
+                {
+                    this.handleConnectionLost('control_socket.closed', `Control socket closed (${event.code || 'unknown'})`);
+                }
             };
 
             this.controlSocket.onmessage = event =>
@@ -206,16 +236,26 @@ export class OpenAiDirectRealtimeClient
         };
         this.peerConnection.onconnectionstatechange = () =>
         {
+            const state = this.peerConnection?.connectionState;
             this.emitDiagnostic('peer_connection.state', {
-                connectionState: this.peerConnection?.connectionState,
+                connectionState: state,
                 iceConnectionState: this.peerConnection?.iceConnectionState
             });
+            if (state === 'failed' || state === 'closed')
+            {
+                this.handleConnectionLost('peer_connection.connection_lost', `Peer connection ${state}`);
+            }
         };
         this.peerConnection.oniceconnectionstatechange = () =>
         {
+            const state = this.peerConnection?.iceConnectionState;
             this.emitDiagnostic('peer_connection.ice_state', {
-                iceConnectionState: this.peerConnection?.iceConnectionState
+                iceConnectionState: state
             });
+            if (state === 'failed' || state === 'closed')
+            {
+                this.handleConnectionLost('peer_connection.ice_connection_lost', `ICE connection ${state}`);
+            }
         };
 
         this.dataChannel = this.peerConnection.createDataChannel('oai-events');
@@ -226,7 +266,17 @@ export class OpenAiDirectRealtimeClient
             this.flushPendingRealtimeEvents();
             this.emitStatus('Listening');
         };
-        this.dataChannel.onerror = () => this.emitStatus('Error');
+        this.dataChannel.onerror = () =>
+        {
+            this.handleConnectionLost('datachannel.error', 'Realtime data channel error');
+        };
+        this.dataChannel.onclose = () =>
+        {
+            if (!this.closed)
+            {
+                this.handleConnectionLost('datachannel.closed', 'Realtime data channel closed');
+            }
+        };
 
         this.emitConnectionPhase('microphone.requesting', 'Requesting microphone stream...');
         this.mediaStream = await this.getMicrophoneStream(config);
@@ -390,6 +440,7 @@ export class OpenAiDirectRealtimeClient
 
             case 'response.created':
                 this.activeResponse = true;
+                this.armResponseWatchdog(event);
                 this.emitStatus('Processing');
                 break;
 
@@ -418,6 +469,7 @@ export class OpenAiDirectRealtimeClient
 
             case 'error':
                 this.activeResponse = false;
+                this.clearResponseWatchdog();
                 if (this.isBenignResponseCancelError(event))
                 {
                     this.emitDiagnostic('response.cancel.ignored', {
@@ -432,6 +484,7 @@ export class OpenAiDirectRealtimeClient
 
             case 'response.done':
                 this.activeResponse = false;
+                this.clearResponseWatchdog();
                 this.emitAssistantMessagesFromResponse(event);
                 this.emitStatus('Listening');
                 break;
@@ -601,7 +654,21 @@ export class OpenAiDirectRealtimeClient
         }
 
         this.emitChat('assistant', `Calling tool: ${name}`, name, 'call');
-        const result = await this.requestServerTool(callId, name, argsText);
+        let result;
+        try
+        {
+            result = await this.requestServerTool(callId, name, argsText);
+        }
+        catch (error)
+        {
+            const message = error instanceof Error ? error.message : String(error);
+            this.emitDiagnostic('tool_call.failed', {
+                callId,
+                name,
+                message
+            });
+            result = `Error: ${message}`;
+        }
         this.emitChat('tool', result, name, 'answer');
 
         this.sendRealtimeEvent({
@@ -617,9 +684,41 @@ export class OpenAiDirectRealtimeClient
 
     requestServerTool(callId, name, argsText)
     {
-        return new Promise(resolve =>
+        return new Promise((resolve, reject) =>
         {
+            if (this.controlSocket?.readyState !== WebSocket.OPEN)
+            {
+                reject(new Error(`Control socket is not open for tool call: ${name}`));
+                return;
+            }
+
             const requestId = callId;
+            let settled = false;
+            let timeoutId = null;
+
+            const cleanup = () =>
+            {
+                this.controlSocket?.removeEventListener('message', listener);
+                this.controlSocket?.removeEventListener('close', onClose);
+                this.controlSocket?.removeEventListener('error', onError);
+                if (timeoutId)
+                {
+                    window.clearTimeout(timeoutId);
+                }
+            };
+
+            const settle = (action, value) =>
+            {
+                if (settled)
+                {
+                    return;
+                }
+
+                settled = true;
+                cleanup();
+                action(value);
+            };
+
             const listener = event =>
             {
                 if (typeof event.data !== 'string')
@@ -633,11 +732,27 @@ export class OpenAiDirectRealtimeClient
                     return;
                 }
 
-                this.controlSocket?.removeEventListener('message', listener);
-                resolve(message.result ?? '');
+                settle(resolve, message.result ?? '');
             };
 
+            const onClose = () =>
+            {
+                settle(reject, new Error(`Control socket closed while waiting for tool result: ${name}`));
+            };
+
+            const onError = () =>
+            {
+                settle(reject, new Error(`Control socket error while waiting for tool result: ${name}`));
+            };
+
+            timeoutId = window.setTimeout(() =>
+            {
+                settle(reject, new Error(`Tool call timed out after ${TOOL_CALL_TIMEOUT_MS}ms: ${name}`));
+            }, TOOL_CALL_TIMEOUT_MS);
+
             this.controlSocket?.addEventListener('message', listener);
+            this.controlSocket?.addEventListener('close', onClose);
+            this.controlSocket?.addEventListener('error', onError);
             this.sendControl({
                 type: 'tool_call',
                 requestId,
@@ -700,13 +815,92 @@ export class OpenAiDirectRealtimeClient
 
     sendRealtimeEvent(event)
     {
+        if (this.closed)
+        {
+            this.emitDiagnostic('realtime_event.dropped_closed', {
+                eventType: event?.type
+            });
+            return;
+        }
+
         if (this.dataChannel?.readyState === 'open')
         {
             this.dataChannel.send(JSON.stringify(event));
             return;
         }
 
-        this.pendingRealtimeEvents.push(event);
+        if (this.dataChannel?.readyState === 'connecting')
+        {
+            this.pendingRealtimeEvents.push(event);
+            return;
+        }
+
+        if (!this.dataChannel)
+        {
+            this.pendingRealtimeEvents.push(event);
+            return;
+        }
+
+        this.emitDiagnostic('realtime_event.dropped', {
+            eventType: event?.type,
+            readyState: this.dataChannel.readyState
+        });
+        this.handleConnectionLost('datachannel.not_open', `Realtime data channel is ${this.dataChannel.readyState}`);
+    }
+
+    armResponseWatchdog(event)
+    {
+        this.clearResponseWatchdog();
+        const responseId = event?.response?.id ?? event?.response_id ?? null;
+        this.responseWatchdog = window.setTimeout(() =>
+        {
+            if (!this.activeResponse)
+            {
+                return;
+            }
+
+            this.emitDiagnostic('response.watchdog_timeout', {
+                responseId,
+                timeoutMs: RESPONSE_WATCHDOG_MS
+            });
+
+            try
+            {
+                this.sendRealtimeEvent({ type: 'response.cancel' });
+            }
+            catch
+            {
+            }
+
+            this.activeResponse = false;
+            this.emitStatus('Listening');
+        }, RESPONSE_WATCHDOG_MS);
+    }
+
+    clearResponseWatchdog()
+    {
+        if (!this.responseWatchdog)
+        {
+            return;
+        }
+
+        window.clearTimeout(this.responseWatchdog);
+        this.responseWatchdog = null;
+    }
+
+    handleConnectionLost(type, message)
+    {
+        if (this.closed)
+        {
+            return;
+        }
+
+        this.activeResponse = false;
+        this.clearResponseWatchdog();
+        this.pendingRealtimeEvents = [];
+        this.emitDiagnostic(type, { message });
+        this.options.onError?.(message);
+        this.emitStatus('Error');
     }
 
     flushPendingRealtimeEvents()

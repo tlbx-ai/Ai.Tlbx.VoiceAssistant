@@ -225,6 +225,7 @@ public sealed class OpenAiDirectRealtimeVoiceProvider : IDirectBrowserVoiceProvi
     [JSInvokable]
     public Task OnDirectRealtimeError(string error)
     {
+        _isConnected = false;
         _logAction(LogLevel.Error, $"OpenAI direct realtime error: {error}");
         OnError?.Invoke(error);
         return Task.CompletedTask;
