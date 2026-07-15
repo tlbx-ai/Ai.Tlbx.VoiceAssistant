@@ -234,7 +234,7 @@ foreach ($project in $projects)
         {
             # Add --skip-duplicate to avoid errors when re-publishing the same version
             # Removing the default behavior of unlisted packages by NOT using --no-service-endpoint
-            $pushResult = dotnet nuget push $package.FullName --api-key $apiKey --source https://api.nuget.org/v3/index.json --skip-duplicate
+            dotnet nuget push $package.FullName --api-key $apiKey --source https://api.nuget.org/v3/index.json --skip-duplicate
             
             # Check if the push was successful
             if ($LASTEXITCODE -eq 0) 
@@ -268,7 +268,7 @@ Write-Host ""
 Write-Host "========================================" -ForegroundColor Cyan
 Write-Host "  PUBLISH SUMMARY" -ForegroundColor Cyan
 Write-Host "========================================" -ForegroundColor Cyan
-Write-Host "  Published version: $newVersion" -ForegroundColor Green
+Write-Host "  Package version:   $newVersion" -ForegroundColor Green
 Write-Host "  Packages location: $nupkgDir" -ForegroundColor Yellow
 Write-Host ""
 
@@ -286,7 +286,7 @@ if ($willPublish)
     Write-Host ""
     if (-not $allPackagesSuccessful)
     {
-        Write-Host "  Some packages were not published successfully. See errors above." -ForegroundColor Red
+        Write-Host "  Some packages were not published successfully. See the NuGet errors above." -ForegroundColor Red
         Write-Host "========================================" -ForegroundColor Cyan
         exit 1
     }

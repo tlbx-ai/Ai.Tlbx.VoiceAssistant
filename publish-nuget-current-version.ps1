@@ -125,7 +125,7 @@ foreach ($project in $projects)
         try 
         {
             # Add --skip-duplicate to avoid errors when re-publishing the same version
-            $pushResult = dotnet nuget push $package.FullName --api-key $apiKey --source https://api.nuget.org/v3/index.json --skip-duplicate
+            dotnet nuget push $package.FullName --api-key $apiKey --source https://api.nuget.org/v3/index.json --skip-duplicate
             
             # Check if the push was successful
             if ($LASTEXITCODE -eq 0) 
