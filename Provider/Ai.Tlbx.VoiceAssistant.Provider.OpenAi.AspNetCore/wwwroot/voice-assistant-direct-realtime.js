@@ -541,7 +541,7 @@ export class OpenAiDirectRealtimeClient
                 }
 
                 const now = performance.now();
-                if (now - lastLevelEmit > 1000)
+                if (this.options.emitMicrophoneLevelDiagnostics === true && now - lastLevelEmit > 1000)
                 {
                     this.emitDiagnostic('microphone.level', {
                         peak,
@@ -1041,6 +1041,7 @@ export function createOpenAiDirectRealtimeClient(options, dotNetReference)
         sessionUrl: options?.sessionUrl ?? '/api/voice/direct/session',
         credentials: options?.credentials ?? 'include',
         rtcConfiguration: options?.rtcConfiguration,
+        emitMicrophoneLevelDiagnostics: options?.emitMicrophoneLevelDiagnostics === true,
         headers: () => options?.headers ?? {},
         onStatus: status => invokeDotNet(dotNetReference, 'OnDirectRealtimeStatus', status),
         onError: error => invokeDotNet(dotNetReference, 'OnDirectRealtimeError', error),

@@ -42,9 +42,8 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.XAi
         private readonly StringBuilder _currentAiMessage = new();
         private readonly StringBuilder _currentAudioTranscript = new();
         private string _currentResponseId = string.Empty;
-        private readonly StringBuilder _currentFunctionArgs = new();
-        private string _currentFunctionName = string.Empty;
-        private string _currentCallId = string.Empty;
+        private readonly Dictionary<string, PendingFunctionCall> _pendingFunctionCalls = new();
+        private int _toolResultsPendingContinuation;
 
         /// <summary>
         /// Gets a value indicating whether the provider is connected and ready.
@@ -129,11 +128,7 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.XAi
             ValidateSettings(xaiSettings);
             ResetResponseState();
             _settings = xaiSettings;
-            _logAction(LogLevel.Info, $"Settings configured - Voice: {_settings.Voice}, Speed: {_settings.TalkingSpeed}, Model: {_settings.Model}");
-            if (Math.Abs(_settings.TalkingSpeed - 1.0) > 0.001)
-            {
-                _logAction(LogLevel.Warn, "xAI Voice Agent does not expose speech-rate control; TalkingSpeed will be ignored.");
-            }
+            _logAction(LogLevel.Info, $"Settings configured - Voice: {GetVoiceId(_settings)}, Speed: {_settings.TalkingSpeed}, Model: {_settings.Model}");
 
             try
             {
@@ -143,7 +138,13 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.XAi
                 _webSocket.Options.SetRequestHeader("Authorization", $"Bearer {_apiKey}");
                 _sessionUpdateCompletionSource = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
 
-                var uri = new Uri($"{REALTIME_WEBSOCKET_ENDPOINT}?model={Uri.EscapeDataString(_settings.Model.ToApiString())}");
+                var query = $"model={Uri.EscapeDataString(_settings.Model.ToApiString())}";
+                if (_settings.EnableSessionResumption && !string.IsNullOrWhiteSpace(_settings.ConversationId))
+                {
+                    query += $"&conversation_id={Uri.EscapeDataString(_settings.ConversationId)}";
+                }
+
+                var uri = new Uri($"{REALTIME_WEBSOCKET_ENDPOINT}?{query}");
                 using (var connectionCts = new CancellationTokenSource(CONNECTION_TIMEOUT_MS))
                 {
                     await _webSocket.ConnectAsync(uri, connectionCts.Token);
@@ -212,12 +213,9 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.XAi
                 throw new ArgumentException("Settings must be of type XaiVoiceSettings for xAI provider", nameof(settings));
             }
 
+            ValidateSettings(xaiSettings);
             _settings = xaiSettings;
-            _logAction(LogLevel.Info, $"Settings configured - Voice: {_settings.Voice}, Speed: {_settings.TalkingSpeed}, Model: {_settings.Model}");
-            if (Math.Abs(_settings.TalkingSpeed - 1.0) > 0.001)
-            {
-                _logAction(LogLevel.Warn, "xAI Voice Agent does not expose speech-rate control; TalkingSpeed will be ignored.");
-            }
+            _logAction(LogLevel.Info, $"Settings configured - Voice: {GetVoiceId(_settings)}, Speed: {_settings.TalkingSpeed}, Model: {_settings.Model}");
 
             if (IsConnected)
             {
@@ -349,6 +347,56 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.XAi
             {
                 throw new InvalidOperationException("xAI turn detection must be 'server_vad' for this provider.");
             }
+
+            if (settings.TalkingSpeed is < 0.7 or > 1.5)
+            {
+                throw new InvalidOperationException("xAI TalkingSpeed must be between 0.7 and 1.5.");
+            }
+
+            if (settings.TurnDetection.Threshold is < 0.1 or > 0.9)
+            {
+                throw new InvalidOperationException("xAI VAD threshold must be between 0.1 and 0.9.");
+            }
+
+            if (settings.TurnDetection.PrefixPaddingMs is < 0 or > 10000 ||
+                settings.TurnDetection.SilenceDurationMs is < 0 or > 10000)
+            {
+                throw new InvalidOperationException("xAI VAD prefix padding and silence duration must be between 0 and 10000 ms.");
+            }
+
+            if (settings.InputAudioKeyterms.Count > 100 || settings.InputAudioKeyterms.Any(term => term.Length > 50))
+            {
+                throw new InvalidOperationException("xAI input transcription supports at most 100 keyterms of at most 50 characters each.");
+            }
+
+            if (settings.FileSearchTools.Any(tool => tool.VectorStoreIds.Count == 0))
+            {
+                throw new InvalidOperationException("Each xAI file_search tool requires at least one vector store ID.");
+            }
+
+            if (settings.McpServers.Any(server => string.IsNullOrWhiteSpace(server.ServerUrl) || string.IsNullOrWhiteSpace(server.ServerLabel)))
+            {
+                throw new InvalidOperationException("Each xAI MCP server requires ServerUrl and ServerLabel.");
+            }
+
+#pragma warning disable CS0618
+            if (settings.ReasoningEffort.HasValue && settings.Model == XaiVoiceModel.GrokVoiceFast10)
+#pragma warning restore CS0618
+            {
+                throw new InvalidOperationException("xAI reasoning effort is supported only by grok-voice-latest and grok-voice-think-fast-1.0.");
+            }
+
+            if (settings.ReasoningEffort is not null and not SessionReasoningEffort.None and not SessionReasoningEffort.High)
+            {
+                throw new InvalidOperationException("xAI Voice Agent reasoning effort accepts only None or High.");
+            }
+        }
+
+        private static string GetVoiceId(XaiVoiceSettings settings)
+        {
+            return string.IsNullOrWhiteSpace(settings.VoiceId)
+                ? settings.Voice.ToString().ToLowerInvariant()
+                : settings.VoiceId.Trim();
         }
 
         private void ResetResponseState()
@@ -357,9 +405,8 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.XAi
             _currentAiMessage.Clear();
             _currentAudioTranscript.Clear();
             _currentResponseId = string.Empty;
-            _currentFunctionArgs.Clear();
-            _currentFunctionName = string.Empty;
-            _currentCallId = string.Empty;
+            _pendingFunctionCalls.Clear();
+            _toolResultsPendingContinuation = 0;
         }
 
         private async Task WaitForSessionUpdateAsync()
@@ -388,8 +435,8 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.XAi
             if (_settings == null || !IsConnected)
                 return;
 
-            var voiceString = _settings.Voice.ToString();
-            _logAction(LogLevel.Info, $"Configuring session with voice: {_settings.Voice} -> {voiceString}");
+            var voiceString = GetVoiceId(_settings);
+            _logAction(LogLevel.Info, $"Configuring session with voice: {voiceString}");
 
             var tools = new List<XaiToolDefinition>();
 
@@ -401,6 +448,30 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.XAi
             if (_settings.EnableXSearch)
             {
                 tools.Add(XaiToolTranslator.CreateXSearchTool());
+            }
+
+            foreach (var fileSearch in _settings.FileSearchTools)
+            {
+                tools.Add(new XaiToolDefinition
+                {
+                    Type = "file_search",
+                    VectorStoreIds = fileSearch.VectorStoreIds,
+                    MaxNumResults = fileSearch.MaxResults
+                });
+            }
+
+            foreach (var mcp in _settings.McpServers)
+            {
+                tools.Add(new XaiToolDefinition
+                {
+                    Type = "mcp",
+                    ServerUrl = mcp.ServerUrl,
+                    ServerLabel = mcp.ServerLabel,
+                    ServerDescription = mcp.ServerDescription,
+                    AllowedTools = mcp.AllowedTools.Count > 0 ? mcp.AllowedTools : null,
+                    Authorization = mcp.Authorization,
+                    Headers = mcp.Headers.Count > 0 ? mcp.Headers : null
+                });
             }
 
             foreach (var tool in _settings.Tools)
@@ -425,7 +496,14 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.XAi
                             {
                                 Type = _settings.AudioFormatType,
                                 Rate = _settings.AudioSampleRate
-                            }
+                            },
+                            Transcription = _settings.EnableInputAudioTranscription
+                                ? new XaiInputAudioTranscriptionConfig
+                                {
+                                    LanguageHint = _settings.InputAudioLanguage,
+                                    Keyterms = _settings.InputAudioKeyterms.Count > 0 ? _settings.InputAudioKeyterms : null
+                                }
+                                : null
                         },
                         Output = new XaiAudioEndpointConfig
                         {
@@ -433,12 +511,15 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.XAi
                             {
                                 Type = _settings.AudioFormatType,
                                 Rate = _settings.AudioSampleRate
-                            }
+                            },
+                            Speed = _settings.TalkingSpeed
                         }
                     },
-                    InputAudioTranscription = _settings.InputAudioLanguage != null
-                        ? new XaiInputAudioTranscriptionConfig { Language = _settings.InputAudioLanguage }
+                    Reasoning = _settings.ReasoningEffort.HasValue
+                        ? new XaiReasoningConfig { Effort = _settings.ReasoningEffort.Value.ToApiString() }
                         : null,
+                    Resumption = new XaiResumptionConfig { Enabled = _settings.EnableSessionResumption },
+                    Replace = _settings.PronunciationReplacements.Count > 0 ? _settings.PronunciationReplacements : null,
                     TurnDetection = _settings.TurnDetection != null
                         ? new XaiTurnDetectionConfig
                         {
@@ -447,7 +528,8 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.XAi
                             PrefixPaddingMs = _settings.TurnDetection.PrefixPaddingMs,
                             SilenceDurationMs = _settings.TurnDetection.SilenceDurationMs,
                             CreateResponse = _settings.TurnDetection.CreateResponse,
-                            InterruptResponse = _settings.TurnDetection.InterruptResponse
+                            InterruptResponse = _settings.TurnDetection.InterruptResponse,
+                            IdleTimeoutMs = _settings.TurnDetection.IdleTimeoutMs
                         }
                         : null
                 }
@@ -547,6 +629,9 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.XAi
                     case "session.created":
                         _logAction(LogLevel.Info, "Session created by xAI");
                         break;
+                    case "conversation.created":
+                        HandleConversationCreated(root);
+                        break;
                     case "session.updated":
                         _sessionUpdateCompletionSource?.TrySetResult(true);
                         OnStatusChanged?.Invoke("Ready");
@@ -589,6 +674,9 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.XAi
                         break;
                     case "conversation.item.input_audio_transcription.completed":
                         HandleInputAudioTranscriptionCompleted(root);
+                        break;
+                    case "conversation.item.input_audio_transcription.updated":
+                        HandleInputAudioTranscriptionUpdated(root);
                         break;
                     case "error":
                         HandleError(root);
@@ -638,68 +726,84 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.XAi
 
         private void HandleFunctionCallDelta(JsonElement root)
         {
+            if (!root.TryGetProperty("call_id", out var callIdElement))
+            {
+                return;
+            }
+
+            var callId = callIdElement.GetString();
+            if (string.IsNullOrWhiteSpace(callId))
+            {
+                return;
+            }
+
+            if (!_pendingFunctionCalls.TryGetValue(callId, out var pending))
+            {
+                pending = new PendingFunctionCall();
+                _pendingFunctionCalls[callId] = pending;
+            }
+
+            if (root.TryGetProperty("name", out var nameElement))
+            {
+                pending.Name = nameElement.GetString() ?? pending.Name;
+            }
+
             if (root.TryGetProperty("delta", out var delta))
             {
-                var argsDelta = delta.GetString() ?? "";
-                _currentFunctionArgs.Append(argsDelta);
-
-                if (root.TryGetProperty("name", out var nameElement))
-                {
-                    _currentFunctionName = nameElement.GetString() ?? "";
-                }
-
-                if (root.TryGetProperty("call_id", out var callIdElement))
-                {
-                    _currentCallId = callIdElement.GetString() ?? "";
-                }
+                pending.Arguments.Append(delta.GetString());
             }
         }
 
         private async Task HandleFunctionCallDone(JsonElement root)
         {
-            if (root.TryGetProperty("name", out var nameElement) &&
-                root.TryGetProperty("call_id", out var callIdElement))
+            if (!root.TryGetProperty("call_id", out var callIdElement))
             {
-                var functionName = nameElement.GetString() ?? _currentFunctionName;
-                var callId = callIdElement.GetString() ?? _currentCallId;
-                var argumentsJson = _currentFunctionArgs.ToString();
-
-                _logAction(LogLevel.Info, $"Function call complete: {functionName} (ID: {callId})");
-
-                var tool = _settings?.Tools.FirstOrDefault(t => t.Name == functionName);
-
-                if (tool != null)
-                {
-                    try
-                    {
-                        _logAction(LogLevel.Info, $"Executing tool: {functionName}");
-                        var result = await tool.ExecuteAsync(argumentsJson);
-
-                        await SendToolResultAsync(callId, result);
-
-                        var formattedArgs = FormatToolArguments(argumentsJson);
-                        var toolCallMessage = ChatMessage.CreateAssistantMessage($"Calling tool: {functionName}\nArguments: {formattedArgs}");
-                        OnMessageReceived?.Invoke(toolCallMessage);
-
-                        var toolResponseMessage = ChatMessage.CreateToolMessage(functionName, result, callId);
-                        OnMessageReceived?.Invoke(toolResponseMessage);
-                    }
-                    catch (Exception ex)
-                    {
-                        _logAction(LogLevel.Error, $"Error executing tool {functionName}: {ex.Message}");
-                        await SendToolResultAsync(callId, $"Error: {ex.Message}");
-                    }
-                }
-                else
-                {
-                    _logAction(LogLevel.Warn, $"Tool not found: {functionName}");
-                    await SendToolResultAsync(callId, $"Tool not found: {functionName}");
-                }
-
-                _currentFunctionArgs.Clear();
-                _currentFunctionName = "";
-                _currentCallId = "";
+                return;
             }
+
+            var callId = callIdElement.GetString() ?? string.Empty;
+            _pendingFunctionCalls.TryGetValue(callId, out var pending);
+
+            var functionName = root.TryGetProperty("name", out var nameElement)
+                ? nameElement.GetString() ?? pending?.Name ?? string.Empty
+                : pending?.Name ?? string.Empty;
+            var argumentsJson = root.TryGetProperty("arguments", out var argumentsElement)
+                ? argumentsElement.GetString() ?? "{}"
+                : pending?.Arguments.ToString() ?? "{}";
+
+            _logAction(LogLevel.Info, $"Function call complete: {functionName} (ID: {callId})");
+
+            var tool = _settings?.Tools.FirstOrDefault(t => t.Name == functionName);
+
+            if (tool != null)
+            {
+                try
+                {
+                    _logAction(LogLevel.Info, $"Executing tool: {functionName}");
+                    var result = await tool.ExecuteAsync(argumentsJson);
+
+                    await SendToolResultAsync(callId, result);
+
+                    var formattedArgs = FormatToolArguments(argumentsJson);
+                    var toolCallMessage = ChatMessage.CreateAssistantMessage($"Calling tool: {functionName}\nArguments: {formattedArgs}");
+                    OnMessageReceived?.Invoke(toolCallMessage);
+
+                    var toolResponseMessage = ChatMessage.CreateToolMessage(functionName, result, callId);
+                    OnMessageReceived?.Invoke(toolResponseMessage);
+                }
+                catch (Exception ex)
+                {
+                    _logAction(LogLevel.Error, $"Error executing tool {functionName}: {ex.Message}");
+                    await SendToolResultAsync(callId, $"Error: {ex.Message}");
+                }
+            }
+            else
+            {
+                _logAction(LogLevel.Warn, $"Tool not found: {functionName}");
+                await SendToolResultAsync(callId, $"Tool not found: {functionName}");
+            }
+
+            _pendingFunctionCalls.Remove(callId);
         }
 
         private async Task SendToolResultAsync(string callId, string result)
@@ -716,12 +820,7 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.XAi
 
             await SendMessageAsync(JsonSerializer.Serialize(toolResponse, XaiJsonContext.Default.XaiConversationItemCreateMessage));
             _logAction(LogLevel.Info, $"Tool result sent for call {callId}");
-
-            await WaitForPlaybackBeforeToolContinuationAsync();
-
-            var responseCreate = new XaiResponseCreateMessage();
-            await SendMessageAsync(JsonSerializer.Serialize(responseCreate, XaiJsonContext.Default.XaiResponseCreateMessage));
-            _logAction(LogLevel.Info, "Requested AI response after tool execution");
+            _toolResultsPendingContinuation++;
         }
 
         private async Task WaitForPlaybackBeforeToolContinuationAsync()
@@ -805,6 +904,7 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.XAi
                 if (!string.IsNullOrEmpty(text))
                 {
                     _logAction(LogLevel.Info, $"User transcript: {text}");
+                    OnTranscriptionCompleted?.Invoke(text);
 
                     var message = ChatMessage.CreateUserMessage(text);
                     OnMessageReceived?.Invoke(message);
@@ -830,6 +930,34 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.XAi
             {
                 string deltaText = textElem.GetString() ?? string.Empty;
                 _currentAiMessage.Append(deltaText);
+            }
+        }
+
+        private void HandleInputAudioTranscriptionUpdated(JsonElement root)
+        {
+            if (root.TryGetProperty("transcript", out var transcript))
+            {
+                var text = transcript.GetString();
+                if (!string.IsNullOrEmpty(text))
+                {
+                    OnTranscriptionDelta?.Invoke(text);
+                }
+            }
+        }
+
+        private void HandleConversationCreated(JsonElement root)
+        {
+            if (_settings == null || !root.TryGetProperty("conversation", out var conversation) ||
+                !conversation.TryGetProperty("id", out var idElement))
+            {
+                return;
+            }
+
+            var conversationId = idElement.GetString();
+            if (!string.IsNullOrWhiteSpace(conversationId))
+            {
+                _settings.ConversationId = conversationId;
+                _logAction(LogLevel.Info, $"Conversation created: {conversationId}");
             }
         }
 
@@ -871,7 +999,16 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.XAi
                 OnUsageReceived?.Invoke(report);
             }
 
-            await Task.CompletedTask;
+            if (_toolResultsPendingContinuation > 0)
+            {
+                var resultCount = _toolResultsPendingContinuation;
+                _toolResultsPendingContinuation = 0;
+                await WaitForPlaybackBeforeToolContinuationAsync();
+
+                var responseCreate = new XaiResponseCreateMessage();
+                await SendMessageAsync(JsonSerializer.Serialize(responseCreate, XaiJsonContext.Default.XaiResponseCreateMessage));
+                _logAction(LogLevel.Info, $"Requested one AI continuation after {resultCount} tool result(s)");
+            }
         }
 
         private async Task HandleTextDone()
@@ -955,6 +1092,12 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.XAi
 
             _currentAiMessage.Clear();
             _currentAudioTranscript.Clear();
+        }
+
+        private sealed class PendingFunctionCall
+        {
+            public string Name { get; set; } = string.Empty;
+            public StringBuilder Arguments { get; } = new();
         }
 
         /// <summary>

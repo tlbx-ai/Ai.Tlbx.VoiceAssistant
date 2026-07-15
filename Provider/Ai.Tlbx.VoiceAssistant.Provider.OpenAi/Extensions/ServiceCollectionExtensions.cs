@@ -58,13 +58,13 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi.Extensions
         /// <returns>Configured OpenAI voice settings.</returns>
         public static OpenAiVoiceSettings CreateDefaultOpenAiSettings(
             string instructions = "You are a helpful assistant.",
-            AssistantVoice voice = AssistantVoice.Alloy)
+            AssistantVoice voice = AssistantVoice.Marin)
         {
             return new OpenAiVoiceSettings
             {
                 Instructions = instructions,
                 Voice = voice,
-                Model = OpenAiRealtimeModel.GptRealtime2,
+                Model = OpenAiRealtimeModel.GptRealtime21,
                 TurnDetection = new TurnDetection
                 {
                     Type = "server_vad",

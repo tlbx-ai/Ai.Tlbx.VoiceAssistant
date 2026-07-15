@@ -509,7 +509,7 @@
     }
 
     // Voice management (provider-specific)
-    private string _currentVoiceString = "Alloy";
+    private string _currentVoiceString = nameof(AssistantVoice.Marin);
     private string currentVoiceString
     {
         get => _currentVoiceString;
@@ -525,7 +525,7 @@
     private sealed record ModelOption(string Value, string Label);
 
     // Model management (provider-specific)
-    private string _currentModelString = nameof(OpenAiRealtimeModel.GptRealtime2);
+    private string _currentModelString = nameof(OpenAiRealtimeModel.GptRealtime21);
     private List<ModelOption> availableModels = GetEnumOptions<OpenAiRealtimeModel>(includeObsolete: true);
     private static readonly List<ModelOption> _thinkingLevels = GetEnumOptions<SessionThinkingLevel>();
     private static readonly List<ModelOption> _reasoningEfforts = GetEnumOptions<SessionReasoningEffort>()
@@ -693,9 +693,9 @@
         if (_selectedProviderString == "OpenAI")
         {
             availableVoices = Enum.GetValues<AssistantVoice>().Select(v => v.ToString()).ToList();
-            _currentVoiceString = "Alloy";
+            _currentVoiceString = nameof(AssistantVoice.Marin);
             availableModels = GetEnumOptions<OpenAiRealtimeModel>(includeObsolete: true);
-            _currentModelString = nameof(OpenAiRealtimeModel.GptRealtime2);
+            _currentModelString = nameof(OpenAiRealtimeModel.GptRealtime21);
         }
         else if (_selectedProviderString == "Google")
         {
@@ -707,13 +707,9 @@
         else if (_selectedProviderString == "xAI")
         {
             availableVoices = Enum.GetValues<XaiVoice>().Select(v => v.ToString()).ToList();
-            _currentVoiceString = "Ara";
-            availableModels = new()
-            {
-                new ModelOption(nameof(XaiVoiceModel.GrokVoiceThinkFast10), "Grok Voice Think Fast 1.0"),
-                new ModelOption(nameof(XaiVoiceModel.GrokVoiceFast10), "Grok Voice Fast 1.0")
-            };
-            _currentModelString = nameof(XaiVoiceModel.GrokVoiceThinkFast10);
+            _currentVoiceString = nameof(XaiVoice.Eve);
+            availableModels = GetEnumOptions<XaiVoiceModel>(includeObsolete: true);
+            _currentModelString = nameof(XaiVoiceModel.GrokVoiceLatest);
         }
     }
 
@@ -1053,7 +1049,7 @@
     {
         return Enum.TryParse<OpenAiRealtimeModel>(_currentModelString, out var model)
             ? model
-            : OpenAiRealtimeModel.GptRealtime2;
+            : OpenAiRealtimeModel.GptRealtime21;
     }
 
     private OpenAiTranscriptionModel GetSelectedTranscriptionModelOrDefault()
@@ -1242,12 +1238,12 @@
             {
                 if (!Enum.TryParse<AssistantVoice>(_currentVoiceString, out var openAiVoice))
                 {
-                    openAiVoice = AssistantVoice.Alloy;
+                    openAiVoice = AssistantVoice.Marin;
                 }
 
                 if (!Enum.TryParse<OpenAiRealtimeModel>(_currentModelString, out var openAiModel))
                 {
-                    openAiModel = OpenAiRealtimeModel.GptRealtime2;
+                    openAiModel = OpenAiRealtimeModel.GptRealtime21;
                 }
 
                 settings = new OpenAiVoiceSettings
@@ -1307,12 +1303,12 @@
             {
                 if (!Enum.TryParse<XaiVoice>(_currentVoiceString, out var xaiVoice))
                 {
-                    xaiVoice = XaiVoice.Ara;
+                    xaiVoice = XaiVoice.Eve;
                 }
 
                 if (!Enum.TryParse<XaiVoiceModel>(_currentModelString, out var xaiModel))
                 {
-                    xaiModel = XaiVoiceModel.GrokVoiceThinkFast10;
+                    xaiModel = XaiVoiceModel.GrokVoiceLatest;
                 }
 
                 settings = new XaiVoiceSettings

@@ -108,6 +108,7 @@ internal sealed class OpenAiDirectRealtimeSessionRegistry : IOpenAiDirectRealtim
                     TurnDetection = new TurnDetectionConfig
                     {
                         Type = settings.TurnDetection.Type,
+                        Eagerness = IsSemanticVad(settings.TurnDetection.Type) ? settings.Eagerness.ToString() : null,
                         Threshold = settings.TurnDetection.Threshold,
                         PrefixPaddingMs = settings.TurnDetection.PrefixPaddingMs,
                         SilenceDurationMs = settings.TurnDetection.SilenceDurationMs,
@@ -122,12 +123,24 @@ internal sealed class OpenAiDirectRealtimeSessionRegistry : IOpenAiDirectRealtim
                     Speed = settings.TalkingSpeed
                 }
             },
-            Reasoning = settings.ReasoningEffort.HasValue
-                ? new OpenAiReasoningConfig { Effort = settings.ReasoningEffort.Value.ToApiString() }
-                : null,
-            Include = ["item.input_audio_transcription.logprobs"]
+            Reasoning = BuildReasoningConfig(settings)
         };
     }
+
+    private static OpenAiReasoningConfig? BuildReasoningConfig(OpenAiVoiceSettings settings)
+    {
+        if (!settings.Model.SupportsReasoningEffort() ||
+            !settings.ReasoningEffort.HasValue ||
+            settings.ReasoningEffort.Value == SessionReasoningEffort.None)
+        {
+            return null;
+        }
+
+        return new OpenAiReasoningConfig { Effort = settings.ReasoningEffort.Value.ToApiString() };
+    }
+
+    private static bool IsSemanticVad(string? type) =>
+        string.Equals(type, "semantic_vad", StringComparison.OrdinalIgnoreCase);
 
     public async Task<JsonElement> RequestClientActionAsync(
         string? voiceSessionId,

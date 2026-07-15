@@ -30,12 +30,18 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi.Models
         /// <summary>
         /// The OpenAI model to use for the conversation.
         /// </summary>
-        public OpenAiRealtimeModel Model { get; set; } = OpenAiRealtimeModel.GptRealtime2;
+        public OpenAiRealtimeModel Model { get; set; } = OpenAiRealtimeModel.GptRealtime21;
 
         /// <summary>
         /// The voice to use for AI responses.
         /// </summary>
-        public AssistantVoice Voice { get; set; } = AssistantVoice.Alloy;
+        public AssistantVoice Voice { get; set; } = AssistantVoice.Marin;
+
+        /// <summary>
+        /// Optional stable, non-identifying end-user identifier for OpenAI abuse monitoring.
+        /// OpenAI recommends hashing a username or email before assigning this value.
+        /// </summary>
+        public string? SafetyIdentifier { get; set; }
 
         /// <summary>
         /// The speed of the AI model's spoken response.
@@ -88,7 +94,7 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi.Models
         public NoiseReductionMode NoiseReduction { get; set; } = NoiseReductionMode.FarField;
 
         /// <summary>
-        /// Optional reasoning effort. Supported by GPT Realtime 2; ignored by other OpenAI realtime models.
+        /// Optional reasoning effort. Supported by full GPT Realtime 2 and 2.1 models; ignored by other OpenAI realtime models.
         /// </summary>
         public SessionReasoningEffort? ReasoningEffort { get; set; }
 

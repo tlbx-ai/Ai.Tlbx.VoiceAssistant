@@ -313,6 +313,9 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi.Protocol
         [JsonPropertyName("type")]
         public string? Type { get; set; }
 
+        [JsonPropertyName("eagerness")]
+        public string? Eagerness { get; set; }
+
         [JsonPropertyName("threshold")]
         public double? Threshold { get; set; }
 

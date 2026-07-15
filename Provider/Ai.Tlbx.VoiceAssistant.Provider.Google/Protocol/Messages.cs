@@ -40,6 +40,27 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.Google.Protocol
 
         [JsonPropertyName("proactivity")]
         public ProactivityConfig? Proactivity { get; set; }
+
+        [JsonPropertyName("contextWindowCompression")]
+        public ContextWindowCompressionConfig? ContextWindowCompression { get; set; }
+
+        [JsonPropertyName("sessionResumption")]
+        public SessionResumptionConfig? SessionResumption { get; set; }
+    }
+
+    public class ContextWindowCompressionConfig
+    {
+        [JsonPropertyName("slidingWindow")]
+        public EmptyObject SlidingWindow { get; set; } = new();
+
+        [JsonPropertyName("triggerTokens")]
+        public long? TriggerTokens { get; set; }
+    }
+
+    public class SessionResumptionConfig
+    {
+        [JsonPropertyName("handle")]
+        public string? Handle { get; set; }
     }
 
     /// <summary>
@@ -298,6 +319,27 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.Google.Protocol
 
         [JsonPropertyName("toolCallCancellation")]
         public ToolCallCancellation? ToolCallCancellation { get; set; }
+
+        [JsonPropertyName("sessionResumptionUpdate")]
+        public SessionResumptionUpdate? SessionResumptionUpdate { get; set; }
+
+        [JsonPropertyName("goAway")]
+        public GoAway? GoAway { get; set; }
+    }
+
+    public class SessionResumptionUpdate
+    {
+        [JsonPropertyName("newHandle")]
+        public string? NewHandle { get; set; }
+
+        [JsonPropertyName("resumable")]
+        public bool Resumable { get; set; }
+    }
+
+    public class GoAway
+    {
+        [JsonPropertyName("timeLeft")]
+        public string? TimeLeft { get; set; }
     }
 
     public class ServerContent
@@ -310,6 +352,9 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.Google.Protocol
 
         [JsonPropertyName("interrupted")]
         public bool Interrupted { get; set; }
+
+        [JsonPropertyName("generationComplete")]
+        public bool GenerationComplete { get; set; }
     }
 
     public class ModelTurn

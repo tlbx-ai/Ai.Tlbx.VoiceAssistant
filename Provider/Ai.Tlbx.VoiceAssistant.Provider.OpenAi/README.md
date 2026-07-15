@@ -16,7 +16,8 @@ dotnet add package Ai.Tlbx.VoiceAssistant.Provider.OpenAi
 var provider = factory.CreateOpenAi(apiKey);
 var settings = new OpenAiVoiceSettings
 {
-    Voice = AssistantVoice.Alloy,
+    Voice = AssistantVoice.Marin,
+    Model = OpenAiRealtimeModel.GptRealtime21,
     Instructions = "You are a helpful assistant."
 };
 

@@ -159,6 +159,10 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi
 
             using var httpRequest = new HttpRequestMessage(HttpMethod.Post, REALTIME_SESSION_ENDPOINT);
             httpRequest.Headers.Authorization = new AuthenticationHeaderValue("Bearer", _apiKey);
+            if (!string.IsNullOrWhiteSpace(_settings.SafetyIdentifier))
+            {
+                httpRequest.Headers.TryAddWithoutValidation("OpenAI-Safety-Identifier", _settings.SafetyIdentifier);
+            }
             httpRequest.Content = new StringContent(json, Encoding.UTF8, "application/json");
 
             var response = await _httpClient.SendAsync(httpRequest);
@@ -454,6 +458,7 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi
                             TurnDetection = new TurnDetectionConfig
                             {
                                 Type = _settings.TurnDetection.Type,
+                                Eagerness = IsSemanticVad(_settings.TurnDetection.Type) ? _settings.Eagerness.ToString() : null,
                                 Threshold = _settings.TurnDetection.Threshold,
                                 PrefixPaddingMs = _settings.TurnDetection.PrefixPaddingMs,
                                 SilenceDurationMs = _settings.TurnDetection.SilenceDurationMs,
@@ -479,7 +484,7 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi
 
         private static OpenAiReasoningConfig? BuildReasoningConfig(OpenAiVoiceSettings settings)
         {
-            if (settings.Model != OpenAiRealtimeModel.GptRealtime2 || !settings.ReasoningEffort.HasValue)
+            if (!settings.Model.SupportsReasoningEffort() || !settings.ReasoningEffort.HasValue)
             {
                 return null;
             }
@@ -491,6 +496,9 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi
 
             return new OpenAiReasoningConfig { Effort = settings.ReasoningEffort.Value.ToApiString() };
         }
+
+        private static bool IsSemanticVad(string? type) =>
+            string.Equals(type, "semantic_vad", StringComparison.OrdinalIgnoreCase);
 
         private static string BuildInstructions(OpenAiVoiceSettings settings)
         {

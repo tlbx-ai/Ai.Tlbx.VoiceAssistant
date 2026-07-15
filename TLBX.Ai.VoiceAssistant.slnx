@@ -23,10 +23,12 @@
     <File Path="Directory.Build.props" />
     <File Path="LoggingStrategy.md" />
     <File Path="publish-nuget.ps1" />
+    <File Path="verify-release.ps1" />
     <File Path="README.md" />
   </Folder>
   <Folder Name="/Tests/">
     <Project Path="Tests/AotTest/AotTest.csproj" />
+    <Project Path="Tests/ContractTests/ContractTests.csproj" />
   </Folder>
   <Folder Name="/WebUi/">
     <Project Path="WebUi/Ai.Tlbx.VoiceAssistant.WebUi/Ai.Tlbx.VoiceAssistant.WebUi.csproj" />

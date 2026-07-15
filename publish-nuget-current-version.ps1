@@ -10,6 +10,12 @@ param(
 
 $ErrorActionPreference = "Stop"
 
+& (Join-Path $PSScriptRoot "verify-release.ps1") -Configuration $Configuration
+if ($LASTEXITCODE -ne 0)
+{
+    throw "Release verification failed."
+}
+
 # Read current version from Directory.Build.props
 $propsFilePath = Join-Path $PSScriptRoot "Directory.Build.props"
 if (Test-Path $propsFilePath) 

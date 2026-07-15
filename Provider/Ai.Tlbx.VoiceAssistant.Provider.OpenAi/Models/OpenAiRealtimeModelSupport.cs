@@ -7,7 +7,8 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi.Models
     {
         public static bool SupportsReasoningEffort(this OpenAiRealtimeModel model)
         {
-            return model == OpenAiRealtimeModel.GptRealtime2;
+            return model is OpenAiRealtimeModel.GptRealtime21
+                or OpenAiRealtimeModel.GptRealtime2;
         }
     }
 }

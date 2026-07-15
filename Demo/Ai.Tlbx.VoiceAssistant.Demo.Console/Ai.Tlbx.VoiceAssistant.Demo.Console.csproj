@@ -11,7 +11,7 @@
     <PackageReference Include="Spectre.Console" Version="0.54.0" />
   </ItemGroup>
 
-  <ItemGroup Condition="'$(Configuration)' == 'Debug'">
+  <ItemGroup Condition="'$(UsePublishedPackages)' != 'true'">
     <ProjectReference Include="..\..\Hardware\Ai.Tlbx.VoiceAssistant.Hardware.Windows\Ai.Tlbx.VoiceAssistant.Hardware.Windows.csproj" />
     <ProjectReference Include="..\..\Hardware\Ai.Tlbx.VoiceAssistant.Hardware.Linux\Ai.Tlbx.VoiceAssistant.Hardware.Linux.csproj" />
     <ProjectReference Include="..\..\Provider\Ai.Tlbx.VoiceAssistant\Ai.Tlbx.VoiceAssistant.csproj" />
@@ -20,7 +20,7 @@
     <ProjectReference Include="..\..\Provider\Ai.Tlbx.VoiceAssistant.Provider.XAi\Ai.Tlbx.VoiceAssistant.Provider.XAi.csproj" />
   </ItemGroup>
 
-  <ItemGroup Condition="'$(Configuration)' == 'Release'">
+  <ItemGroup Condition="'$(UsePublishedPackages)' == 'true'">
     <PackageReference Include="Ai.Tlbx.VoiceAssistant.Hardware.Windows" Version="*" />
     <PackageReference Include="Ai.Tlbx.VoiceAssistant.Hardware.Linux" Version="*" />
     <PackageReference Include="Ai.Tlbx.VoiceAssistant" Version="*" />

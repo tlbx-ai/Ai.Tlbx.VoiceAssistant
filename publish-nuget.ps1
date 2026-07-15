@@ -19,6 +19,12 @@ param(
 
 $ErrorActionPreference = "Stop"
 
+& (Join-Path $PSScriptRoot "verify-release.ps1") -Configuration $Configuration
+if ($LASTEXITCODE -ne 0)
+{
+    throw "Release verification failed."
+}
+
 # Check for uncommitted changes
 $gitStatus = git status --porcelain
 

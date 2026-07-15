@@ -33,7 +33,7 @@ app.MapGet("/test", () =>
         var openAiSettings = new OpenAiVoiceSettings
         {
             Instructions = "Test",
-            Voice = AssistantVoice.Alloy
+            Voice = AssistantVoice.Marin
         };
         results.Add($"OpenAI settings created: Voice={openAiSettings.Voice}");
     }
@@ -63,7 +63,7 @@ app.MapGet("/test", () =>
         var xaiSettings = new XaiVoiceSettings
         {
             Instructions = "Test",
-            Voice = XaiVoice.Ara
+            Voice = XaiVoice.Eve
         };
         results.Add($"xAI settings created: Voice={xaiSettings.Voice}");
     }

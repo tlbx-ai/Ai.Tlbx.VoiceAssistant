@@ -4,15 +4,26 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi.Models
 {
     /// <summary>
     /// Supported OpenAI Realtime API models that have been tested with this library.
-    /// Current defaults should prefer <see cref="GptRealtime2"/>.
+    /// Current defaults should prefer <see cref="GptRealtime21"/>.
     /// </summary>
     public enum OpenAiRealtimeModel
     {
         /// <summary>
+        /// GPT Realtime 2.1, OpenAI's current full realtime reasoning model.
+        /// Improves alphanumeric recognition, silence/noise handling, and interruption behavior.
+        /// </summary>
+        GptRealtime21,
+
+        /// <summary>
+        /// GPT Realtime 2.1 mini, optimized for faster and lower-cost realtime sessions.
+        /// </summary>
+        GptRealtime21Mini,
+
+        /// <summary>
         /// Legacy alias for the unpinned GPT Realtime model id.
         /// Kept for compatibility with earlier releases.
         /// </summary>
-        [Obsolete("Prefer GptRealtime2 for the latest realtime voice model, GptRealtime15 for A/B baselines, or GptRealtimeMini for lower-cost realtime sessions. This unpinned alias is kept only for compatibility.")]
+        [Obsolete("Prefer GptRealtime21 for the latest realtime voice model or GptRealtime21Mini for lower-cost realtime sessions. This unpinned alias is kept only for compatibility.")]
         GptRealtime,
 
         /// <summary>
@@ -36,25 +47,25 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi.Models
         /// <summary>
         /// Pinned GPT Realtime snapshot from August 28, 2025.
         /// </summary>
-        [Obsolete("Prefer GptRealtime2. This pinned 2025-08-28 snapshot is legacy and should only be used for compatibility investigations.")]
+        [Obsolete("Prefer GptRealtime21. This pinned 2025-08-28 snapshot is legacy and should only be used for compatibility investigations.")]
         Gpt520250828,
 
         /// <summary>
         /// GPT-4o Realtime preview from June 2025.
         /// </summary>
-        [Obsolete("Legacy GPT-4o Realtime preview model. Migrate to GptRealtime2 before the preview shutdown path becomes unusable.")]
+        [Obsolete("Legacy GPT-4o Realtime preview model. Migrate to GptRealtime21.")]
         Gpt4oRealtimePreview20250603,
         
         /// <summary>
         /// GPT-4o Realtime preview from December 2024.
         /// </summary>
-        [Obsolete("Legacy GPT-4o Realtime preview model. Migrate to GptRealtime2 before the preview shutdown path becomes unusable.")]
+        [Obsolete("Legacy GPT-4o Realtime preview model. Migrate to GptRealtime21.")]
         Gpt4oRealtimePreview20241217,
         
         /// <summary>
         /// GPT-4o Realtime preview from October 2024.
         /// </summary>
-        [Obsolete("Legacy GPT-4o Realtime preview model. Migrate to GptRealtime2 before the preview shutdown path becomes unusable.")]
+        [Obsolete("Legacy GPT-4o Realtime preview model. Migrate to GptRealtime21.")]
         Gpt4oRealtimePreview20241001,
         
         /// <summary>
@@ -79,6 +90,8 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi.Models
         {
             return model switch
             {
+                OpenAiRealtimeModel.GptRealtime21 => "gpt-realtime-2.1",
+                OpenAiRealtimeModel.GptRealtime21Mini => "gpt-realtime-2.1-mini",
                 OpenAiRealtimeModel.GptRealtime => "gpt-realtime",
                 OpenAiRealtimeModel.GptRealtimeMini => "gpt-realtime-mini",
                 OpenAiRealtimeModel.GptRealtime2 => "gpt-realtime-2",

@@ -54,12 +54,12 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.XAi.Extensions
         /// <returns>Configured xAI voice settings.</returns>
         public static XaiVoiceSettings CreateDefaultXaiSettings(
             string instructions = "You are a helpful assistant.",
-            XaiVoice voice = XaiVoice.Ara)
+            XaiVoice voice = XaiVoice.Eve)
         {
             return new XaiVoiceSettings
             {
                 Instructions = instructions,
-                Model = XaiVoiceModel.GrokVoiceThinkFast10,
+                Model = XaiVoiceModel.GrokVoiceLatest,
                 Voice = voice,
                 AudioSampleRate = 24000,
                 AudioFormatType = "audio/pcm",

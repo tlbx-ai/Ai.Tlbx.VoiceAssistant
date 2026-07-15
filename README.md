@@ -127,11 +127,11 @@ app.MapOpenAiDirectRealtimeVoice();
 var provider = new OpenAiVoiceProvider(apiKey);
 var settings = new OpenAiVoiceSettings
 {
-    Voice = AssistantVoice.Alloy,
-    Model = OpenAiRealtimeModel.GptRealtime2
+    Voice = AssistantVoice.Marin,
+    Model = OpenAiRealtimeModel.GptRealtime21
 };
 
-// Google Gemini — voices: Puck, Charon, Kore, Fenrir, Aoede, Leda, Orus, Zephyr
+// Google Gemini — all 30 native-audio voices are available through GoogleVoice
 var provider = new GoogleVoiceProvider(apiKey);
 var settings = new GoogleVoiceSettings
 {
@@ -139,12 +139,12 @@ var settings = new GoogleVoiceSettings
     Model = GoogleModel.Gemini31FlashLivePreview
 };
 
-// xAI Grok — voices: Ara, Rex, Sal, Eve, Leo
+// xAI Grok — all 26 built-in voices plus custom voice IDs
 var provider = new XaiVoiceProvider(apiKey);
 var settings = new XaiVoiceSettings
 {
-    Voice = XaiVoice.Ara,
-    Model = XaiVoiceModel.GrokVoiceThinkFast10
+    Voice = XaiVoice.Eve,
+    Model = XaiVoiceModel.GrokVoiceLatest
 };
 ```
 
@@ -157,11 +157,11 @@ Each provider has its own settings class with shared and provider-specific optio
 **Shared (`IVoiceSettings`):** `Instructions`, `Tools`, `TalkingSpeed`, `NoiseReduction`, `ReasoningEffort`, `ToolCallPreambleMode`
 
 ```csharp
-// OpenAI — current recommended realtime default is GptRealtime2
+// OpenAI — current recommended realtime default is GptRealtime21
 new OpenAiVoiceSettings
 {
     Voice = AssistantVoice.Coral,
-    Model = OpenAiRealtimeModel.GptRealtime2,
+    Model = OpenAiRealtimeModel.GptRealtime21,
     ReasoningEffort = SessionReasoningEffort.Medium,
     ToolCallPreambleMode = ToolCallPreambleMode.BeforeToolBurst,
     TalkingSpeed = 1.2,
@@ -177,26 +177,30 @@ new GoogleVoiceSettings
     Model = GoogleModel.Gemini31FlashLivePreview,
     LanguageCode = "en",
     Temperature = 0.8,
-    AutomaticContextCompression = true
+    AutomaticContextCompression = true,
+    // Session resumption is enabled by default; the provider retains the latest handle.
 };
 
-// xAI — VAD turn detection, language hint, web/X search
+// xAI — VAD, current transcription schema, reasoning, resumption, and web/X search
 new XaiVoiceSettings
 {
-    Voice = XaiVoice.Ara,
-    Model = XaiVoiceModel.GrokVoiceThinkFast10,
-    InputAudioLanguage = "en",
-    TurnDetection = new XaiTurnDetection { SilenceDurationMs = 200, Threshold = 0.5 },
+    Voice = XaiVoice.Eve,
+    Model = XaiVoiceModel.GrokVoiceLatest,
+    InputAudioLanguage = "en-US",
+    InputAudioKeyterms = ["TLBX"],
+    ReasoningEffort = SessionReasoningEffort.High,
+    TalkingSpeed = 1.1,
+    TurnDetection = new XaiTurnDetection { SilenceDurationMs = 200, Threshold = 0.85 },
     EnableWebSearch = true
 };
 ```
 
 | Setting | OpenAI | Google | xAI |
 |---------|--------|--------|-----|
-| TalkingSpeed | 0.25–1.5 | interface only | interface only |
+| TalkingSpeed | 0.25–1.5 | prompt-controlled | 0.7–1.5 |
 | Turn detection / VAD | `TurnDetection` | `VoiceActivityDetection` | `XaiTurnDetection` |
 | Language hint | `MostLikelySpokenLanguage` | `LanguageCode` | `InputAudioLanguage` |
-| Context management | `AutomaticContextTruncation` | `AutomaticContextCompression` | — |
+| Context management | `AutomaticContextTruncation` | compression + session resumption | session resumption |
 | Web search | — | — | `EnableWebSearch`, `EnableXSearch` |
 
 Runtime changes can be applied to an active provider connection with
@@ -206,13 +210,21 @@ tool list, reasoning effort, or voice settings without restarting audio.
 
 ### Current model guidance
 
-- OpenAI: `OpenAiRealtimeModel.GptRealtime2` is the production default for the latest reasoning voice model. `OpenAiRealtimeModel.GptRealtime15` remains available as an A/B baseline, and legacy `gpt-4o-realtime-preview-*` enums remain available but are marked obsolete.
+- OpenAI: `OpenAiRealtimeModel.GptRealtime21` is the default full reasoning voice model; `GptRealtime21Mini` is the faster, lower-cost option. Older model IDs remain available for compatibility.
 - Google: `GoogleModel.Gemini31FlashLivePreview` is the current default for the Gemini Live API. `GoogleModel.Gemini25FlashNativeAudioLatest` is also available for testing Google's rolling native-audio Live API alias. The `gemini-3.1-flash-tts-preview` and older `gemini-2.5-*-tts` models are text-to-speech `generateContent` models, not realtime `bidiGenerateContent` voice-session models, so they are not exposed through this realtime provider.
-- xAI: `XaiVoiceModel.GrokVoiceThinkFast10` is the default and recommended model. `XaiVoiceModel.GrokVoiceFast10` remains available as an A/B baseline.
+- xAI: `XaiVoiceModel.GrokVoiceLatest` follows xAI's current recommended alias. Use `GrokVoiceThinkFast10` when a pinned production version is preferable; `GrokVoiceFast10` remains for legacy compatibility but is deprecated by xAI.
 
 ### xAI Tool Continuations
 
-The xAI provider waits for queued audio playback to drain before sending `response.create` after a custom tool result. This follows xAI Voice Agent guidance and avoids the model starting a follow-up response while the previous audio is still playing.
+The xAI provider waits for queued audio playback to drain and sends one `response.create` after all tool results in a parallel tool-call burst. This avoids overlapping playback and preserves xAI's required batching semantics.
+
+Run the deterministic provider-wire checks with:
+
+```bash
+dotnet run --project Tests/ContractTests/ContractTests.csproj -c Release
+```
+
+Before packaging, `verify-release.ps1` runs the full solution build, provider contract tests, console smoke test, and Native AOT publish. Both NuGet publish scripts invoke this gate automatically.
 
 ---
 
@@ -503,6 +515,8 @@ The terminal demo uses `Spectre.Console` and mirrors the web demo's operational 
 ```bash
 dotnet run --project Demo/Ai.Tlbx.VoiceAssistant.Demo.Console/Ai.Tlbx.VoiceAssistant.Demo.Console.csproj -c Release -- --smoke-test
 ```
+
+Release builds use source project references by default so unreleased APIs can be validated. Set `-p:UsePublishedPackages=true` after publishing to smoke-test the demo against packages from NuGet.
 
 ### Built-in Tools
 - `TimeTool` — Current time in any timezone

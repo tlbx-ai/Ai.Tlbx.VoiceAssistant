@@ -18,7 +18,9 @@ var settings = new GoogleVoiceSettings
 {
     Voice = GoogleVoice.Puck,
     Model = GoogleModel.Gemini31FlashLivePreview,
-    Instructions = "You are a helpful assistant."
+    Instructions = "You are a helpful assistant.",
+    AutomaticContextCompression = true,
+    EnableSessionResumption = true
 };
 
 var assistant = new VoiceAssistant(provider, audioHardware);
@@ -36,3 +38,4 @@ See the main package for complete documentation:
 - `GoogleModel.Gemini31FlashLivePreview` is the default Gemini Live API model.
 - `GoogleModel.Gemini25FlashNativeAudioLatest` targets Google's rolling native-audio Live API alias.
 - Google TTS-only models such as `gemini-3.1-flash-tts-preview` use `generateContent`, not realtime `bidiGenerateContent`, and are intentionally not exposed through this realtime voice provider.
+- `GoogleVoice` exposes all 30 native-audio voices. Context compression and session resumption are enabled by default for long-running sessions.

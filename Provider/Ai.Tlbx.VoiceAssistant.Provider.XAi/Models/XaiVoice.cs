@@ -1,10 +1,33 @@
 namespace Ai.Tlbx.VoiceAssistant.Provider.XAi.Models
 {
     /// <summary>
-    /// Available assistant voices for xAI Grok Voice Agent API.
+    /// Built-in assistant voices shared by the xAI Voice Agent and Text to Speech APIs.
+    /// Custom voices can be selected through XaiVoiceSettings.VoiceId.
     /// </summary>
     public enum XaiVoice
     {
+        Carina,
+        Zagan,
+        Helix,
+        Orion,
+        Luna,
+        Iris,
+        Altair,
+        Zenith,
+        Perseus,
+        Helios,
+        Lux,
+        Kepler,
+        Rigel,
+        Cosmo,
+        Celeste,
+        Ursa,
+        Sirius,
+        Lumen,
+        Castor,
+        Naksh,
+        Atlas,
+
         /// <summary>
         /// Ara - Female, warm and friendly. Default voice, balanced and conversational.
         /// </summary>

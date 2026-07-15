@@ -80,6 +80,23 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.Google.Models
         public bool AutomaticContextCompression { get; set; } = true;
 
         /// <summary>
+        /// Optional token count that triggers context compression. Null uses Google's recommended
+        /// default of 80 percent of the model context window.
+        /// </summary>
+        public long? ContextCompressionTriggerTokens { get; set; }
+
+        /// <summary>
+        /// Enables session resumption across Google's periodic WebSocket resets.
+        /// </summary>
+        public bool EnableSessionResumption { get; set; } = true;
+
+        /// <summary>
+        /// Latest resumable session handle. It is updated by the provider and reused by ConnectAsync.
+        /// Handles remain valid for up to two hours after session termination.
+        /// </summary>
+        public string? SessionResumptionHandle { get; set; }
+
+        /// <summary>
         /// Temperature for generation (0.0 to 2.0).
         /// Higher values make output more random, lower values more deterministic.
         /// </summary>

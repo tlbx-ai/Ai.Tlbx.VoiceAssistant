@@ -19,6 +19,30 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.XAi.Protocol
 
         [JsonPropertyName("parameters")]
         public XaiToolParameters? Parameters { get; set; }
+
+        [JsonPropertyName("vector_store_ids")]
+        public List<string>? VectorStoreIds { get; set; }
+
+        [JsonPropertyName("max_num_results")]
+        public int? MaxNumResults { get; set; }
+
+        [JsonPropertyName("server_url")]
+        public string? ServerUrl { get; set; }
+
+        [JsonPropertyName("server_label")]
+        public string? ServerLabel { get; set; }
+
+        [JsonPropertyName("server_description")]
+        public string? ServerDescription { get; set; }
+
+        [JsonPropertyName("allowed_tools")]
+        public List<string>? AllowedTools { get; set; }
+
+        [JsonPropertyName("authorization")]
+        public string? Authorization { get; set; }
+
+        [JsonPropertyName("headers")]
+        public Dictionary<string, string>? Headers { get; set; }
     }
 
     public class XaiToolParameters
@@ -186,14 +210,38 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.XAi.Protocol
         [JsonPropertyName("turn_detection")]
         public XaiTurnDetectionConfig? TurnDetection { get; set; }
 
-        [JsonPropertyName("input_audio_transcription")]
-        public XaiInputAudioTranscriptionConfig? InputAudioTranscription { get; set; }
+        [JsonPropertyName("reasoning")]
+        public XaiReasoningConfig? Reasoning { get; set; }
+
+        [JsonPropertyName("resumption")]
+        public XaiResumptionConfig? Resumption { get; set; }
+
+        [JsonPropertyName("replace")]
+        public Dictionary<string, string>? Replace { get; set; }
+    }
+
+    public class XaiReasoningConfig
+    {
+        [JsonPropertyName("effort")]
+        public string? Effort { get; set; }
+    }
+
+    public class XaiResumptionConfig
+    {
+        [JsonPropertyName("enabled")]
+        public bool Enabled { get; set; }
     }
 
     public class XaiInputAudioTranscriptionConfig
     {
-        [JsonPropertyName("language")]
-        public string? Language { get; set; }
+        [JsonPropertyName("model")]
+        public string Model { get; set; } = "grok-transcribe";
+
+        [JsonPropertyName("language_hint")]
+        public string? LanguageHint { get; set; }
+
+        [JsonPropertyName("keyterms")]
+        public List<string>? Keyterms { get; set; }
     }
 
     public class XaiAudioConfig
@@ -212,6 +260,9 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.XAi.Protocol
 
         [JsonPropertyName("speed")]
         public double? Speed { get; set; }
+
+        [JsonPropertyName("transcription")]
+        public XaiInputAudioTranscriptionConfig? Transcription { get; set; }
     }
 
     public class XaiAudioFormatConfig
@@ -242,6 +293,9 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.XAi.Protocol
 
         [JsonPropertyName("interrupt_response")]
         public bool? InterruptResponse { get; set; }
+
+        [JsonPropertyName("idle_timeout_ms")]
+        public int? IdleTimeoutMs { get; set; }
     }
 
     #endregion

@@ -439,7 +439,19 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.Google
                         } : new Protocol.AutomaticActivityDetection { Disabled = true },
                         ActivityHandling = _settings.VoiceActivityDetection.ActivityHandling.ToApiString(),
                         TurnCoverage = "TURN_INCLUDES_ALL_INPUT"
-                    }
+                    },
+                    ContextWindowCompression = _settings.AutomaticContextCompression
+                        ? new ContextWindowCompressionConfig
+                        {
+                            TriggerTokens = _settings.ContextCompressionTriggerTokens
+                        }
+                        : null,
+                    SessionResumption = _settings.EnableSessionResumption
+                        ? new SessionResumptionConfig
+                        {
+                            Handle = _settings.SessionResumptionHandle
+                        }
+                        : null
                 }
             };
 
@@ -641,6 +653,25 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.Google
                     HandleUsageMetadata(usageMetadata);
                 }
 
+                if (root.TryGetProperty("sessionResumptionUpdate", out var resumptionUpdate))
+                {
+                    HandleSessionResumptionUpdate(resumptionUpdate);
+                    return;
+                }
+
+                if (root.TryGetProperty("goAway", out var goAway))
+                {
+                    var timeLeft = goAway.TryGetProperty("timeLeft", out var timeLeftElement)
+                        ? timeLeftElement.GetString()
+                        : null;
+                    var status = string.IsNullOrWhiteSpace(timeLeft)
+                        ? "Google Live connection will close soon"
+                        : $"Google Live connection will close in {timeLeft}";
+                    _logAction(LogLevel.Warn, status);
+                    OnStatusChanged?.Invoke(status);
+                    return;
+                }
+
                 if (root.TryGetProperty("serverContent", out var serverContent))
                 {
                     await HandleServerContent(serverContent);
@@ -679,6 +710,12 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.Google
 
         private async Task HandleServerContent(JsonElement serverContent)
         {
+            if (serverContent.TryGetProperty("generationComplete", out var generationComplete) && generationComplete.GetBoolean())
+            {
+                _logAction(LogLevel.Info, "[GENERATION] Model generation complete; playback may still be draining");
+                OnStatusChanged?.Invoke("Generation complete");
+            }
+
             if (serverContent.TryGetProperty("inputTranscription", out var inputTranscription))
             {
                 if (inputTranscription.TryGetProperty("text", out var inputText))
@@ -784,6 +821,23 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.Google
 
                 FlushUserTranscript();
                 FlushAssistantMessage();
+            }
+        }
+
+        private void HandleSessionResumptionUpdate(JsonElement update)
+        {
+            if (_settings == null ||
+                !update.TryGetProperty("resumable", out var resumable) || !resumable.GetBoolean() ||
+                !update.TryGetProperty("newHandle", out var handleElement))
+            {
+                return;
+            }
+
+            var handle = handleElement.GetString();
+            if (!string.IsNullOrWhiteSpace(handle))
+            {
+                _settings.SessionResumptionHandle = handle;
+                _logAction(LogLevel.Info, "Received resumable Google Live session handle");
             }
         }
 

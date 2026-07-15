@@ -14,7 +14,7 @@ namespace Ai.Tlbx.VoiceAssistant.Demo.Linux
         private static VoiceAssistant? _voiceAssistant;
         private static OpenAiVoiceProvider? _voiceProvider;
         private static string _openAiApiKey = string.Empty;
-        private static OpenAiRealtimeModel _openAiModel = OpenAiRealtimeModel.GptRealtime2;
+        private static OpenAiRealtimeModel _openAiModel = OpenAiRealtimeModel.GptRealtime21;
         private static readonly ManualResetEvent _exitEvent = new ManualResetEvent(false);
         private static readonly CancellationTokenSource _cts = new CancellationTokenSource();
 
@@ -116,7 +116,7 @@ namespace Ai.Tlbx.VoiceAssistant.Demo.Linux
                             var modelString = model.GetString() ?? "";
                             if (!OpenAiRealtimeModelExtensions.TryParseApiString(modelString, out _openAiModel))
                             {
-                                _openAiModel = OpenAiRealtimeModel.GptRealtime2;
+                                _openAiModel = OpenAiRealtimeModel.GptRealtime21;
                             }
                         }
                     }
@@ -160,7 +160,7 @@ namespace Ai.Tlbx.VoiceAssistant.Demo.Linux
                                 var settings = new OpenAiVoiceSettings
                                 {
                                     Instructions = "You are a helpful AI assistant. Be friendly, conversational, helpful, and engaging. When the user speaks interrupt your answer and listen and then answer the new question.",
-                                    Voice = AssistantVoice.Alloy,
+                                    Voice = AssistantVoice.Marin,
                                     Model = _openAiModel
                                 };
                                 await _voiceAssistant!.StartAsync(settings);

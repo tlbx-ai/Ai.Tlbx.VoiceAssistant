@@ -21,20 +21,24 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.XAi.Models
 
         /// <summary>
         /// The voice to use for AI responses.
-        /// Available: Ara (default), Rex, Sal, Eve, Leo
+        /// Built-in voice to use when <see cref="VoiceId"/> is not set.
         /// </summary>
-        public XaiVoice Voice { get; set; } = XaiVoice.Ara;
+        public XaiVoice Voice { get; set; } = XaiVoice.Eve;
+
+        /// <summary>
+        /// Optional built-in or custom xAI voice ID. When set, this takes precedence over <see cref="Voice"/>.
+        /// </summary>
+        public string? VoiceId { get; set; }
 
         /// <summary>
         /// The xAI realtime voice model to use for the conversation.
-        /// Defaults to Grok Voice Think Fast 1.0.
+        /// Defaults to xAI's latest alias. Select GrokVoiceThinkFast10 to pin the current release.
         /// </summary>
-        public XaiVoiceModel Model { get; set; } = XaiVoiceModel.GrokVoiceThinkFast10;
+        public XaiVoiceModel Model { get; set; } = XaiVoiceModel.GrokVoiceLatest;
 
         /// <summary>
         /// The speed of the AI model's spoken response.
-        /// Note: xAI Voice Agent does not currently expose speech-rate control.
-        /// This property is retained for IVoiceSettings compatibility and is ignored by the provider.
+        /// xAI supports 0.7 to 1.5, where 1.0 is normal speed.
         /// </summary>
         public double TalkingSpeed { get; set; } = 1.0;
 
@@ -67,15 +71,51 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.XAi.Models
         public bool EnableXSearch { get; set; } = false;
 
         /// <summary>
+        /// xAI-hosted collection searches to expose as file_search tools.
+        /// </summary>
+        public List<XaiFileSearchSettings> FileSearchTools { get; set; } = new();
+
+        /// <summary>
+        /// Remote MCP servers that xAI should connect to and execute server-side.
+        /// </summary>
+        public List<XaiMcpServerSettings> McpServers { get; set; } = new();
+
+        /// <summary>
         /// ISO-639-1 language code hint for input audio recognition (e.g. "de", "en").
         /// Improves accuracy and latency when the expected language is known.
         /// </summary>
         public string? InputAudioLanguage { get; set; }
 
+        /// <summary>
+        /// Whether to request streaming input transcription with grok-transcribe.
+        /// </summary>
+        public bool EnableInputAudioTranscription { get; set; } = true;
+
+        /// <summary>
+        /// Terms that should be favored by input transcription. Maximum 100 terms, 50 characters each.
+        /// </summary>
+        public List<string> InputAudioKeyterms { get; set; } = new();
+
+        /// <summary>
+        /// Spoken pronunciation substitutions. Keys remain unchanged in the transcript.
+        /// </summary>
+        public Dictionary<string, string> PronunciationReplacements { get; set; } = new();
+
+        /// <summary>
+        /// Enables xAI session resumption. The provider stores the latest conversation ID in
+        /// <see cref="ConversationId"/> so a later ConnectAsync call can resume the server-cached context.
+        /// </summary>
+        public bool EnableSessionResumption { get; set; } = true;
+
+        /// <summary>
+        /// Conversation ID captured from xAI or supplied by the caller for reconnection.
+        /// </summary>
+        public string? ConversationId { get; set; }
+
         public NoiseReductionMode NoiseReduction { get; set; } = NoiseReductionMode.FarField;
 
         /// <summary>
-        /// xAI Voice Agent currently ignores provider-neutral reasoning effort.
+        /// xAI reasoning effort. The current Voice Agent API accepts None or High for latest/think-fast models.
         /// </summary>
         public SessionReasoningEffort? ReasoningEffort { get; set; }
 
@@ -96,10 +136,27 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.XAi.Models
     public class XaiTurnDetection
     {
         public string Type { get; set; } = "server_vad";
-        public double Threshold { get; set; } = 0.5;
-        public int PrefixPaddingMs { get; set; } = 300;
+        public double Threshold { get; set; } = 0.85;
+        public int PrefixPaddingMs { get; set; } = 333;
         public int SilenceDurationMs { get; set; } = 200;
+        public int? IdleTimeoutMs { get; set; }
         public bool CreateResponse { get; set; } = true;
         public bool InterruptResponse { get; set; } = true;
+    }
+
+    public class XaiFileSearchSettings
+    {
+        public List<string> VectorStoreIds { get; set; } = new();
+        public int? MaxResults { get; set; }
+    }
+
+    public class XaiMcpServerSettings
+    {
+        public string ServerUrl { get; set; } = string.Empty;
+        public string ServerLabel { get; set; } = string.Empty;
+        public string? ServerDescription { get; set; }
+        public List<string> AllowedTools { get; set; } = new();
+        public string? Authorization { get; set; }
+        public Dictionary<string, string> Headers { get; set; } = new();
     }
 }
