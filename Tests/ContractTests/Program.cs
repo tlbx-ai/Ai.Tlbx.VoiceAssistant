@@ -23,6 +23,9 @@ var directRealtimeClient = File.ReadAllText(FindRepositoryFile(
 Assert(directRealtimeClient.Contains("this.emitUsage(event);", StringComparison.Ordinal), "direct Realtime response usage forwarding");
 Assert(directRealtimeClient.Contains("type: 'usage'", StringComparison.Ordinal), "direct Realtime usage control event type");
 Assert(directRealtimeClient.Contains("responseId,", StringComparison.Ordinal), "direct Realtime response identity forwarding");
+Assert(directRealtimeClient.Contains("this.emitTranscriptionUsage(event);", StringComparison.Ordinal), "direct Realtime transcription usage forwarding");
+Assert(directRealtimeClient.Contains("type: 'transcription_usage'", StringComparison.Ordinal), "direct Realtime transcription usage control event type");
+Assert(directRealtimeClient.Contains("itemId,", StringComparison.Ordinal), "direct Realtime transcription identity forwarding");
 
 var xaiMessage = new XaiSessionUpdateMessage
 {

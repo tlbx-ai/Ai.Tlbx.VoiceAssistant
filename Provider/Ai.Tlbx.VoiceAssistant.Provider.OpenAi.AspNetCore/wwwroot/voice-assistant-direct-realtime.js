@@ -451,6 +451,7 @@ export class OpenAiDirectRealtimeClient
 
             case 'conversation.item.input_audio_transcription.completed':
                 this.emitChat('user', event.transcript ?? '');
+                this.emitTranscriptionUsage(event);
                 break;
 
             case 'response.output_audio_transcript.done':
@@ -518,6 +519,28 @@ export class OpenAiDirectRealtimeClient
                 data: {
                     responseId,
                     modelApiName: response?.model,
+                    usage
+                }
+            }
+        });
+    }
+
+    emitTranscriptionUsage(event)
+    {
+        const itemId = event?.item_id;
+        const usage = event?.usage;
+        if (typeof itemId !== 'string' || !itemId || !usage)
+        {
+            return;
+        }
+
+        this.sendControl({
+            type: 'event',
+            event: {
+                type: 'transcription_usage',
+                data: {
+                    itemId,
+                    contentIndex: event?.content_index,
                     usage
                 }
             }
