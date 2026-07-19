@@ -15,6 +15,15 @@ Assert(OpenAiRealtimeModel.GptRealtime21Mini.ToApiString() == "gpt-realtime-2.1-
 Assert(new XaiVoiceSettings().Model == XaiVoiceModel.GrokVoiceLatest, "xAI default model");
 Assert(XaiVoiceModel.GrokVoiceLatest.ToApiString() == "grok-voice-latest", "xAI latest model id");
 
+var directRealtimeClient = File.ReadAllText(FindRepositoryFile(
+    "Provider",
+    "Ai.Tlbx.VoiceAssistant.Provider.OpenAi.AspNetCore",
+    "wwwroot",
+    "voice-assistant-direct-realtime.js"));
+Assert(directRealtimeClient.Contains("this.emitUsage(event);", StringComparison.Ordinal), "direct Realtime response usage forwarding");
+Assert(directRealtimeClient.Contains("type: 'usage'", StringComparison.Ordinal), "direct Realtime usage control event type");
+Assert(directRealtimeClient.Contains("responseId,", StringComparison.Ordinal), "direct Realtime response identity forwarding");
+
 var xaiMessage = new XaiSessionUpdateMessage
 {
     Session = new XaiSessionConfig
@@ -69,4 +78,21 @@ static void Assert(bool condition, string contract)
     {
         throw new InvalidOperationException($"Contract failed: {contract}");
     }
+}
+
+static string FindRepositoryFile(params string[] relativeSegments)
+{
+    DirectoryInfo? directory = new(Directory.GetCurrentDirectory());
+    while (directory is not null)
+    {
+        var candidate = Path.Combine([directory.FullName, .. relativeSegments]);
+        if (File.Exists(candidate))
+        {
+            return candidate;
+        }
+
+        directory = directory.Parent;
+    }
+
+    throw new FileNotFoundException($"Could not locate repository file '{Path.Combine(relativeSegments)}'.");
 }

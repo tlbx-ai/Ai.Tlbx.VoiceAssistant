@@ -33,3 +33,7 @@ For OpenAI voice sessions in Blazor Server this keeps the public `VoiceAssistant
 ## Connection status
 
 The browser client reports explicit connection phases through the regular status callback, including server session preparation, control WebSocket opening, microphone permission, WebRTC offer creation, OpenAI connection, DataChannel opening, and listening state.
+
+## Realtime usage events
+
+After each `response.done`, the browser forwards the response ID, model ID, and OpenAI usage object to the authenticated control WebSocket as a client event with type `usage`. Hosts can process it in `IOpenAiDirectRealtimeSessionEventSink.OnClientEventAsync` to keep a response-level cost ledger and apply application budgets. The usage numbers originate in OpenAI's response event, but the forwarding path still depends on the connected browser and should be identified as client-forwarded in audit reports.

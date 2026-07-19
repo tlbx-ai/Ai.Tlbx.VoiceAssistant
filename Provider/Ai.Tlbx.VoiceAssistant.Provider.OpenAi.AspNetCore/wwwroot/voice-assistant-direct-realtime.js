@@ -486,6 +486,7 @@ export class OpenAiDirectRealtimeClient
                 this.activeResponse = false;
                 this.clearResponseWatchdog();
                 this.emitAssistantMessagesFromResponse(event);
+                this.emitUsage(event);
                 this.emitStatus('Listening');
                 break;
         }
@@ -498,6 +499,29 @@ export class OpenAiDirectRealtimeClient
             error?.type === 'response_cancel_not_active' ||
             (typeof error?.message === 'string' &&
                 error.message.toLowerCase().includes('no active response'));
+    }
+
+    emitUsage(event)
+    {
+        const response = event?.response;
+        const responseId = response?.id;
+        const usage = response?.usage;
+        if (typeof responseId !== 'string' || !responseId || !usage)
+        {
+            return;
+        }
+
+        this.sendControl({
+            type: 'event',
+            event: {
+                type: 'usage',
+                data: {
+                    responseId,
+                    modelApiName: response?.model,
+                    usage
+                }
+            }
+        });
     }
 
     startAudioLevelMonitor(stream)
