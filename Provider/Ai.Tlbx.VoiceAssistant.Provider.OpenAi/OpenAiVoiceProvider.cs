@@ -963,7 +963,18 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi
             if (root.TryGetProperty("response", out var response) &&
                 response.TryGetProperty("usage", out var usage))
             {
-                report = OpenAiRealtimeUsageMapper.CreateUsageReport(usage);
+                var responseId = response.TryGetProperty("id", out var idElement)
+                    ? idElement.GetString()
+                    : _currentResponseId;
+                var modelId = response.TryGetProperty("model", out var modelElement)
+                    ? modelElement.GetString()
+                    : _settings?.Model.ToApiString();
+
+                report = OpenAiRealtimeUsageMapper.CreateUsageReport(
+                    usage,
+                    modelId,
+                    responseId,
+                    UsageOperationType.VoiceResponse);
 
                 _logAction(LogLevel.Info, $"Usage: text_in={report.InputTokens}, text_out={report.OutputTokens}, audio_in={report.InputAudioTokens}, audio_out={report.OutputAudioTokens}, cached_in={report.CacheReadInputTokens}");
                 OnUsageReceived?.Invoke(report);

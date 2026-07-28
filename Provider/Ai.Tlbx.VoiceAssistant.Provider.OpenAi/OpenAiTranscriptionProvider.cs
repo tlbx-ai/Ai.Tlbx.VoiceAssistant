@@ -18,6 +18,7 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi
         private const string REALTIME_WEBSOCKET_ENDPOINT = "wss://api.openai.com/v1/realtime";
         private const int CONNECTION_TIMEOUT_MS = 10000;
         private const int AUDIO_BUFFER_SIZE = 32384;
+        private const int PCM16_BYTES_PER_SECOND = 24000 * 2;
 
         private readonly string _apiKey;
         private readonly Action<LogLevel, string> _logAction;
@@ -26,6 +27,7 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi
         private CancellationTokenSource? _cts;
         private bool _isDisposed;
         private OpenAiTranscriptionSettings? _settings;
+        private long _pendingInputAudioBytes;
 
         public bool IsConnected => _webSocket?.State == WebSocketState.Open;
         public AudioSampleRate RequiredInputSampleRate => AudioSampleRate.Rate24000;
@@ -55,6 +57,7 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi
             }
 
             _settings = transcriptionSettings;
+            Interlocked.Exchange(ref _pendingInputAudioBytes, 0);
             _logAction(LogLevel.Info, $"Transcription settings configured - Model: {_settings.TranscriptionModel}");
 
             try
@@ -101,6 +104,7 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi
                     await _receiveTask;
                 }
 
+                FlushMeasuredTranscriptionUsage();
                 OnStatusChanged?.Invoke("Disconnected");
                 _logAction(LogLevel.Info, "Disconnected from OpenAI Transcription");
             }
@@ -136,8 +140,13 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi
                 if (string.IsNullOrWhiteSpace(base64Audio))
                     return;
 
+                var audioByteCount = Convert.FromBase64String(base64Audio).Length;
                 var audioMessage = new AudioBufferAppendMessage { Audio = base64Audio };
-                await SendMessageAsync(JsonSerializer.Serialize(audioMessage, OpenAiJsonContext.Default.AudioBufferAppendMessage));
+                var sent = await SendMessageAsync(JsonSerializer.Serialize(audioMessage, OpenAiJsonContext.Default.AudioBufferAppendMessage));
+                if (sent)
+                {
+                    Interlocked.Add(ref _pendingInputAudioBytes, audioByteCount);
+                }
             }
             catch (Exception ex)
             {
@@ -201,22 +210,25 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi
             await SendMessageAsync(json);
         }
 
-        private async Task SendMessageAsync(string message)
+        private async Task<bool> SendMessageAsync(string message)
         {
             try
             {
                 if (_webSocket?.State != WebSocketState.Open)
-                    return;
+                    return false;
 
                 var buffer = Encoding.UTF8.GetBytes(message);
                 await _webSocket.SendAsync(new ArraySegment<byte>(buffer), WebSocketMessageType.Text, true, CancellationToken.None);
+                return true;
             }
             catch (ObjectDisposedException)
             {
+                return false;
             }
             catch (WebSocketException ex)
             {
                 _logAction(LogLevel.Warn, $"WebSocket send failed: {ex.Message}");
+                return false;
             }
         }
 
@@ -261,6 +273,10 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi
             {
                 _logAction(LogLevel.Error, $"Error in transcription receive loop: {ex.Message}");
                 OnError?.Invoke($"Transcription receive error: {ex.Message}");
+            }
+            finally
+            {
+                FlushMeasuredTranscriptionUsage();
             }
         }
 
@@ -339,6 +355,8 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi
 
         private void HandleTranscriptionCompleted(JsonElement root)
         {
+            FlushMeasuredTranscriptionUsage(root);
+
             if (root.TryGetProperty("transcript", out var transcript))
             {
                 var text = transcript.GetString();
@@ -346,6 +364,53 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi
                 {
                     OnTranscriptionCompleted?.Invoke(text);
                 }
+            }
+        }
+
+        private void FlushMeasuredTranscriptionUsage(JsonElement? completedEvent = null)
+        {
+            var audioBytes = Interlocked.Exchange(ref _pendingInputAudioBytes, 0);
+            var duration = audioBytes > 0
+                ? TimeSpan.FromSeconds(audioBytes / (double)PCM16_BYTES_PER_SECOND)
+                : (TimeSpan?)null;
+            var modelId = _settings?.TranscriptionModel.ToApiString();
+            var operationId = completedEvent.HasValue &&
+                completedEvent.Value.TryGetProperty("item_id", out var itemId)
+                    ? itemId.GetString()
+                    : null;
+
+            UsageReport report;
+            if (completedEvent.HasValue &&
+                completedEvent.Value.TryGetProperty("usage", out var usage) &&
+                usage.ValueKind == JsonValueKind.Object)
+            {
+                report = OpenAiRealtimeUsageMapper.CreateUsageReport(
+                    usage,
+                    modelId,
+                    operationId,
+                    UsageOperationType.Transcription,
+                    duration,
+                    measurementSource: duration.HasValue
+                        ? UsageMeasurementSource.Mixed
+                        : UsageMeasurementSource.ProviderReported);
+            }
+            else
+            {
+                report = new UsageReport
+                {
+                    ProviderId = "openai",
+                    ModelId = modelId,
+                    OperationId = operationId,
+                    OperationType = UsageOperationType.Transcription,
+                    MeasurementSource = UsageMeasurementSource.ClientMeasured,
+                    InputAudioDuration = duration,
+                    IsEstimated = true
+                };
+            }
+
+            if (report.HasUsage)
+            {
+                OnUsageReceived?.Invoke(report);
             }
         }
 

@@ -1104,7 +1104,22 @@ export function createOpenAiDirectRealtimeClient(options, dotNetReference)
             const usage = event?.response?.usage;
             if (event?.type === 'response.done' && usage)
             {
-                invokeDotNet(dotNetReference, 'OnDirectRealtimeUsage', JSON.stringify(usage));
+                invokeDotNet(
+                    dotNetReference,
+                    'OnDirectRealtimeUsageWithMetadata',
+                    JSON.stringify(usage),
+                    event?.response?.id ?? null,
+                    event?.response?.model ?? null);
+            }
+
+            const transcriptionUsage = event?.usage;
+            if (event?.type === 'conversation.item.input_audio_transcription.completed' && transcriptionUsage)
+            {
+                invokeDotNet(
+                    dotNetReference,
+                    'OnDirectRealtimeTranscriptionUsage',
+                    JSON.stringify(transcriptionUsage),
+                    event?.item_id ?? null);
             }
         }
     });

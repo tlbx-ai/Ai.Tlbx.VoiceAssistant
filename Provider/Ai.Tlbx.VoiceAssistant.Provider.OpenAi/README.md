@@ -37,11 +37,17 @@ var transcriber = new OpenAiHttpLiveTranscriber(
     audioHardware,
     new OpenAiHttpLiveTranscriptionOptions
     {
-        TranscriptionModel = OpenAiTranscriptionModel.GptRealtimeWhisper,
+        TranscriptionModel = OpenAiTranscriptionModel.Gpt4oMiniTranscribe,
         Language = "de",
         Prompt = "Expect German with business and IT terms"
     },
     apiKey);
+
+transcriber.OnUsageReceived = usage =>
+{
+    // Each successful full-snapshot upload is reported independently.
+    Console.WriteLine($"Uploaded audio: {usage.InputAudioDuration?.TotalSeconds:F2}s");
+};
 
 var cts = new CancellationTokenSource();
 

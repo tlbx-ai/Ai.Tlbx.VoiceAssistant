@@ -465,15 +465,11 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.Google
 
         private void HandleUsageMetadata(JsonElement usageMetadata)
         {
-            var report = new UsageReport
-            {
-                ProviderId = "google",
-                InputTokens = usageMetadata.TryGetProperty("promptTokenCount", out var promptTokens) ? promptTokens.GetInt32() : null,
-                OutputTokens = usageMetadata.TryGetProperty("candidatesTokenCount", out var candidateTokens) ? candidateTokens.GetInt32() : null,
-                IsEstimated = false
-            };
+            var report = GoogleLiveUsageMapper.CreateUsageReport(
+                usageMetadata,
+                _settings?.Model.ToApiString());
 
-            if (report.InputTokens.HasValue || report.OutputTokens.HasValue)
+            if (report.HasUsage)
             {
                 OnUsageReceived?.Invoke(report);
             }

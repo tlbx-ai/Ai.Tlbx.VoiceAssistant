@@ -4,7 +4,7 @@ namespace Ai.Tlbx.VoiceAssistant.Managers
 {
     /// <summary>
     /// Manages usage reports for voice assistant sessions.
-    /// Provides thread-safe access to cumulative token usage across provider responses.
+    /// Provides thread-safe access to cumulative token, media, and event usage.
     /// </summary>
     public sealed class UsageManager
     {
@@ -122,7 +122,16 @@ namespace Ai.Tlbx.VoiceAssistant.Managers
         /// <summary>
         /// Gets the total tokens (input + output) across all reports.
         /// </summary>
-        public int TotalTokens => TotalInputTokens + TotalOutputTokens;
+        public int TotalTokens
+        {
+            get
+            {
+                lock (_lock)
+                {
+                    return _reports.Sum(r => r.TotalTokens);
+                }
+            }
+        }
 
         /// <summary>
         /// Gets the total audio input tokens across all reports.
@@ -162,6 +171,104 @@ namespace Ai.Tlbx.VoiceAssistant.Managers
                 lock (_lock)
                 {
                     return _reports.Sum(r => (r.CacheCreationInputTokens ?? 0) + (r.CacheReadInputTokens ?? 0));
+                }
+            }
+        }
+
+        /// <summary>
+        /// Gets the total input audio duration measured across all reports.
+        /// </summary>
+        public TimeSpan TotalInputAudioDuration
+        {
+            get
+            {
+                lock (_lock)
+                {
+                    return TimeSpan.FromTicks(_reports.Sum(r => r.InputAudioDuration?.Ticks ?? 0));
+                }
+            }
+        }
+
+        /// <summary>
+        /// Gets the total output audio duration measured across all reports.
+        /// </summary>
+        public TimeSpan TotalOutputAudioDuration
+        {
+            get
+            {
+                lock (_lock)
+                {
+                    return TimeSpan.FromTicks(_reports.Sum(r => r.OutputAudioDuration?.Ticks ?? 0));
+                }
+            }
+        }
+
+        /// <summary>
+        /// Gets the total number of billable text input events.
+        /// </summary>
+        public int TotalBillableTextInputEvents
+        {
+            get
+            {
+                lock (_lock)
+                {
+                    return _reports.Sum(r => r.BillableTextInputEvents ?? 0);
+                }
+            }
+        }
+
+        /// <summary>
+        /// Gets the total image input tokens across all reports.
+        /// </summary>
+        public int TotalImageInputTokens
+        {
+            get
+            {
+                lock (_lock)
+                {
+                    return _reports.Sum(r => r.InputImageTokens ?? 0);
+                }
+            }
+        }
+
+        /// <summary>
+        /// Gets the total image output tokens across all reports.
+        /// </summary>
+        public int TotalImageOutputTokens
+        {
+            get
+            {
+                lock (_lock)
+                {
+                    return _reports.Sum(r => r.OutputImageTokens ?? 0);
+                }
+            }
+        }
+
+        /// <summary>
+        /// Gets the total input tokens attributed to tool use.
+        /// </summary>
+        public int TotalToolUseInputTokens
+        {
+            get
+            {
+                lock (_lock)
+                {
+                    return _reports.Sum(r => r.ToolUseInputTokens ?? 0);
+                }
+            }
+        }
+
+        /// <summary>
+        /// Gets the total output tokens attributed to reasoning or thoughts.
+        /// </summary>
+        public int TotalReasoningOutputTokens
+        {
+            get
+            {
+                lock (_lock)
+                {
+                    return _reports.Sum(r => r.ReasoningOutputTokens ?? 0);
                 }
             }
         }

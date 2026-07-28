@@ -269,8 +269,31 @@ public sealed class OpenAiDirectRealtimeVoiceProvider : IDirectBrowserVoiceProvi
     [JSInvokable]
     public Task OnDirectRealtimeUsage(string usageJson)
     {
+        return OnDirectRealtimeUsageWithMetadata(usageJson, null, null);
+    }
+
+    [JSInvokable("OnDirectRealtimeUsageWithMetadata")]
+    public Task OnDirectRealtimeUsageWithMetadata(string usageJson, string? responseId, string? modelId)
+    {
         using var document = JsonDocument.Parse(usageJson);
-        var report = OpenAiRealtimeUsageMapper.CreateUsageReport(document.RootElement);
+        var report = OpenAiRealtimeUsageMapper.CreateUsageReport(
+            document.RootElement,
+            modelId ?? _settings?.Model.ToApiString(),
+            responseId,
+            UsageOperationType.VoiceResponse);
+        OnUsageReceived?.Invoke(report);
+        return Task.CompletedTask;
+    }
+
+    [JSInvokable]
+    public Task OnDirectRealtimeTranscriptionUsage(string usageJson, string? itemId)
+    {
+        using var document = JsonDocument.Parse(usageJson);
+        var report = OpenAiRealtimeUsageMapper.CreateUsageReport(
+            document.RootElement,
+            _settings?.InputAudioTranscription.Model.ToApiString(),
+            itemId,
+            UsageOperationType.InputTranscription);
         OnUsageReceived?.Invoke(report);
         return Task.CompletedTask;
     }

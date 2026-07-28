@@ -27,6 +27,7 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.XAi
         private const int CONNECTION_TIMEOUT_MS = 10000;
         private const int SESSION_UPDATE_TIMEOUT_MS = 10000;
         private const int AUDIO_BUFFER_SIZE = 32384;
+        private const int PCM16_BYTES_PER_SECOND = 24000 * 2;
 
         private readonly string _apiKey;
         private readonly Action<LogLevel, string> _logAction;
@@ -44,6 +45,9 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.XAi
         private string _currentResponseId = string.Empty;
         private readonly Dictionary<string, PendingFunctionCall> _pendingFunctionCalls = new();
         private int _toolResultsPendingContinuation;
+        private long _pendingInputAudioBytes;
+        private long _pendingOutputAudioBytes;
+        private int _pendingBillableTextInputEvents;
 
         /// <summary>
         /// Gets a value indicating whether the provider is connected and ready.
@@ -189,6 +193,7 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.XAi
                     await _receiveTask;
                 }
 
+                FlushUsageReport();
                 _sessionUpdateCompletionSource?.TrySetCanceled();
                 _sessionUpdateCompletionSource = null;
                 OnStatusChanged?.Invoke("Disconnected");
@@ -238,8 +243,13 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.XAi
 
             try
             {
+                var audioByteCount = Convert.FromBase64String(base64Audio).Length;
                 var audioMessage = new XaiAudioBufferAppendMessage { Audio = base64Audio };
-                await SendMessageAsync(JsonSerializer.Serialize(audioMessage, XaiJsonContext.Default.XaiAudioBufferAppendMessage));
+                var sent = await SendMessageAsync(JsonSerializer.Serialize(audioMessage, XaiJsonContext.Default.XaiAudioBufferAppendMessage));
+                if (sent)
+                {
+                    Interlocked.Add(ref _pendingInputAudioBytes, audioByteCount);
+                }
             }
             catch (Exception ex)
             {
@@ -309,7 +319,11 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.XAi
                         }
                     };
 
-                    await SendMessageAsync(JsonSerializer.Serialize(conversationItem, XaiJsonContext.Default.XaiConversationItemCreateMessage));
+                    var sent = await SendMessageAsync(JsonSerializer.Serialize(conversationItem, XaiJsonContext.Default.XaiConversationItemCreateMessage));
+                    if (sent)
+                    {
+                        Interlocked.Increment(ref _pendingBillableTextInputEvents);
+                    }
                     await Task.Delay(50);
                 }
 
@@ -407,6 +421,9 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.XAi
             _currentResponseId = string.Empty;
             _pendingFunctionCalls.Clear();
             _toolResultsPendingContinuation = 0;
+            Interlocked.Exchange(ref _pendingInputAudioBytes, 0);
+            Interlocked.Exchange(ref _pendingOutputAudioBytes, 0);
+            Interlocked.Exchange(ref _pendingBillableTextInputEvents, 0);
         }
 
         private async Task WaitForSessionUpdateAsync()
@@ -541,15 +558,16 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.XAi
             _logAction(LogLevel.Info, "Session configuration sent to xAI");
         }
 
-        private async Task SendMessageAsync(string message)
+        private async Task<bool> SendMessageAsync(string message)
         {
             try
             {
                 if (_webSocket?.State != WebSocketState.Open)
-                    return;
+                    return false;
 
                 var buffer = Encoding.UTF8.GetBytes(message);
                 await _webSocket.SendAsync(new ArraySegment<byte>(buffer), WebSocketMessageType.Text, true, CancellationToken.None);
+                return true;
             }
             catch (ObjectDisposedException)
             {
@@ -557,6 +575,8 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.XAi
                 {
                     throw;
                 }
+
+                return false;
             }
             catch (WebSocketException ex)
             {
@@ -609,6 +629,10 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.XAi
                 _sessionUpdateCompletionSource?.TrySetException(ex);
                 _logAction(LogLevel.Error, $"Error in message receive loop: {ex.Message}");
                 OnError?.Invoke($"Message receive error: {ex.Message}");
+            }
+            finally
+            {
+                FlushUsageReport();
             }
         }
 
@@ -717,6 +741,15 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.XAi
                 var audioData = delta.GetString();
                 if (!string.IsNullOrEmpty(audioData))
                 {
+                    try
+                    {
+                        Interlocked.Add(ref _pendingOutputAudioBytes, Convert.FromBase64String(audioData).Length);
+                    }
+                    catch (FormatException)
+                    {
+                        _logAction(LogLevel.Warn, "Could not measure malformed xAI output audio chunk");
+                    }
+
                     OnAudioReceived?.Invoke(audioData);
                 }
             }
@@ -981,23 +1014,22 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.XAi
 
             FlushAssistantMessage();
 
-            // Parse usage from response.done event (OpenAI-compatible format)
-            if (root.TryGetProperty("response", out var response) &&
-                response.TryGetProperty("usage", out var usage))
+            JsonElement? usage = null;
+            string? responseId = _currentResponseId;
+            if (root.TryGetProperty("response", out var response))
             {
-                var report = new UsageReport
+                if (response.TryGetProperty("id", out var responseIdElement))
                 {
-                    ProviderId = "xai",
-                    InputTokens = usage.TryGetProperty("input_tokens", out var it) ? it.GetInt32() : null,
-                    OutputTokens = usage.TryGetProperty("output_tokens", out var ot) ? ot.GetInt32() : null,
-                    InputAudioTokens = usage.TryGetProperty("input_audio_tokens", out var iat) ? iat.GetInt32() : null,
-                    OutputAudioTokens = usage.TryGetProperty("output_audio_tokens", out var oat) ? oat.GetInt32() : null,
-                    IsEstimated = false
-                };
+                    responseId = responseIdElement.GetString() ?? responseId;
+                }
 
-                _logAction(LogLevel.Info, $"Usage: in={report.TotalInputTokens}, out={report.TotalOutputTokens}, audio_in={report.InputAudioTokens}, audio_out={report.OutputAudioTokens}");
-                OnUsageReceived?.Invoke(report);
+                if (response.TryGetProperty("usage", out var usageElement))
+                {
+                    usage = usageElement.Clone();
+                }
             }
+
+            FlushUsageReport(usage, responseId);
 
             if (_toolResultsPendingContinuation > 0)
             {
@@ -1009,6 +1041,34 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.XAi
                 await SendMessageAsync(JsonSerializer.Serialize(responseCreate, XaiJsonContext.Default.XaiResponseCreateMessage));
                 _logAction(LogLevel.Info, $"Requested one AI continuation after {resultCount} tool result(s)");
             }
+        }
+
+        private void FlushUsageReport(JsonElement? usage = null, string? operationId = null)
+        {
+            var inputAudioBytes = Interlocked.Exchange(ref _pendingInputAudioBytes, 0);
+            var outputAudioBytes = Interlocked.Exchange(ref _pendingOutputAudioBytes, 0);
+            var textEvents = Interlocked.Exchange(ref _pendingBillableTextInputEvents, 0);
+            var report = XaiRealtimeUsageMapper.CreateUsageReport(
+                usage,
+                _settings?.Model.ToApiString(),
+                operationId,
+                inputAudioBytes > 0
+                    ? TimeSpan.FromSeconds(inputAudioBytes / (double)PCM16_BYTES_PER_SECOND)
+                    : null,
+                outputAudioBytes > 0
+                    ? TimeSpan.FromSeconds(outputAudioBytes / (double)PCM16_BYTES_PER_SECOND)
+                    : null,
+                textEvents);
+
+            if (!report.HasUsage)
+            {
+                return;
+            }
+
+            _logAction(
+                LogLevel.Info,
+                $"Usage: input_audio={report.InputAudioDuration?.TotalSeconds:F3}s, output_audio={report.OutputAudioDuration?.TotalSeconds:F3}s, text_events={report.BillableTextInputEvents ?? 0}, tokens={report.TotalTokens}");
+            OnUsageReceived?.Invoke(report);
         }
 
         private async Task HandleTextDone()

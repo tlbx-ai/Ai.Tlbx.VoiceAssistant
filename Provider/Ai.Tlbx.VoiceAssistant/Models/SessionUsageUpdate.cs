@@ -6,7 +6,7 @@ namespace Ai.Tlbx.VoiceAssistant.Models
     public enum SessionUsageUpdateTrigger
     {
         /// <summary>
-        /// Token usage was received from the AI provider.
+        /// Provider-reported or client-measured usage was received.
         /// </summary>
         TokenUsageReceived,
 
@@ -22,8 +22,8 @@ namespace Ai.Tlbx.VoiceAssistant.Models
     }
 
     /// <summary>
-    /// Cumulative session usage snapshot combining token usage and session duration.
-    /// Fired periodically (every minute) and on token usage events.
+    /// Cumulative session usage snapshot combining token, media, event, and
+    /// operational duration data. Fired periodically and on usage events.
     /// </summary>
     public sealed class SessionUsageUpdate
     {
@@ -80,5 +80,40 @@ namespace Ai.Tlbx.VoiceAssistant.Models
         /// Cache tokens are a subset of input tokens.
         /// </summary>
         public int TotalCachedInputTokens { get; init; }
+
+        /// <summary>
+        /// Cumulative input audio duration measured from billable media.
+        /// </summary>
+        public TimeSpan TotalInputAudioDuration { get; init; }
+
+        /// <summary>
+        /// Cumulative output audio duration measured from billable media.
+        /// </summary>
+        public TimeSpan TotalOutputAudioDuration { get; init; }
+
+        /// <summary>
+        /// Cumulative billable text conversation-item events.
+        /// </summary>
+        public int TotalBillableTextInputEvents { get; init; }
+
+        /// <summary>
+        /// Cumulative image input tokens.
+        /// </summary>
+        public int TotalImageInputTokens { get; init; }
+
+        /// <summary>
+        /// Cumulative image output tokens.
+        /// </summary>
+        public int TotalImageOutputTokens { get; init; }
+
+        /// <summary>
+        /// Cumulative input tokens attributed to tool use.
+        /// </summary>
+        public int TotalToolUseInputTokens { get; init; }
+
+        /// <summary>
+        /// Cumulative output tokens attributed to reasoning or thoughts.
+        /// </summary>
+        public int TotalReasoningOutputTokens { get; init; }
     }
 }

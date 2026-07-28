@@ -287,6 +287,12 @@ await using var transcriber = new OpenAiHttpLiveTranscriber(
     },
     apiKey: "sk-...");
 
+transcriber.OnUsageReceived = usage =>
+{
+    // Every successful snapshot upload is a separate billable transcription request.
+    Console.WriteLine($"Uploaded audio: {usage.InputAudioDuration?.TotalSeconds:F2}s");
+};
+
 using var cts = new CancellationTokenSource();
 
 var liveTask = transcriber.TranscribeLive(text =>
@@ -525,30 +531,47 @@ Release builds use source project references by default so unreleased APIs can b
 
 ### Usage Tracking
 
-Track token consumption and session duration for billing and monitoring:
+Track provider-reported tokens together with client-measured billable media and events:
 
 ```csharp
 _assistant.OnSessionUsageUpdated = update =>
 {
     Console.WriteLine($"Duration: {update.LocalSessionDuration.TotalMinutes:F1} min");
     Console.WriteLine($"Tokens: {update.TotalTokens} (audio in: {update.TotalAudioInputTokens}, audio out: {update.TotalAudioOutputTokens})");
+    Console.WriteLine($"Billable media: {update.TotalInputAudioDuration.TotalSeconds:F1}s in, {update.TotalOutputAudioDuration.TotalSeconds:F1}s out");
+    Console.WriteLine($"Billable text events: {update.TotalBillableTextInputEvents}");
+};
+
+_assistant.OnUsageReceived = usage =>
+{
+    Console.WriteLine($"{usage.ProviderId}/{usage.ModelId}: {usage.OperationType} via {usage.MeasurementSource}");
+    Console.WriteLine($"Provider total: {usage.TotalTokens}; raw audit data: {usage.RawProviderUsageJson}");
 };
 ```
 
-**Provider Token Reporting:**
+`UsageReport` keeps provider-native authoritative totals so modality details are
+not double-counted. It also exposes text, audio, image, cache, tool-use and
+reasoning token dimensions where supplied, plus model/operation identity and
+the raw provider usage object for audit and forward compatibility.
 
-| Provider | Token Data | Audio Tokens | Billing Model |
-|----------|------------|--------------|---------------|
-| OpenAI | ✅ Native | ✅ `input_audio_tokens`, `output_audio_tokens` | Per token |
-| xAI | ✅ Native | ✅ Same as OpenAI (compatible API) | Per minute ($0.05/min) |
-| Google | ❌ Not yet | ❌ Coming soon (per Google) | Per token |
+**Provider reporting:**
+
+| Provider/API | Metering data | Source used by the toolkit |
+|--------------|---------------|----------------------------|
+| OpenAI Realtime | Total, text/audio/image, cached and optional reasoning tokens | Native `response.done.response.usage` |
+| OpenAI input transcription | Transcription token usage when returned; uploaded PCM duration for dedicated transcription | Native completed-event usage plus client media measurement |
+| OpenAI HTTP transcription | Uploaded audio duration per successful snapshot request | Client measurement; repeated full snapshots are each reported |
+| Google Gemini Live | Prompt/response, text/audio/image modalities, cache, tool-use, thoughts and total | Native `usageMetadata` (`responseTokenCount`, with legacy `candidatesTokenCount` fallback) |
+| xAI Speech-to-Speech | Input/output audio duration, billable text item events, and optional provider token data | Client media/event measurement plus native data when present |
 
 **`SessionUsageUpdate` fires on:**
-- `TokenUsageReceived` — When the provider returns token counts (OpenAI/xAI)
+- `TokenUsageReceived` — When any provider or client-measured usage report arrives (the enum name is retained for compatibility)
 - `MinuteElapsed` — Every minute while session is active (checked on audio events)
 - `SessionEnded` — When `StopAsync()` is called
 
-**Important:** `LocalSessionDuration` is measured client-side and may differ slightly from provider billing due to network latency and connection establishment time. For providers like **xAI that bill by connection time**, use this as an approximation — consult the provider's usage dashboard for exact billing amounts.
+**Important:** `LocalSessionDuration` is operational wall-clock time, not a billing
+metric. Use token totals, measured media durations, and billable event counts
+from the usage reports for metering.
 
 ---
 

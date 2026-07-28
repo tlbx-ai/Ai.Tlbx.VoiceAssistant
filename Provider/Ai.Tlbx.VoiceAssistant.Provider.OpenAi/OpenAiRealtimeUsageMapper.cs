@@ -7,50 +7,78 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi;
 
 public static class OpenAiRealtimeUsageMapper
 {
-    public static UsageReport CreateUsageReport(JsonElement usage)
+    public static UsageReport CreateUsageReport(
+        JsonElement usage,
+        string? modelId = null,
+        string? operationId = null,
+        UsageOperationType operationType = UsageOperationType.VoiceResponse,
+        TimeSpan? inputAudioDuration = null,
+        TimeSpan? outputAudioDuration = null,
+        UsageMeasurementSource measurementSource = UsageMeasurementSource.ProviderReported)
     {
         var inputTotal = TryGetInt32(usage, "input_tokens");
         var outputTotal = TryGetInt32(usage, "output_tokens");
+        var totalTokens = TryGetInt32(usage, "total_tokens");
         var cacheCreationTokens = TryGetInt32(usage, "cache_creation_input_tokens");
 
-        var hasInputDetails = usage.TryGetProperty("input_token_details", out var inputDetails);
-        var hasOutputDetails = usage.TryGetProperty("output_token_details", out var outputDetails);
+        var hasInputDetails =
+            usage.TryGetProperty("input_token_details", out var inputDetails) &&
+            inputDetails.ValueKind == JsonValueKind.Object;
+        var hasOutputDetails =
+            usage.TryGetProperty("output_token_details", out var outputDetails) &&
+            outputDetails.ValueKind == JsonValueKind.Object;
+        var inputAudioTokens = hasInputDetails
+            ? TryGetInt32(inputDetails, "audio_tokens")
+            : TryGetInt32(usage, "input_audio_tokens");
+        var outputAudioTokens = hasOutputDetails
+            ? TryGetInt32(outputDetails, "audio_tokens")
+            : TryGetInt32(usage, "output_audio_tokens");
+        var inputImageTokens = hasInputDetails ? TryGetInt32(inputDetails, "image_tokens") : null;
+        var outputImageTokens = hasOutputDetails ? TryGetInt32(outputDetails, "image_tokens") : null;
+        var reasoningTokens = hasOutputDetails ? TryGetInt32(outputDetails, "reasoning_tokens") : null;
+        var cachedTokens = hasInputDetails
+            ? TryGetInt32(inputDetails, "cached_tokens") ?? TryGetInt32(usage, "cache_read_input_tokens")
+            : TryGetInt32(usage, "cache_read_input_tokens");
 
-        if (hasInputDetails || hasOutputDetails)
-        {
-            var inputAudioTokens = TryGetInt32(inputDetails, "audio_tokens");
-            var outputAudioTokens = TryGetInt32(outputDetails, "audio_tokens");
-            var cachedTokens = TryGetInt32(inputDetails, "cached_tokens") ?? TryGetInt32(usage, "cache_read_input_tokens");
+        JsonElement cachedDetails = default;
+        var hasCachedDetails = hasInputDetails &&
+            inputDetails.TryGetProperty("cached_tokens_details", out cachedDetails);
 
-            var inputTextTokens = TryGetInt32(inputDetails, "text_tokens") ??
-                SubtractKnownTokenDetails(inputTotal, inputAudioTokens, TryGetInt32(inputDetails, "image_tokens"));
-
-            var outputTextTokens = TryGetInt32(outputDetails, "text_tokens") ??
-                SubtractKnownTokenDetails(outputTotal, outputAudioTokens);
-
-            return new UsageReport
-            {
-                ProviderId = "openai",
-                InputTokens = inputTextTokens,
-                OutputTokens = outputTextTokens,
-                InputAudioTokens = inputAudioTokens,
-                OutputAudioTokens = outputAudioTokens,
-                CacheCreationInputTokens = cacheCreationTokens,
-                CacheReadInputTokens = cachedTokens,
-                IsEstimated = false
-            };
-        }
+        var inputTextTokens = hasInputDetails
+            ? TryGetInt32(inputDetails, "text_tokens") ??
+              SubtractKnownTokenDetails(inputTotal, inputAudioTokens, inputImageTokens)
+            : SubtractKnownTokenDetails(inputTotal, inputAudioTokens, inputImageTokens);
+        var outputTextTokens = hasOutputDetails
+            ? TryGetInt32(outputDetails, "text_tokens") ??
+              SubtractKnownTokenDetails(outputTotal, outputAudioTokens, outputImageTokens, reasoningTokens)
+            : SubtractKnownTokenDetails(outputTotal, outputAudioTokens, outputImageTokens, reasoningTokens);
 
         return new UsageReport
         {
             ProviderId = "openai",
-            InputTokens = inputTotal,
-            OutputTokens = outputTotal,
-            InputAudioTokens = TryGetInt32(usage, "input_audio_tokens"),
-            OutputAudioTokens = TryGetInt32(usage, "output_audio_tokens"),
+            ModelId = modelId,
+            OperationId = operationId,
+            OperationType = operationType,
+            MeasurementSource = measurementSource,
+            InputTokens = inputTextTokens,
+            OutputTokens = outputTextTokens,
+            InputAudioTokens = inputAudioTokens,
+            OutputAudioTokens = outputAudioTokens,
+            InputImageTokens = inputImageTokens,
+            OutputImageTokens = outputImageTokens,
+            ReasoningOutputTokens = reasoningTokens,
             CacheCreationInputTokens = cacheCreationTokens,
-            CacheReadInputTokens = TryGetInt32(usage, "cache_read_input_tokens"),
-            IsEstimated = false
+            CacheReadInputTokens = cachedTokens,
+            CachedTextInputTokens = hasCachedDetails ? TryGetInt32(cachedDetails, "text_tokens") : null,
+            CachedAudioInputTokens = hasCachedDetails ? TryGetInt32(cachedDetails, "audio_tokens") : null,
+            CachedImageInputTokens = hasCachedDetails ? TryGetInt32(cachedDetails, "image_tokens") : null,
+            ReportedInputTokens = inputTotal,
+            ReportedOutputTokens = outputTotal,
+            ReportedTotalTokens = totalTokens,
+            IsEstimated = measurementSource != UsageMeasurementSource.ProviderReported,
+            InputAudioDuration = inputAudioDuration,
+            OutputAudioDuration = outputAudioDuration,
+            RawProviderUsageJson = usage.GetRawText()
         };
     }
 

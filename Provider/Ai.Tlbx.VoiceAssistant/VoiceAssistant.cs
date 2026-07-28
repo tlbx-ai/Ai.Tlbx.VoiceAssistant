@@ -53,14 +53,14 @@ namespace Ai.Tlbx.VoiceAssistant
         public Action<List<AudioDeviceInfo>>? OnMicrophoneDevicesChanged { get; set; }
 
         /// <summary>
-        /// Callback that fires when usage data is received from the AI provider.
-        /// For per-response granular token data.
+        /// Callback that fires when provider-reported or client-measured usage arrives.
+        /// Provides per-operation token, media, and event data.
         /// </summary>
         public Action<UsageReport>? OnUsageReceived { get; set; }
 
         /// <summary>
-        /// Callback that fires with cumulative session usage (tokens + duration).
-        /// Fires on: token usage received, every minute elapsed, and session end.
+        /// Callback that fires with cumulative session usage.
+        /// Fires on: usage received, every minute elapsed, and session end.
         /// Subscribe to this single callback for unified usage tracking.
         /// </summary>
         public Action<SessionUsageUpdate>? OnSessionUsageUpdated { get; set; }
@@ -769,7 +769,14 @@ namespace Ai.Tlbx.VoiceAssistant
                 TotalAudioInputTokens = _usageManager.TotalAudioInputTokens,
                 TotalAudioOutputTokens = _usageManager.TotalAudioOutputTokens,
                 TotalTokens = _usageManager.TotalTokens,
-                TotalCachedInputTokens = _usageManager.TotalCachedInputTokens
+                TotalCachedInputTokens = _usageManager.TotalCachedInputTokens,
+                TotalInputAudioDuration = _usageManager.TotalInputAudioDuration,
+                TotalOutputAudioDuration = _usageManager.TotalOutputAudioDuration,
+                TotalBillableTextInputEvents = _usageManager.TotalBillableTextInputEvents,
+                TotalImageInputTokens = _usageManager.TotalImageInputTokens,
+                TotalImageOutputTokens = _usageManager.TotalImageOutputTokens,
+                TotalToolUseInputTokens = _usageManager.TotalToolUseInputTokens,
+                TotalReasoningOutputTokens = _usageManager.TotalReasoningOutputTokens
             };
 
             _lastUsageUpdateTime = DateTime.UtcNow;

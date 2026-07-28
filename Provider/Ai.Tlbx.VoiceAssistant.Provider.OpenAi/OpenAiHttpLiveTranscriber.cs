@@ -40,6 +40,12 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi
 
         public OpenAiHttpLiveTranscriptionOptions Options { get; }
 
+        /// <summary>
+        /// Callback invoked after each successful transcription upload with the
+        /// exact PCM duration submitted to OpenAI for that request.
+        /// </summary>
+        public Action<UsageReport>? OnUsageReceived { get; set; }
+
         public OpenAiHttpLiveTranscriber(
             IAudioHardwareAccess hardwareAccess,
             OpenAiHttpLiveTranscriptionOptions? options = null,
@@ -285,6 +291,16 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi
                 string body = await response.Content.ReadAsStringAsync();
                 throw new InvalidOperationException($"OpenAI transcription failed: {response.StatusCode} - {body}");
             }
+
+            OnUsageReceived?.Invoke(new UsageReport
+            {
+                ProviderId = "openai",
+                ModelId = Options.TranscriptionModel.ToApiString(),
+                OperationType = UsageOperationType.Transcription,
+                MeasurementSource = UsageMeasurementSource.ClientMeasured,
+                InputAudioDuration = TimeSpan.FromSeconds(snapshot.Audio.Length / (double)BYTES_PER_SECOND),
+                IsEstimated = true
+            });
 
             await using var responseStream = await response.Content.ReadAsStreamAsync();
             using var reader = new StreamReader(responseStream);
