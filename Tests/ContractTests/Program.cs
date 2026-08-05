@@ -22,6 +22,7 @@ Assert(new XaiVoiceSettings().Model == XaiVoiceModel.GrokVoiceLatest, "xAI defau
 Assert(XaiVoiceModel.GrokVoiceLatest.ToApiString() == "grok-voice-latest", "xAI latest model id");
 
 await VerifyOpenAiPreambleOutputPolicyAsync();
+VerifyOpenAiPreambleInstructionPolicy();
 
 var directRealtimeClient = File.ReadAllText(FindRepositoryFile(
     "Provider",
@@ -249,10 +250,48 @@ static async Task VerifyOpenAiPreambleOutputPolicyAsync()
     Assert(audio.SequenceEqual(["final-audio"]), "OpenAI disabled preamble preserves final audio");
     Assert(messages.Count == 1 && messages[0].Content == "Die Betonsorte ist C25/30.", "OpenAI disabled preamble preserves final transcript");
 
+    audio.Clear();
+    messages.Clear();
+    await DeliverOpenAiEventAsync(provider,
+        """{"type":"response.output_audio.delta","item_id":"mixed_commentary","delta":"discard-this"}""");
+    await DeliverOpenAiEventAsync(provider,
+        """{"type":"response.output_audio.delta","item_id":"mixed_final","delta":"play-this"}""");
+    await DeliverOpenAiEventAsync(provider,
+        """{"type":"response.done","response":{"id":"mixed-response","output":[{"id":"mixed_commentary","type":"message","phase":"commentary","content":[{"type":"output_audio","transcript":"Ich sehe kurz nach."}]},{"id":"mixed_final","type":"message","phase":"final_answer","content":[{"type":"output_audio","transcript":"Gefordert ist C30/37."}]}]}}""");
+    Assert(audio.SequenceEqual(["play-this"]), "OpenAI disabled preamble filters mixed response phases");
+    Assert(messages.Count == 1 && messages[0].Content == "Gefordert ist C30/37.", "OpenAI disabled preamble preserves only mixed final transcript");
+
+    audio.Clear();
+    messages.Clear();
+    await DeliverOpenAiEventAsync(provider,
+        """{"type":"response.output_audio.delta","item_id":"legacy_1","delta":"legacy-audio"}""");
+    await DeliverOpenAiEventAsync(provider,
+        """{"type":"response.output_audio_transcript.done","item_id":"legacy_1","transcript":"Kompatible Ausgabe."}""");
+    await DeliverOpenAiEventAsync(provider,
+        """{"type":"response.done","response":{"id":"legacy-response","output":[{"id":"legacy_1","type":"message","content":[{"type":"output_audio","transcript":"Kompatible Ausgabe."}]}]}}""");
+    Assert(audio.SequenceEqual(["legacy-audio"]), "OpenAI disabled preamble preserves providers without phase metadata");
+    Assert(messages.Count == 1 && messages[0].Content == "Kompatible Ausgabe.", "OpenAI disabled preamble preserves transcript without phase metadata");
+
     provider.Settings.ToolCallPreambleMode = ToolCallPreambleMode.BeforeToolBurst;
     await DeliverOpenAiEventAsync(provider,
         """{"type":"response.output_audio.delta","item_id":"commentary_2","delta":"burst-audio"}""");
     Assert(audio.Contains("burst-audio", StringComparer.Ordinal), "OpenAI enabled preamble preserves commentary audio");
+}
+
+static void VerifyOpenAiPreambleInstructionPolicy()
+{
+    var method = typeof(OpenAiVoiceProvider).GetMethod("BuildInstructions", BindingFlags.Static | BindingFlags.NonPublic)
+        ?? throw new MissingMethodException(typeof(OpenAiVoiceProvider).FullName, "BuildInstructions");
+
+    string Build(ToolCallPreambleMode mode) => method.Invoke(null,
+        [new OpenAiVoiceSettings { Instructions = "base-instructions", ToolCallPreambleMode = mode }]) as string
+        ?? throw new InvalidOperationException("OpenAI instruction builder did not return text.");
+
+    Assert(Build(ToolCallPreambleMode.ProviderDefault) == "base-instructions", "OpenAI provider default preserves instructions");
+    Assert(Build(ToolCallPreambleMode.Disabled).Contains("remain silent until the final answer", StringComparison.Ordinal), "OpenAI disabled mode instruction");
+    Assert(Build(ToolCallPreambleMode.BeforeToolBurst).Contains("burst of multiple tool calls", StringComparison.Ordinal), "OpenAI tool burst instruction");
+    Assert(Build(ToolCallPreambleMode.ForLongRunningTools).Contains("noticeable time", StringComparison.Ordinal), "OpenAI long-running tool instruction");
+    Assert(Build(ToolCallPreambleMode.BeforeEveryToolCall).Contains("Before any tool call", StringComparison.Ordinal), "OpenAI every-tool instruction");
 }
 
 static async Task DeliverOpenAiEventAsync(OpenAiVoiceProvider provider, string json)

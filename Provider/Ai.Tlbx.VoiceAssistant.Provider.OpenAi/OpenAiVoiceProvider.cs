@@ -1015,13 +1015,16 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi
                 OnUsageReceived?.Invoke(report);
             }
 
+            // Bei deaktivierten Zwischenansagen ist die Phase erst in response.done
+            // zuverlässig bekannt. Deshalb zuerst ausschließlich freigegebene Ausgabe
+            // zustellen; Telemetrie-Callbacks dürfen die Audioausgabe nicht verhindern.
+            FlushBufferedOutput(root);
+
             if (trace != null)
             {
                 PopulateResponseTrace(root, trace, report);
                 OnResponseTraceCompleted?.Invoke(trace);
             }
-
-            FlushBufferedOutput(root);
 
             _currentResponseTrace = null;
             _currentResponseOutputText.Clear();
