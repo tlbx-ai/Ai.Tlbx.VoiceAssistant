@@ -6,6 +6,7 @@ using Ai.Tlbx.VoiceAssistant.Provider.Google;
 using Ai.Tlbx.VoiceAssistant.Provider.Google.Models;
 using Ai.Tlbx.VoiceAssistant.Provider.Google.Protocol;
 using Ai.Tlbx.VoiceAssistant.Provider.OpenAi;
+using Ai.Tlbx.VoiceAssistant.Provider.OpenAi.AspNetCore;
 using Ai.Tlbx.VoiceAssistant.Provider.OpenAi.Models;
 using Ai.Tlbx.VoiceAssistant.Provider.XAi;
 using Ai.Tlbx.VoiceAssistant.Provider.XAi.Models;
@@ -23,6 +24,7 @@ Assert(XaiVoiceModel.GrokVoiceLatest.ToApiString() == "grok-voice-latest", "xAI 
 
 await VerifyOpenAiPreambleOutputPolicyAsync();
 VerifyOpenAiPreambleInstructionPolicy();
+VerifyOpenAiDirectPreamblePolicy();
 
 var directRealtimeClient = File.ReadAllText(FindRepositoryFile(
     "Provider",
@@ -226,8 +228,12 @@ static async Task VerifyOpenAiPreambleOutputPolicyAsync()
 
     var audio = new List<string>();
     var messages = new List<ChatMessage>();
+    var usageReports = new List<UsageReport>();
+    var errors = new List<string>();
     provider.OnAudioReceived = audio.Add;
     provider.OnMessageReceived = messages.Add;
+    provider.OnUsageReceived = usageReports.Add;
+    provider.OnError = errors.Add;
 
     await DeliverOpenAiEventAsync(provider,
         """{"type":"response.output_audio.delta","item_id":"commentary_1","delta":"ignored-audio"}""");
@@ -236,19 +242,26 @@ static async Task VerifyOpenAiPreambleOutputPolicyAsync()
     Assert(audio.Count == 0, "OpenAI disabled preamble suppresses commentary audio");
     Assert(messages.Count == 0, "OpenAI disabled preamble suppresses commentary transcript");
     await DeliverOpenAiEventAsync(provider,
-        """{"type":"response.done","response":{"id":"commentary-response","output":[{"id":"commentary_1","type":"message","phase":"commentary","content":[{"type":"output_audio","transcript":"Einen Moment, ich schaue nach."}]}]}}""");
+        """{"type":"response.done","response":{"id":"commentary-response","status":"completed","output":[{"id":"commentary_1","type":"message","phase":"commentary","content":[{"type":"output_audio","transcript":"Einen Moment, ich schaue nach."}]}]}}""");
     Assert(audio.Count == 0, "OpenAI disabled preamble discards completed commentary audio");
     Assert(messages.Count == 0, "OpenAI disabled preamble discards completed commentary transcript");
 
     await DeliverOpenAiEventAsync(provider,
-        """{"type":"response.output_audio.delta","item_id":"final_1","delta":"final-audio"}""");
+        """{"type":"response.output_audio.delta","item_id":"final_1","delta":"final-audio-1"}""");
     await DeliverOpenAiEventAsync(provider,
-        """{"type":"response.output_audio_transcript.done","item_id":"final_1","transcript":"Die Betonsorte ist C25/30."}""");
+        """{"type":"response.output_audio.delta","item_id":"final_1","delta":"final-audio-2"}""");
+    await DeliverOpenAiEventAsync(provider,
+        """{"type":"response.output_audio.delta","item_id":"final_2","delta":"final-audio-3"}""");
+    await DeliverOpenAiEventAsync(provider,
+        """{"type":"response.output_audio_transcript.done","item_id":"final_1","transcript":"Die Betonsorte ist"}""");
+    await DeliverOpenAiEventAsync(provider,
+        """{"type":"response.output_audio_transcript.done","item_id":"final_2","transcript":" C25/30."}""");
     Assert(audio.Count == 0, "OpenAI disabled preamble buffers final audio until its phase is known");
     await DeliverOpenAiEventAsync(provider,
-        """{"type":"response.done","response":{"id":"final-response","output":[{"id":"final_1","type":"message","phase":"final_answer","content":[{"type":"output_audio","transcript":"Die Betonsorte ist C25/30."}]}]}}""");
-    Assert(audio.SequenceEqual(["final-audio"]), "OpenAI disabled preamble preserves final audio");
-    Assert(messages.Count == 1 && messages[0].Content == "Die Betonsorte ist C25/30.", "OpenAI disabled preamble preserves final transcript");
+        """{"type":"response.done","response":{"id":"final-response","status":"completed","usage":{"total_tokens":7,"input_tokens":5,"output_tokens":2},"output":[{"id":"final_1","type":"message","phase":"final_answer","content":[{"type":"output_audio","transcript":"Die Betonsorte ist"}]},{"id":"final_2","type":"message","phase":"final_answer","content":[{"type":"output_audio","transcript":" C25/30."}]}]}}""");
+    Assert(audio.SequenceEqual(["final-audio-1", "final-audio-2", "final-audio-3"]), "OpenAI disabled preamble preserves every final audio chunk in output order");
+    Assert(messages.Select(message => message.Content).SequenceEqual(["Die Betonsorte ist", " C25/30."]), "OpenAI disabled preamble preserves every intended final transcript");
+    Assert(usageReports.Count == 1 && usageReports[0].TotalTokens == 7, "OpenAI completed response usage remains counted");
 
     audio.Clear();
     messages.Clear();
@@ -257,25 +270,57 @@ static async Task VerifyOpenAiPreambleOutputPolicyAsync()
     await DeliverOpenAiEventAsync(provider,
         """{"type":"response.output_audio.delta","item_id":"mixed_final","delta":"play-this"}""");
     await DeliverOpenAiEventAsync(provider,
-        """{"type":"response.done","response":{"id":"mixed-response","output":[{"id":"mixed_commentary","type":"message","phase":"commentary","content":[{"type":"output_audio","transcript":"Ich sehe kurz nach."}]},{"id":"mixed_final","type":"message","phase":"final_answer","content":[{"type":"output_audio","transcript":"Gefordert ist C30/37."}]}]}}""");
+        """{"type":"response.done","response":{"id":"mixed-response","status":"completed","output":[{"id":"mixed_commentary","type":"message","phase":"commentary","content":[{"type":"output_audio","transcript":"Ich sehe kurz nach."}]},{"id":"mixed_final","type":"message","phase":"final_answer","content":[{"type":"output_audio","transcript":"Gefordert ist C30/37."}]}]}}""");
     Assert(audio.SequenceEqual(["play-this"]), "OpenAI disabled preamble filters mixed response phases");
     Assert(messages.Count == 1 && messages[0].Content == "Gefordert ist C30/37.", "OpenAI disabled preamble preserves only mixed final transcript");
 
     audio.Clear();
     messages.Clear();
     await DeliverOpenAiEventAsync(provider,
+        """{"type":"response.output_audio.delta","item_id":"cancelled_1","delta":"never-play-this"}""");
+    await DeliverOpenAiEventAsync(provider,
+        """{"type":"response.output_audio_transcript.done","item_id":"cancelled_1","transcript":"Diese Antwort wurde unterbrochen."}""");
+    await DeliverOpenAiEventAsync(provider, """{"type":"input_audio_buffer.speech_started"}""");
+    await DeliverOpenAiEventAsync(provider,
+        """{"type":"response.done","response":{"id":"cancelled-response","status":"cancelled","usage":{"total_tokens":4,"input_tokens":3,"output_tokens":1},"output":[{"id":"cancelled_1","type":"message","phase":"final_answer","content":[{"type":"output_audio","transcript":"Diese Antwort wurde unterbrochen."}]}]}}""");
+    Assert(audio.Count == 0 && messages.Count == 0, "OpenAI interruption never replays buffered speech");
+    Assert(usageReports.Count == 2 && usageReports[1].TotalTokens == 4, "OpenAI cancelled response usage remains counted");
+
+    await DeliverOpenAiEventAsync(provider,
+        """{"type":"response.output_audio.delta","item_id":"incomplete_1","delta":"partial-audio"}""");
+    await DeliverOpenAiEventAsync(provider,
+        """{"type":"response.done","response":{"id":"incomplete-response","status":"incomplete","output":[{"id":"incomplete_1","type":"message","phase":"final_answer","content":[{"type":"output_audio","transcript":"Unvollständige Antwort"}]}]}}""");
+    Assert(audio.Count == 0 && messages.Count == 0, "OpenAI incomplete response is not presented as complete intended speech");
+    Assert(errors.Count == 1 && errors[0].Contains("status 'incomplete'", StringComparison.Ordinal), "OpenAI incomplete response is surfaced as an error");
+
+    await DeliverOpenAiEventAsync(provider,
         """{"type":"response.output_audio.delta","item_id":"legacy_1","delta":"legacy-audio"}""");
     await DeliverOpenAiEventAsync(provider,
         """{"type":"response.output_audio_transcript.done","item_id":"legacy_1","transcript":"Kompatible Ausgabe."}""");
     await DeliverOpenAiEventAsync(provider,
-        """{"type":"response.done","response":{"id":"legacy-response","output":[{"id":"legacy_1","type":"message","content":[{"type":"output_audio","transcript":"Kompatible Ausgabe."}]}]}}""");
+        """{"type":"response.done","response":{"id":"legacy-response","status":"completed","output":[{"id":"legacy_1","type":"message","content":[{"type":"output_audio","transcript":"Kompatible Ausgabe."}]}]}}""");
     Assert(audio.SequenceEqual(["legacy-audio"]), "OpenAI disabled preamble preserves providers without phase metadata");
     Assert(messages.Count == 1 && messages[0].Content == "Kompatible Ausgabe.", "OpenAI disabled preamble preserves transcript without phase metadata");
 
+    audio.Clear();
+    messages.Clear();
+    await DeliverOpenAiEventAsync(provider,
+        """{"type":"response.output_text.delta","item_id":"text_1","delta":"Voll"}""");
+    await DeliverOpenAiEventAsync(provider,
+        """{"type":"response.output_text.delta","item_id":"text_1","delta":"ständig."}""");
+    await DeliverOpenAiEventAsync(provider,
+        """{"type":"response.done","response":{"id":"text-response","status":"completed","output":[{"id":"text_1","type":"message","phase":"final_answer","content":[{"type":"output_text","text":"Vollständig."}]}]}}""");
+    Assert(messages.Count == 1 && messages[0].Content == "Vollständig.", "OpenAI disabled preamble preserves complete text output");
+
     provider.Settings.ToolCallPreambleMode = ToolCallPreambleMode.BeforeToolBurst;
+    audio.Clear();
+    messages.Clear();
     await DeliverOpenAiEventAsync(provider,
         """{"type":"response.output_audio.delta","item_id":"commentary_2","delta":"burst-audio"}""");
-    Assert(audio.Contains("burst-audio", StringComparer.Ordinal), "OpenAI enabled preamble preserves commentary audio");
+    await DeliverOpenAiEventAsync(provider,
+        """{"type":"response.output_audio_transcript.done","item_id":"commentary_2","transcript":"Ich prüfe das kurz."}""");
+    Assert(audio.SequenceEqual(["burst-audio"]), "OpenAI enabled preamble preserves commentary audio");
+    Assert(messages.Count == 1 && messages[0].Content == "Ich prüfe das kurz.", "OpenAI enabled preamble preserves commentary transcript");
 }
 
 static void VerifyOpenAiPreambleInstructionPolicy()
@@ -292,6 +337,25 @@ static void VerifyOpenAiPreambleInstructionPolicy()
     Assert(Build(ToolCallPreambleMode.BeforeToolBurst).Contains("burst of multiple tool calls", StringComparison.Ordinal), "OpenAI tool burst instruction");
     Assert(Build(ToolCallPreambleMode.ForLongRunningTools).Contains("noticeable time", StringComparison.Ordinal), "OpenAI long-running tool instruction");
     Assert(Build(ToolCallPreambleMode.BeforeEveryToolCall).Contains("Before any tool call", StringComparison.Ordinal), "OpenAI every-tool instruction");
+}
+
+static void VerifyOpenAiDirectPreamblePolicy()
+{
+    var method = typeof(OpenAiDirectRealtimeVoiceProvider).GetMethod(
+        "EnsurePreambleModeIsSupported",
+        BindingFlags.Static | BindingFlags.NonPublic)
+        ?? throw new MissingMethodException(typeof(OpenAiDirectRealtimeVoiceProvider).FullName, "EnsurePreambleModeIsSupported");
+
+    method.Invoke(null, [new OpenAiVoiceSettings { ToolCallPreambleMode = ToolCallPreambleMode.BeforeToolBurst }]);
+
+    try
+    {
+        method.Invoke(null, [new OpenAiVoiceSettings { ToolCallPreambleMode = ToolCallPreambleMode.Disabled }]);
+        throw new InvalidOperationException("Direct WebRTC accepted a preamble mode it cannot enforce.");
+    }
+    catch (TargetInvocationException exception) when (exception.InnerException is NotSupportedException)
+    {
+    }
 }
 
 static async Task DeliverOpenAiEventAsync(OpenAiVoiceProvider provider, string json)

@@ -80,6 +80,8 @@ public sealed class OpenAiDirectRealtimeVoiceProvider : IDirectBrowserVoiceProvi
             throw new ArgumentException("Settings must be of type OpenAiVoiceSettings for OpenAI direct realtime provider", nameof(settings));
         }
 
+        EnsurePreambleModeIsSupported(openAiSettings);
+
         _settings = openAiSettings;
         ReportStatus("Preparing OpenAI browser session...");
 
@@ -155,6 +157,8 @@ public sealed class OpenAiDirectRealtimeVoiceProvider : IDirectBrowserVoiceProvi
         {
             throw new ArgumentException("Settings must be of type OpenAiVoiceSettings for OpenAI direct realtime provider", nameof(settings));
         }
+
+        EnsurePreambleModeIsSupported(openAiSettings);
 
         _settings = openAiSettings;
         _logAction(LogLevel.Warn, "OpenAI direct realtime settings updates require a new browser session.");
@@ -367,6 +371,16 @@ public sealed class OpenAiDirectRealtimeVoiceProvider : IDirectBrowserVoiceProvi
     {
         _logAction(LogLevel.Info, $"[OpenAI Direct] {status}");
         OnStatusChanged?.Invoke(status);
+    }
+
+    private static void EnsurePreambleModeIsSupported(OpenAiVoiceSettings settings)
+    {
+        if (settings.ToolCallPreambleMode == ToolCallPreambleMode.Disabled)
+        {
+            throw new NotSupportedException(
+                "ToolCallPreambleMode.Disabled requires the WebSocket OpenAiVoiceProvider. " +
+                "Direct WebRTC plays the remote media stream before response phase metadata is available and cannot guarantee suppression.");
+        }
     }
 
     private static string? TryGetString(JsonElement element, string propertyName)

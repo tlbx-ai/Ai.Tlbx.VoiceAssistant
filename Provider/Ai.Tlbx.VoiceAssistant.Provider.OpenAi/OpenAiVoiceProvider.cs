@@ -50,9 +50,8 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi
         private readonly StringBuilder _currentResponseOutputText = new();
         private string? _currentResponseAudioTranscript;
         private string? _lastInputTranscript;
-        private readonly Dictionary<string, List<string>> _bufferedAudioByItemId = new(StringComparer.Ordinal);
-        private readonly Dictionary<string, string> _bufferedTranscriptsByItemId = new(StringComparer.Ordinal);
-        private readonly Dictionary<string, StringBuilder> _bufferedTextByItemId = new(StringComparer.Ordinal);
+        private readonly Dictionary<string, BufferedOutputItem> _bufferedOutputByItemId = new(StringComparer.Ordinal);
+        private readonly List<string> _bufferedOutputOrder = [];
 
         /// <summary>
         /// Gets a value indicating whether the provider is connected and ready.
@@ -291,6 +290,10 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi
             {
                 _logAction(LogLevel.Error, $"Error during disconnection: {ex.Message}");
                 OnError?.Invoke($"Disconnection error: {ex.Message}");
+            }
+            finally
+            {
+                ClearBufferedOutput();
             }
         }
 
@@ -715,13 +718,7 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi
                 {
                     if (ShouldBufferOutput())
                     {
-                        var itemId = GetOutputItemKey(root);
-                        if (!_bufferedAudioByItemId.TryGetValue(itemId, out var chunks))
-                        {
-                            chunks = [];
-                            _bufferedAudioByItemId[itemId] = chunks;
-                        }
-                        chunks.Add(audioData);
+                        GetOrCreateBufferedOutput(root).AudioChunks.Add(audioData);
                         return;
                     }
 
@@ -906,7 +903,7 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi
                 {
                     if (ShouldBufferOutput())
                     {
-                        _bufferedTranscriptsByItemId[GetOutputItemKey(root)] = text;
+                        GetOrCreateBufferedOutput(root).Transcript = text;
                         return;
                     }
 
@@ -948,13 +945,7 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi
             {
                 if (ShouldBufferOutput())
                 {
-                    var itemId = GetOutputItemKey(root);
-                    if (!_bufferedTextByItemId.TryGetValue(itemId, out var textBuffer))
-                    {
-                        textBuffer = new StringBuilder();
-                        _bufferedTextByItemId[itemId] = textBuffer;
-                    }
-                    textBuffer.Append(deltaText);
+                    GetOrCreateBufferedOutput(root).Text.Append(deltaText);
                     return;
                 }
 
@@ -1016,8 +1007,8 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi
             }
 
             // Bei deaktivierten Zwischenansagen ist die Phase erst in response.done
-            // zuverlässig bekannt. Deshalb zuerst ausschließlich freigegebene Ausgabe
-            // zustellen; Telemetrie-Callbacks dürfen die Audioausgabe nicht verhindern.
+            // zuverlässig bekannt. Usage wird unabhängig vom Endstatus erfasst, aber
+            // nur vollständig abgeschlossene Antworten dürfen Audio zustellen.
             FlushBufferedOutput(root);
 
             if (trace != null)
@@ -1172,12 +1163,49 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi
             return "output:unknown";
         }
 
+        private BufferedOutputItem GetOrCreateBufferedOutput(JsonElement root)
+        {
+            var itemId = GetOutputItemKey(root);
+            if (_bufferedOutputByItemId.TryGetValue(itemId, out var existing))
+            {
+                return existing;
+            }
+
+            var created = new BufferedOutputItem();
+            _bufferedOutputByItemId[itemId] = created;
+            _bufferedOutputOrder.Add(itemId);
+            return created;
+        }
+
         private void FlushBufferedOutput(JsonElement root)
         {
-            if (!ShouldBufferOutput() ||
-                !root.TryGetProperty("response", out var response) ||
-                !response.TryGetProperty("output", out var output) ||
-                output.ValueKind != JsonValueKind.Array)
+            if (!ShouldBufferOutput())
+            {
+                FlushAllBufferedOutput();
+                return;
+            }
+
+            if (!root.TryGetProperty("response", out var response))
+            {
+                FlushAllBufferedOutput();
+                return;
+            }
+
+            var status = TryGetString(response, "status");
+            if (!string.IsNullOrWhiteSpace(status) &&
+                !string.Equals(status, "completed", StringComparison.OrdinalIgnoreCase))
+            {
+                _logAction(LogLevel.Warn, $"Discarding buffered output for response with status '{status}'. Usage and trace data remain available.");
+                if (!string.Equals(status, "cancelled", StringComparison.OrdinalIgnoreCase))
+                {
+                    OnError?.Invoke($"OpenAI response ended with status '{status}'. Buffered speech was discarded because the intended response was not complete.");
+                }
+
+                ClearBufferedOutput();
+                return;
+            }
+
+            if (!response.TryGetProperty("output", out var output) || output.ValueKind != JsonValueKind.Array)
             {
                 FlushAllBufferedOutput();
                 return;
@@ -1196,12 +1224,13 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi
                 }
 
                 var itemId = TryGetString(item, "id") ?? $"output:{index}";
-                FlushBufferedAudio(itemId);
+                var buffered = GetBufferedOutput(itemId);
+                FlushBufferedAudio(buffered);
 
                 var transcript = GetOutputItemContent(item, "output_audio", "transcript")
-                    ?? GetBufferedValue(_bufferedTranscriptsByItemId, itemId);
+                    ?? buffered?.Transcript;
                 var text = GetOutputItemContent(item, "output_text", "text")
-                    ?? GetBufferedText(itemId);
+                    ?? buffered?.Text.ToString();
                 var messageText = !string.IsNullOrWhiteSpace(transcript) ? transcript : text;
                 if (!string.IsNullOrWhiteSpace(messageText))
                 {
@@ -1215,36 +1244,33 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi
 
         private void FlushAllBufferedOutput()
         {
-            foreach (var chunks in _bufferedAudioByItemId.Values)
+            foreach (var itemId in _bufferedOutputOrder)
             {
-                foreach (var chunk in chunks)
+                if (!_bufferedOutputByItemId.TryGetValue(itemId, out var buffered))
                 {
-                    OnAudioReceived?.Invoke(chunk);
+                    continue;
                 }
-            }
 
-            foreach (var transcript in _bufferedTranscriptsByItemId.Values.Where(value => !string.IsNullOrWhiteSpace(value)))
-            {
-                OnMessageReceived?.Invoke(ChatMessage.CreateAssistantMessage(transcript));
-            }
+                FlushBufferedAudio(buffered);
 
-            if (_bufferedTranscriptsByItemId.Count == 0)
-            {
-                foreach (var text in _bufferedTextByItemId.Values.Select(value => value.ToString()).Where(value => !string.IsNullOrWhiteSpace(value)))
+                var messageText = !string.IsNullOrWhiteSpace(buffered.Transcript)
+                    ? buffered.Transcript
+                    : buffered.Text.ToString();
+                if (!string.IsNullOrWhiteSpace(messageText))
                 {
-                    OnMessageReceived?.Invoke(ChatMessage.CreateAssistantMessage(text));
+                    OnMessageReceived?.Invoke(ChatMessage.CreateAssistantMessage(messageText));
                 }
             }
         }
 
-        private void FlushBufferedAudio(string itemId)
+        private void FlushBufferedAudio(BufferedOutputItem? buffered)
         {
-            if (!_bufferedAudioByItemId.TryGetValue(itemId, out var chunks))
+            if (buffered is null)
             {
                 return;
             }
 
-            foreach (var chunk in chunks)
+            foreach (var chunk in buffered.AudioChunks)
             {
                 OnAudioReceived?.Invoke(chunk);
             }
@@ -1269,21 +1295,15 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi
             return null;
         }
 
-        private static string? GetBufferedValue(Dictionary<string, string> values, string itemId)
+        private BufferedOutputItem? GetBufferedOutput(string itemId)
         {
-            return values.TryGetValue(itemId, out var value) ? value : null;
-        }
-
-        private string? GetBufferedText(string itemId)
-        {
-            return _bufferedTextByItemId.TryGetValue(itemId, out var value) ? value.ToString() : null;
+            return _bufferedOutputByItemId.TryGetValue(itemId, out var value) ? value : null;
         }
 
         private void ClearBufferedOutput()
         {
-            _bufferedAudioByItemId.Clear();
-            _bufferedTranscriptsByItemId.Clear();
-            _bufferedTextByItemId.Clear();
+            _bufferedOutputByItemId.Clear();
+            _bufferedOutputOrder.Clear();
         }
 
         private async Task HandleTextDone()
@@ -1317,6 +1337,10 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi
             try
             {
                 _logAction(LogLevel.Info, "Speech detected - user interruption");
+
+                // Buffered audio has not reached the playback queue yet. Clear it before
+                // cancelling so response.done cannot replay the interrupted response.
+                ClearBufferedOutput();
 
                 // Always clear audio queue when speech is detected (like in the old code)
                 OnInterruptDetected?.Invoke();
@@ -1365,6 +1389,15 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi
             {
                 return argumentsJson;
             }
+        }
+
+        private sealed class BufferedOutputItem
+        {
+            public List<string> AudioChunks { get; } = [];
+
+            public string? Transcript { get; set; }
+
+            public StringBuilder Text { get; } = new();
         }
 
         /// <summary>

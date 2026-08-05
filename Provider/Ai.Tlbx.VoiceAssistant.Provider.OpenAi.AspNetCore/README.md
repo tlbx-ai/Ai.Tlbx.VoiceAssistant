@@ -30,6 +30,12 @@ await assistant.StartAsync(new OpenAiVoiceSettings
 
 For OpenAI voice sessions in Blazor Server this keeps the public `VoiceAssistant.StartAsync(settings)` workflow intact while moving microphone capture and assistant playback off the Blazor circuit. The server still mints ephemeral OpenAI client secrets and executes `IVoiceTool` calls.
 
+## Tool preamble modes
+
+Direct WebRTC applies non-default `ToolCallPreambleMode` values through Realtime instructions. Those modes guide when the model emits a spoken tool bridge while preserving the low-latency remote media stream.
+
+`ToolCallPreambleMode.Disabled` is intentionally rejected by `OpenAiDirectRealtimeVoiceProvider`. OpenAI exposes `commentary` versus `final_answer` phases only when `response.done` arrives, but WebRTC has already played the remote media stream by then. Use the WebSocket `OpenAiVoiceProvider` when commentary must be suppressed deterministically; it buffers phase-sensitive output, discards interrupted or unsuccessful responses, and releases only completed final speech.
+
 ## Connection status
 
 The browser client reports explicit connection phases through the regular status callback, including server session preparation, control WebSocket opening, microphone permission, WebRTC offer creation, OpenAI connection, DataChannel opening, and listening state.

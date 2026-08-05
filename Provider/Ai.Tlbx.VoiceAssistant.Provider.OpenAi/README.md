@@ -25,6 +25,21 @@ var assistant = new VoiceAssistant(provider, audioHardware);
 await assistant.StartAsync(settings);
 ```
 
+## Tool-call speech policy
+
+`ToolCallPreambleMode.Disabled` is enforced by buffering response output until
+OpenAI reports `response.done`. Commentary-phase audio is suppressed, while all
+final-answer audio chunks and transcripts are delivered in response order.
+Cancelled, failed, or incomplete responses are never replayed as complete
+speech; token usage is still reported for those responses. Failed and
+incomplete responses also invoke `OnError` so an application can retry or tell
+the user that the answer did not finish.
+
+This strict policy applies to the WebSocket provider in this package. Direct
+browser WebRTC starts playing its remote media track before phase metadata is
+available, so the ASP.NET Core direct provider rejects `Disabled` instead of
+claiming a guarantee it cannot provide.
+
 ## HTTP Live Transcription
 
 If you want near-live transcription without using the realtime WebSocket API, use
