@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Reflection;
 using Ai.Tlbx.VoiceAssistant.Managers;
 using Ai.Tlbx.VoiceAssistant.Models;
 using Ai.Tlbx.VoiceAssistant.Provider.Google;
@@ -19,6 +20,9 @@ Assert(OpenAiRealtimeModel.GptRealtime21.ToApiString() == "gpt-realtime-2.1", "O
 Assert(OpenAiRealtimeModel.GptRealtime21Mini.ToApiString() == "gpt-realtime-2.1-mini", "OpenAI 2.1 mini model id");
 Assert(new XaiVoiceSettings().Model == XaiVoiceModel.GrokVoiceLatest, "xAI default model");
 Assert(XaiVoiceModel.GrokVoiceLatest.ToApiString() == "grok-voice-latest", "xAI latest model id");
+
+await VerifyOpenAiPreambleOutputPolicyAsync();
+VerifyOpenAiPreambleInstructionPolicy();
 
 var directRealtimeClient = File.ReadAllText(FindRepositoryFile(
     "Provider",
@@ -208,6 +212,95 @@ static void Assert(bool condition, string contract)
     {
         throw new InvalidOperationException($"Contract failed: {contract}");
     }
+}
+
+static async Task VerifyOpenAiPreambleOutputPolicyAsync()
+{
+    await using var provider = new OpenAiVoiceProvider("contract-test-key")
+    {
+        Settings = new OpenAiVoiceSettings
+        {
+            ToolCallPreambleMode = ToolCallPreambleMode.Disabled
+        }
+    };
+
+    var audio = new List<string>();
+    var messages = new List<ChatMessage>();
+    provider.OnAudioReceived = audio.Add;
+    provider.OnMessageReceived = messages.Add;
+
+    await DeliverOpenAiEventAsync(provider,
+        """{"type":"response.output_audio.delta","item_id":"commentary_1","delta":"ignored-audio"}""");
+    await DeliverOpenAiEventAsync(provider,
+        """{"type":"response.output_audio_transcript.done","item_id":"commentary_1","transcript":"Einen Moment, ich schaue nach."}""");
+    Assert(audio.Count == 0, "OpenAI disabled preamble suppresses commentary audio");
+    Assert(messages.Count == 0, "OpenAI disabled preamble suppresses commentary transcript");
+    await DeliverOpenAiEventAsync(provider,
+        """{"type":"response.done","response":{"id":"commentary-response","output":[{"id":"commentary_1","type":"message","phase":"commentary","content":[{"type":"output_audio","transcript":"Einen Moment, ich schaue nach."}]}]}}""");
+    Assert(audio.Count == 0, "OpenAI disabled preamble discards completed commentary audio");
+    Assert(messages.Count == 0, "OpenAI disabled preamble discards completed commentary transcript");
+
+    await DeliverOpenAiEventAsync(provider,
+        """{"type":"response.output_audio.delta","item_id":"final_1","delta":"final-audio"}""");
+    await DeliverOpenAiEventAsync(provider,
+        """{"type":"response.output_audio_transcript.done","item_id":"final_1","transcript":"Die Betonsorte ist C25/30."}""");
+    Assert(audio.Count == 0, "OpenAI disabled preamble buffers final audio until its phase is known");
+    await DeliverOpenAiEventAsync(provider,
+        """{"type":"response.done","response":{"id":"final-response","output":[{"id":"final_1","type":"message","phase":"final_answer","content":[{"type":"output_audio","transcript":"Die Betonsorte ist C25/30."}]}]}}""");
+    Assert(audio.SequenceEqual(["final-audio"]), "OpenAI disabled preamble preserves final audio");
+    Assert(messages.Count == 1 && messages[0].Content == "Die Betonsorte ist C25/30.", "OpenAI disabled preamble preserves final transcript");
+
+    audio.Clear();
+    messages.Clear();
+    await DeliverOpenAiEventAsync(provider,
+        """{"type":"response.output_audio.delta","item_id":"mixed_commentary","delta":"discard-this"}""");
+    await DeliverOpenAiEventAsync(provider,
+        """{"type":"response.output_audio.delta","item_id":"mixed_final","delta":"play-this"}""");
+    await DeliverOpenAiEventAsync(provider,
+        """{"type":"response.done","response":{"id":"mixed-response","output":[{"id":"mixed_commentary","type":"message","phase":"commentary","content":[{"type":"output_audio","transcript":"Ich sehe kurz nach."}]},{"id":"mixed_final","type":"message","phase":"final_answer","content":[{"type":"output_audio","transcript":"Gefordert ist C30/37."}]}]}}""");
+    Assert(audio.SequenceEqual(["play-this"]), "OpenAI disabled preamble filters mixed response phases");
+    Assert(messages.Count == 1 && messages[0].Content == "Gefordert ist C30/37.", "OpenAI disabled preamble preserves only mixed final transcript");
+
+    audio.Clear();
+    messages.Clear();
+    await DeliverOpenAiEventAsync(provider,
+        """{"type":"response.output_audio.delta","item_id":"legacy_1","delta":"legacy-audio"}""");
+    await DeliverOpenAiEventAsync(provider,
+        """{"type":"response.output_audio_transcript.done","item_id":"legacy_1","transcript":"Kompatible Ausgabe."}""");
+    await DeliverOpenAiEventAsync(provider,
+        """{"type":"response.done","response":{"id":"legacy-response","output":[{"id":"legacy_1","type":"message","content":[{"type":"output_audio","transcript":"Kompatible Ausgabe."}]}]}}""");
+    Assert(audio.SequenceEqual(["legacy-audio"]), "OpenAI disabled preamble preserves providers without phase metadata");
+    Assert(messages.Count == 1 && messages[0].Content == "Kompatible Ausgabe.", "OpenAI disabled preamble preserves transcript without phase metadata");
+
+    provider.Settings.ToolCallPreambleMode = ToolCallPreambleMode.BeforeToolBurst;
+    await DeliverOpenAiEventAsync(provider,
+        """{"type":"response.output_audio.delta","item_id":"commentary_2","delta":"burst-audio"}""");
+    Assert(audio.Contains("burst-audio", StringComparer.Ordinal), "OpenAI enabled preamble preserves commentary audio");
+}
+
+static void VerifyOpenAiPreambleInstructionPolicy()
+{
+    var method = typeof(OpenAiVoiceProvider).GetMethod("BuildInstructions", BindingFlags.Static | BindingFlags.NonPublic)
+        ?? throw new MissingMethodException(typeof(OpenAiVoiceProvider).FullName, "BuildInstructions");
+
+    string Build(ToolCallPreambleMode mode) => method.Invoke(null,
+        [new OpenAiVoiceSettings { Instructions = "base-instructions", ToolCallPreambleMode = mode }]) as string
+        ?? throw new InvalidOperationException("OpenAI instruction builder did not return text.");
+
+    Assert(Build(ToolCallPreambleMode.ProviderDefault) == "base-instructions", "OpenAI provider default preserves instructions");
+    Assert(Build(ToolCallPreambleMode.Disabled).Contains("remain silent until the final answer", StringComparison.Ordinal), "OpenAI disabled mode instruction");
+    Assert(Build(ToolCallPreambleMode.BeforeToolBurst).Contains("burst of multiple tool calls", StringComparison.Ordinal), "OpenAI tool burst instruction");
+    Assert(Build(ToolCallPreambleMode.ForLongRunningTools).Contains("noticeable time", StringComparison.Ordinal), "OpenAI long-running tool instruction");
+    Assert(Build(ToolCallPreambleMode.BeforeEveryToolCall).Contains("Before any tool call", StringComparison.Ordinal), "OpenAI every-tool instruction");
+}
+
+static async Task DeliverOpenAiEventAsync(OpenAiVoiceProvider provider, string json)
+{
+    var method = typeof(OpenAiVoiceProvider).GetMethod("ProcessReceivedMessage", BindingFlags.Instance | BindingFlags.NonPublic)
+        ?? throw new MissingMethodException(typeof(OpenAiVoiceProvider).FullName, "ProcessReceivedMessage");
+    var task = method.Invoke(provider, [json]) as Task
+        ?? throw new InvalidOperationException("OpenAI event processor did not return a task.");
+    await task;
 }
 
 static string FindRepositoryFile(params string[] relativeSegments)

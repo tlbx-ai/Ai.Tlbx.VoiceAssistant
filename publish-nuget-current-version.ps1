@@ -85,7 +85,7 @@ foreach ($project in $projects)
     dotnet restore $projectPath
     
     # Build and pack the project
-    dotnet build $projectPath -c $Configuration
+    dotnet build $projectPath -c $Configuration -m:14
     
     if ($LASTEXITCODE -ne 0) 
     {

@@ -236,8 +236,9 @@ internal sealed class OpenAiDirectRealtimeSessionRegistry : IOpenAiDirectRealtim
             ToolCallPreambleMode.ProviderDefault => null,
             ToolCallPreambleMode.Disabled =>
                 "# Tool call preambles" + Environment.NewLine +
-                "- Do not speak a preamble before tool calls." + Environment.NewLine +
-                "- Call tools directly when the user's intent is clear.",
+                "- Do not speak a preamble before, between, or during tool calls." + Environment.NewLine +
+                "- Call tools directly when the user's intent is clear and remain silent until the final answer or a required clarification." + Environment.NewLine +
+                "- Never repeat, paraphrase, or acknowledge the user's request as filler while tools are running.",
             ToolCallPreambleMode.BeforeToolBurst =>
                 "# Tool call preambles" + Environment.NewLine +
                 "- If a user request requires a burst of multiple tool calls, say one short bridge sentence before the burst." + Environment.NewLine +

@@ -17,7 +17,7 @@ function Assert-LastCommandSucceeded([string]$Step)
 Push-Location $PSScriptRoot
 try
 {
-    dotnet build TLBX.Ai.VoiceAssistant.slnx -c $Configuration --nologo
+    dotnet build TLBX.Ai.VoiceAssistant.slnx -c $Configuration --nologo -m:14
     Assert-LastCommandSucceeded "Solution build"
 
     dotnet run --project Tests\ContractTests\ContractTests.csproj -c $Configuration --no-build
@@ -46,7 +46,7 @@ try
             & $developerShell -Arch amd64 -HostArch amd64 -SkipAutomaticLocation
         }
 
-        dotnet publish Tests\AotTest\AotTest.csproj -c $Configuration -r $RuntimeIdentifier --self-contained true --nologo
+        dotnet publish Tests\AotTest\AotTest.csproj -c $Configuration -r $RuntimeIdentifier --self-contained true --nologo -m:14
         Assert-LastCommandSucceeded "Native AOT publish"
     }
 

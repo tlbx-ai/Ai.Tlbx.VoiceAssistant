@@ -50,6 +50,9 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi
         private readonly StringBuilder _currentResponseOutputText = new();
         private string? _currentResponseAudioTranscript;
         private string? _lastInputTranscript;
+        private readonly Dictionary<string, List<string>> _bufferedAudioByItemId = new(StringComparer.Ordinal);
+        private readonly Dictionary<string, string> _bufferedTranscriptsByItemId = new(StringComparer.Ordinal);
+        private readonly Dictionary<string, StringBuilder> _bufferedTextByItemId = new(StringComparer.Ordinal);
 
         /// <summary>
         /// Gets a value indicating whether the provider is connected and ready.
@@ -521,8 +524,9 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi
                 ToolCallPreambleMode.ProviderDefault => null,
                 ToolCallPreambleMode.Disabled =>
                     "# Tool call preambles" + Environment.NewLine +
-                    "- Do not speak a preamble before tool calls." + Environment.NewLine +
-                    "- Call tools directly when the user's intent is clear.",
+                    "- Do not speak a preamble before, between, or during tool calls." + Environment.NewLine +
+                    "- Call tools directly when the user's intent is clear and remain silent until the final answer or a required clarification." + Environment.NewLine +
+                    "- Never repeat, paraphrase, or acknowledge the user's request as filler while tools are running.",
                 ToolCallPreambleMode.BeforeToolBurst =>
                     "# Tool call preambles" + Environment.NewLine +
                     "- If a user request requires a burst of multiple tool calls, say one short bridge sentence before the first call." + Environment.NewLine +
@@ -709,6 +713,18 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi
                 var audioData = delta.GetString();
                 if (!string.IsNullOrEmpty(audioData))
                 {
+                    if (ShouldBufferOutput())
+                    {
+                        var itemId = GetOutputItemKey(root);
+                        if (!_bufferedAudioByItemId.TryGetValue(itemId, out var chunks))
+                        {
+                            chunks = [];
+                            _bufferedAudioByItemId[itemId] = chunks;
+                        }
+                        chunks.Add(audioData);
+                        return;
+                    }
+
                     // Don't log every audio chunk - too verbose
                     OnAudioReceived?.Invoke(audioData);
                 }
@@ -888,6 +904,12 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi
                 var text = transcript.GetString();
                 if (!string.IsNullOrEmpty(text))
                 {
+                    if (ShouldBufferOutput())
+                    {
+                        _bufferedTranscriptsByItemId[GetOutputItemKey(root)] = text;
+                        return;
+                    }
+
                     _logAction(LogLevel.Info, $"Audio transcript: {text}");
                     _currentResponseAudioTranscript = text;
                     if (_currentResponseTrace != null)
@@ -924,6 +946,18 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi
             if (root.TryGetProperty("delta", out var deltaElem) &&
                 TryExtractTextDelta(deltaElem, out var deltaText))
             {
+                if (ShouldBufferOutput())
+                {
+                    var itemId = GetOutputItemKey(root);
+                    if (!_bufferedTextByItemId.TryGetValue(itemId, out var textBuffer))
+                    {
+                        textBuffer = new StringBuilder();
+                        _bufferedTextByItemId[itemId] = textBuffer;
+                    }
+                    textBuffer.Append(deltaText);
+                    return;
+                }
+
                 _currentAiMessage.Append(deltaText);
                 _currentResponseOutputText.Append(deltaText);
                 if (_currentResponseTrace != null)
@@ -942,6 +976,7 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi
                 _hasActiveResponse = true;
                 _currentResponseOutputText.Clear();
                 _currentResponseAudioTranscript = null;
+                ClearBufferedOutput();
                 _currentResponseTrace = new OpenAiRealtimeResponseTrace
                 {
                     ResponseId = _currentResponseId,
@@ -980,6 +1015,11 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi
                 OnUsageReceived?.Invoke(report);
             }
 
+            // Bei deaktivierten Zwischenansagen ist die Phase erst in response.done
+            // zuverlässig bekannt. Deshalb zuerst ausschließlich freigegebene Ausgabe
+            // zustellen; Telemetrie-Callbacks dürfen die Audioausgabe nicht verhindern.
+            FlushBufferedOutput(root);
+
             if (trace != null)
             {
                 PopulateResponseTrace(root, trace, report);
@@ -989,6 +1029,7 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi
             _currentResponseTrace = null;
             _currentResponseOutputText.Clear();
             _currentResponseAudioTranscript = null;
+            ClearBufferedOutput();
 
             await Task.CompletedTask;
         }
@@ -1109,8 +1150,150 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi
                 : null;
         }
 
+        private bool ShouldBufferOutput()
+        {
+            return _settings?.ToolCallPreambleMode == ToolCallPreambleMode.Disabled;
+        }
+
+        private static string GetOutputItemKey(JsonElement root)
+        {
+            var itemId = TryGetString(root, "item_id");
+            if (!string.IsNullOrWhiteSpace(itemId))
+            {
+                return itemId;
+            }
+
+            if (root.TryGetProperty("output_index", out var outputIndex) &&
+                outputIndex.TryGetInt32(out var index))
+            {
+                return $"output:{index}";
+            }
+
+            return "output:unknown";
+        }
+
+        private void FlushBufferedOutput(JsonElement root)
+        {
+            if (!ShouldBufferOutput() ||
+                !root.TryGetProperty("response", out var response) ||
+                !response.TryGetProperty("output", out var output) ||
+                output.ValueKind != JsonValueKind.Array)
+            {
+                FlushAllBufferedOutput();
+                return;
+            }
+
+            var outputItems = output.EnumerateArray().ToArray();
+            var hasPhaseMetadata = outputItems.Any(item => !string.IsNullOrWhiteSpace(TryGetString(item, "phase")));
+
+            for (var index = 0; index < outputItems.Length; index++)
+            {
+                var item = outputItems[index];
+                var phase = TryGetString(item, "phase");
+                if (hasPhaseMetadata && !string.Equals(phase, "final_answer", StringComparison.OrdinalIgnoreCase))
+                {
+                    continue;
+                }
+
+                var itemId = TryGetString(item, "id") ?? $"output:{index}";
+                FlushBufferedAudio(itemId);
+
+                var transcript = GetOutputItemContent(item, "output_audio", "transcript")
+                    ?? GetBufferedValue(_bufferedTranscriptsByItemId, itemId);
+                var text = GetOutputItemContent(item, "output_text", "text")
+                    ?? GetBufferedText(itemId);
+                var messageText = !string.IsNullOrWhiteSpace(transcript) ? transcript : text;
+                if (!string.IsNullOrWhiteSpace(messageText))
+                {
+                    _currentResponseAudioTranscript = transcript;
+                    _currentResponseOutputText.Clear();
+                    _currentResponseOutputText.Append(text);
+                    OnMessageReceived?.Invoke(ChatMessage.CreateAssistantMessage(messageText));
+                }
+            }
+        }
+
+        private void FlushAllBufferedOutput()
+        {
+            foreach (var chunks in _bufferedAudioByItemId.Values)
+            {
+                foreach (var chunk in chunks)
+                {
+                    OnAudioReceived?.Invoke(chunk);
+                }
+            }
+
+            foreach (var transcript in _bufferedTranscriptsByItemId.Values.Where(value => !string.IsNullOrWhiteSpace(value)))
+            {
+                OnMessageReceived?.Invoke(ChatMessage.CreateAssistantMessage(transcript));
+            }
+
+            if (_bufferedTranscriptsByItemId.Count == 0)
+            {
+                foreach (var text in _bufferedTextByItemId.Values.Select(value => value.ToString()).Where(value => !string.IsNullOrWhiteSpace(value)))
+                {
+                    OnMessageReceived?.Invoke(ChatMessage.CreateAssistantMessage(text));
+                }
+            }
+        }
+
+        private void FlushBufferedAudio(string itemId)
+        {
+            if (!_bufferedAudioByItemId.TryGetValue(itemId, out var chunks))
+            {
+                return;
+            }
+
+            foreach (var chunk in chunks)
+            {
+                OnAudioReceived?.Invoke(chunk);
+            }
+        }
+
+        private static string? GetOutputItemContent(JsonElement item, string contentType, string valueProperty)
+        {
+            if (!item.TryGetProperty("content", out var content) || content.ValueKind != JsonValueKind.Array)
+            {
+                return null;
+            }
+
+            foreach (var part in content.EnumerateArray())
+            {
+                if (string.Equals(TryGetString(part, "type"), contentType, StringComparison.Ordinal) &&
+                    !string.IsNullOrWhiteSpace(TryGetString(part, valueProperty)))
+                {
+                    return TryGetString(part, valueProperty);
+                }
+            }
+
+            return null;
+        }
+
+        private static string? GetBufferedValue(Dictionary<string, string> values, string itemId)
+        {
+            return values.TryGetValue(itemId, out var value) ? value : null;
+        }
+
+        private string? GetBufferedText(string itemId)
+        {
+            return _bufferedTextByItemId.TryGetValue(itemId, out var value) ? value.ToString() : null;
+        }
+
+        private void ClearBufferedOutput()
+        {
+            _bufferedAudioByItemId.Clear();
+            _bufferedTranscriptsByItemId.Clear();
+            _bufferedTextByItemId.Clear();
+        }
+
         private async Task HandleTextDone()
         {
+            if (ShouldBufferOutput())
+            {
+                await Task.CompletedTask;
+                return;
+            }
+
             if (_currentAiMessage.Length > 0)
             {
                 string messageText = _currentAiMessage.ToString();
