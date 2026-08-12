@@ -65,8 +65,19 @@ export class OpenAiDirectRealtimeClient
         this.session = await sessionResponse.json();
         this.voiceSessionId = this.session.voiceSessionId;
         this.emitConnectionPhase('session.ready', 'OpenAI browser session prepared');
-        await this.openControlSocket(this.session.controlUrl);
-        await this.openRealtimePeerConnection(config);
+        // The server control channel and OpenAI WebRTC connection are independent.
+        // Establish both at once so the control socket does not delay microphone/media setup.
+        const connectionResults = await Promise.allSettled([
+            this.openControlSocket(this.session.controlUrl),
+            this.openRealtimePeerConnection(config)
+        ]);
+        const connectionFailure = connectionResults.find(result => result.status === 'rejected');
+        if (connectionFailure)
+        {
+            // Let both attempts settle before cleanup so no late connection can leak resources.
+            await this.stop();
+            throw connectionFailure.reason;
+        }
         this.emitConnectionPhase('session.connected', 'Connected to OpenAI');
     }
 

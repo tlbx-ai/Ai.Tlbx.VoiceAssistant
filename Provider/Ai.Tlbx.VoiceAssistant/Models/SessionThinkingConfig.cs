@@ -104,7 +104,8 @@ namespace Ai.Tlbx.VoiceAssistant.Models
         ProviderDefault,
 
         /// <summary>
-        /// Do not add spoken preambles before tool calls.
+        /// Ask the provider not to add spoken preambles before tool calls.
+        /// Any audio the provider nevertheless sends is streamed immediately.
         /// </summary>
         Disabled,
 

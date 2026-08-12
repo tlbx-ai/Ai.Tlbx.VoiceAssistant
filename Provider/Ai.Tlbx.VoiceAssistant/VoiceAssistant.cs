@@ -14,6 +14,8 @@ namespace Ai.Tlbx.VoiceAssistant
     /// </summary>
     public sealed class VoiceAssistant : IAsyncDisposable
     {
+        private const int PRE_CONNECT_AUDIO_QUEUE_CAPACITY = 100;
+
         private readonly IAudioHardwareAccess _hardwareAccess;
         private readonly IVoiceProvider? _provider;
         private readonly ChatHistoryManager _chatHistory;
@@ -22,6 +24,7 @@ namespace Ai.Tlbx.VoiceAssistant
         
         // Pre-connect audio buffer
         private ConcurrentQueue<string>? _preConnectBuffer;
+        private long _droppedPreConnectAudioChunks;
 
         // State management
         private bool _isInitialized = false;
@@ -225,6 +228,7 @@ namespace Ai.Tlbx.VoiceAssistant
                     cancellationToken.ThrowIfCancellationRequested();
 
                     // Start pre-connect buffer and recording before connecting
+                    _droppedPreConnectAudioChunks = 0;
                     _preConnectBuffer = new ConcurrentQueue<string>();
                     bool recordingStarted = await _hardwareAccess.StartRecordingAudio(OnAudioDataReceived, _provider.RequiredInputSampleRate);
                     if (!recordingStarted)
@@ -302,10 +306,49 @@ namespace Ai.Tlbx.VoiceAssistant
             {
                 _lastErrorMessage = ex.Message;
                 _isConnecting = false;
+                await CleanupFailedStartAsync();
                 ReportStatus($"Error: {ex.Message}");
                 _logAction(LogLevel.Error, $"Failed to start voice assistant: {ex.Message}");
                 throw;
             }
+        }
+
+        private async Task CleanupFailedStartAsync()
+        {
+            var shouldStopRecording = IsRecording || _preConnectBuffer != null;
+            _preConnectBuffer = null;
+            _droppedPreConnectAudioChunks = 0;
+
+            if (shouldStopRecording)
+            {
+                try
+                {
+                    await _hardwareAccess.StopRecordingAudio();
+                }
+                catch (Exception cleanupException)
+                {
+                    _logAction(LogLevel.Warn,
+                        $"Failed to stop audio recording after startup error: {cleanupException.Message}");
+                }
+            }
+
+            IsRecording = false;
+
+            if (_provider != null)
+            {
+                try
+                {
+                    await _provider.DisconnectAsync();
+                }
+                catch (Exception cleanupException)
+                {
+                    _logAction(LogLevel.Warn,
+                        $"Failed to disconnect provider after startup error: {cleanupException.Message}");
+                }
+            }
+
+            _isInitialized = false;
+            _sessionStartTime = null;
         }
 
         private async Task StartDirectBrowserSessionAsync(
@@ -927,7 +970,7 @@ namespace Ai.Tlbx.VoiceAssistant
                 var preBuffer = _preConnectBuffer;
                 if (!isConnected && preBuffer != null && !_isMicrophoneTesting)
                 {
-                    preBuffer.Enqueue(e.Base64EncodedPcm16Audio ?? "");
+                    BufferPreConnectAudio(preBuffer, e.Base64EncodedPcm16Audio ?? "");
                 }
                 else if (isConnected && !_isMicrophoneTesting)
                 {
@@ -957,6 +1000,21 @@ namespace Ai.Tlbx.VoiceAssistant
                 _lastErrorMessage = ex.Message;
                 _logAction(LogLevel.Error, $"Error processing audio data: {ex.Message}");
                 _logAction(LogLevel.Error, $"Stack trace: {ex.StackTrace}");
+            }
+        }
+
+        private void BufferPreConnectAudio(ConcurrentQueue<string> buffer, string audio)
+        {
+            buffer.Enqueue(audio);
+
+            while (buffer.Count > PRE_CONNECT_AUDIO_QUEUE_CAPACITY && buffer.TryDequeue(out _))
+            {
+                var dropped = Interlocked.Increment(ref _droppedPreConnectAudioChunks);
+                if (dropped == 1 || dropped % 50 == 0)
+                {
+                    _logAction(LogLevel.Warn,
+                        $"Pre-connect audio queue saturated; dropped {dropped} old chunk(s) to keep latency and memory bounded");
+                }
             }
         }
 

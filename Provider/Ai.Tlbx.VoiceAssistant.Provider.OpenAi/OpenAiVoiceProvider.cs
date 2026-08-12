@@ -6,6 +6,7 @@ using System.Net.WebSockets;
 using System.Text;
 using System.Text.Json;
 using System.Threading;
+using System.Threading.Channels;
 using System.Threading.Tasks;
 using System.Net.Http;
 using System.Net.Http.Headers;
@@ -26,16 +27,23 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi
         private const string REALTIME_WEBSOCKET_ENDPOINT = "wss://api.openai.com/v1/realtime";
         private const string REALTIME_SESSION_ENDPOINT = "https://api.openai.com/v1/realtime/client_secrets";
         private const int CONNECTION_TIMEOUT_MS = 10000;
+        private const int DISCONNECTION_TIMEOUT_MS = 5000;
         private const int AUDIO_BUFFER_SIZE = 32384;
+        private const int AUDIO_SEND_QUEUE_CAPACITY = 100;
 
         private readonly string _apiKey;
         private readonly Action<LogLevel, string> _logAction;
         private readonly OpenAiToolTranslator _toolTranslator = new();
         private readonly HttpClient _httpClient;
         private readonly bool _ownsHttpClient;
+        private readonly SemaphoreSlim _sendLock = new(1, 1);
         private ClientWebSocket? _webSocket;
         private Task? _receiveTask;
         private CancellationTokenSource? _cts;
+        private Channel<string>? _audioSendChannel;
+        private CancellationTokenSource? _audioSendCts;
+        private Task? _audioSendTask;
+        private long _droppedAudioChunks;
         private bool _isDisposed = false;
         private OpenAiVoiceSettings? _settings;
         
@@ -50,8 +58,6 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi
         private readonly StringBuilder _currentResponseOutputText = new();
         private string? _currentResponseAudioTranscript;
         private string? _lastInputTranscript;
-        private readonly Dictionary<string, BufferedOutputItem> _bufferedOutputByItemId = new(StringComparer.Ordinal);
-        private readonly List<string> _bufferedOutputOrder = [];
 
         /// <summary>
         /// Gets a value indicating whether the provider is connected and ready.
@@ -238,17 +244,17 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi
                 _webSocket.Options.SetRequestHeader("Authorization", $"Bearer {ephemeralKey}");
                 // Beta header removed for production API
 
-                var connectionCts = new CancellationTokenSource(CONNECTION_TIMEOUT_MS);
+                using var connectionCts = new CancellationTokenSource(CONNECTION_TIMEOUT_MS);
 
                 var uri = new Uri($"{REALTIME_WEBSOCKET_ENDPOINT}?model={_settings.Model.ToApiString()}");
                 await _webSocket.ConnectAsync(uri, connectionCts.Token);
-                connectionCts.Dispose();
-
-                OnStatusChanged?.Invoke("Connected to OpenAI");
 
                 // Start the message receiving task
                 _cts = new CancellationTokenSource();
                 _receiveTask = ReceiveMessagesAsync(_cts.Token);
+                StartAudioSender(_cts.Token);
+
+                OnStatusChanged?.Invoke("Connected to OpenAI");
 
                 // Send session configuration
                 await SendSessionConfigurationAsync();
@@ -257,6 +263,7 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi
             {
                 _logAction(LogLevel.Error, $"Failed to connect to OpenAI: {ex.Message}");
                 OnError?.Invoke($"Connection failed: {ex.Message}");
+                await DisconnectAsync();
                 throw;
             }
         }
@@ -271,13 +278,15 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi
             {
                 OnStatusChanged?.Invoke("Disconnecting...");
 
-                _cts?.Cancel();
+                await StopAudioSenderAsync();
 
-                if (_webSocket?.State == WebSocketState.Open)
+                if (_webSocket?.State is WebSocketState.Open or WebSocketState.CloseReceived)
                 {
-                    await _webSocket.CloseAsync(WebSocketCloseStatus.NormalClosure, "Disconnecting", CancellationToken.None);
+                    using var closeCts = new CancellationTokenSource(DISCONNECTION_TIMEOUT_MS);
+                    await _webSocket.CloseAsync(WebSocketCloseStatus.NormalClosure, "Disconnecting", closeCts.Token);
                 }
 
+                _cts?.Cancel();
                 if (_receiveTask != null)
                 {
                     await _receiveTask;
@@ -293,7 +302,29 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi
             }
             finally
             {
-                ClearBufferedOutput();
+                _cts?.Cancel();
+
+                if (_receiveTask != null)
+                {
+                    try
+                    {
+                        await _receiveTask;
+                    }
+                    catch (OperationCanceledException)
+                    {
+                        // Expected while shutting down.
+                    }
+                    catch (WebSocketException)
+                    {
+                        // The socket can close while a receive is pending.
+                    }
+                }
+
+                _webSocket?.Dispose();
+                _webSocket = null;
+                _cts?.Dispose();
+                _cts = null;
+                _receiveTask = null;
             }
         }
 
@@ -324,23 +355,19 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi
         /// </summary>
         /// <param name="base64Audio">Base64-encoded PCM 16-bit audio data.</param>
         /// <returns>A task representing the audio processing operation.</returns>
-        public async Task ProcessAudioAsync(string base64Audio)
+        public Task ProcessAudioAsync(string base64Audio)
         {
             if (!IsConnected)
             {
-                return;
+                return Task.CompletedTask;
             }
 
-            try
+            if (!TryEnqueueAudio(base64Audio))
             {
-                var audioMessage = new AudioBufferAppendMessage { Audio = base64Audio };
-                await SendMessageAsync(JsonSerializer.Serialize(audioMessage, OpenAiJsonContext.Default.AudioBufferAppendMessage));
+                _logAction(LogLevel.Warn, "Audio chunk ignored because the send queue is unavailable");
             }
-            catch (Exception ex)
-            {
-                _logAction(LogLevel.Error, $"Error processing audio: {ex.Message}");
-                OnError?.Invoke($"Audio processing error: {ex.Message}");
-            }
+
+            return Task.CompletedTask;
         }
 
         /// <summary>
@@ -382,12 +409,12 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi
             
             try
             {
-                foreach (var message in messages)
-                {
-                    // Skip tool messages as they need special handling
-                    if (message.Role == ChatMessage.ToolRole)
-                        continue;
+                var messagesToInject = messages
+                    .Where(message => message.Role != ChatMessage.ToolRole)
+                    .ToList();
 
+                foreach (var message in messagesToInject)
+                {
                     var conversationItem = new ConversationItemCreateMessage
                     {
                         Item = new ConversationItem
@@ -406,12 +433,9 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi
                     };
 
                     await SendMessageAsync(JsonSerializer.Serialize(conversationItem, OpenAiJsonContext.Default.ConversationItemCreateMessage));
-
-                    // Small delay to avoid overwhelming the API
-                    await Task.Delay(50);
                 }
                 
-                _logAction(LogLevel.Info, $"Successfully injected {messages.Count()} messages into conversation history");
+                _logAction(LogLevel.Info, $"Successfully injected {messagesToInject.Count} messages into conversation history");
             }
             catch (Exception ex)
             {
@@ -461,17 +485,7 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi
                                         : null
                                 }
                                 : null,
-                            TurnDetection = new TurnDetectionConfig
-                            {
-                                Type = _settings.TurnDetection.Type,
-                                Eagerness = IsSemanticVad(_settings.TurnDetection.Type) ? _settings.Eagerness.ToString() : null,
-                                Threshold = _settings.TurnDetection.Threshold,
-                                PrefixPaddingMs = _settings.TurnDetection.PrefixPaddingMs,
-                                SilenceDurationMs = _settings.TurnDetection.SilenceDurationMs,
-                                IdleTimeoutMs = _settings.TurnDetection.IdleTimeoutMs,
-                                CreateResponse = _settings.TurnDetection.CreateResponse,
-                                InterruptResponse = _settings.TurnDetection.InterruptResponse
-                            }
+                            TurnDetection = BuildTurnDetectionConfig(_settings)
                         },
                         Output = new AudioOutputConfig
                         {
@@ -501,6 +515,22 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi
             }
 
             return new OpenAiReasoningConfig { Effort = settings.ReasoningEffort.Value.ToApiString() };
+        }
+
+        private static TurnDetectionConfig BuildTurnDetectionConfig(OpenAiVoiceSettings settings)
+        {
+            var semanticVad = IsSemanticVad(settings.TurnDetection.Type);
+            return new TurnDetectionConfig
+            {
+                Type = settings.TurnDetection.Type,
+                Eagerness = semanticVad ? settings.Eagerness.ToString() : null,
+                Threshold = semanticVad ? null : settings.TurnDetection.Threshold,
+                PrefixPaddingMs = semanticVad ? null : settings.TurnDetection.PrefixPaddingMs,
+                SilenceDurationMs = semanticVad ? null : settings.TurnDetection.SilenceDurationMs,
+                IdleTimeoutMs = semanticVad ? null : settings.TurnDetection.IdleTimeoutMs,
+                CreateResponse = settings.TurnDetection.CreateResponse,
+                InterruptResponse = settings.TurnDetection.InterruptResponse
+            };
         }
 
         private static bool IsSemanticVad(string? type) =>
@@ -550,15 +580,129 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi
             };
         }
 
-        private async Task SendMessageAsync(string message)
+        private static Channel<string> CreateAudioSendChannel()
+        {
+            return Channel.CreateBounded<string>(new BoundedChannelOptions(AUDIO_SEND_QUEUE_CAPACITY)
+            {
+                FullMode = BoundedChannelFullMode.DropOldest,
+                SingleReader = true,
+                SingleWriter = false,
+                AllowSynchronousContinuations = false
+            });
+        }
+
+        private void StartAudioSender(CancellationToken connectionCancellationToken)
+        {
+            _droppedAudioChunks = 0;
+            _audioSendChannel = CreateAudioSendChannel();
+            _audioSendCts = CancellationTokenSource.CreateLinkedTokenSource(connectionCancellationToken);
+            _audioSendTask = SendQueuedAudioAsync(_audioSendChannel.Reader, _audioSendCts.Token);
+        }
+
+        private bool TryEnqueueAudio(string base64Audio)
+        {
+            var channel = _audioSendChannel;
+            if (channel == null)
+            {
+                return false;
+            }
+
+            var queueWasFull = channel.Reader.CanCount && channel.Reader.Count >= AUDIO_SEND_QUEUE_CAPACITY;
+            if (!channel.Writer.TryWrite(base64Audio))
+            {
+                return false;
+            }
+
+            if (queueWasFull)
+            {
+                var dropped = Interlocked.Increment(ref _droppedAudioChunks);
+                if (dropped == 1 || dropped % 50 == 0)
+                {
+                    _logAction(LogLevel.Warn,
+                        $"Audio send queue saturated; dropped {dropped} old chunk(s) to keep latency and memory bounded");
+                }
+            }
+
+            return true;
+        }
+
+        private async Task SendQueuedAudioAsync(ChannelReader<string> reader, CancellationToken cancellationToken)
         {
             try
             {
+                await foreach (var audio in reader.ReadAllAsync(cancellationToken))
+                {
+                    var audioMessage = new AudioBufferAppendMessage { Audio = audio };
+                    var json = JsonSerializer.Serialize(
+                        audioMessage,
+                        OpenAiJsonContext.Default.AudioBufferAppendMessage);
+                    await SendMessageAsync(json, cancellationToken);
+                }
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                // Expected while disconnecting.
+            }
+            catch (Exception ex)
+            {
+                _logAction(LogLevel.Error, $"Audio sender stopped unexpectedly: {ex.Message}");
+                OnError?.Invoke($"Audio processing error: {ex.Message}");
+            }
+        }
+
+        private async Task StopAudioSenderAsync()
+        {
+            var channel = _audioSendChannel;
+            var senderCts = _audioSendCts;
+            var senderTask = _audioSendTask;
+
+            _audioSendChannel = null;
+            _audioSendCts = null;
+            _audioSendTask = null;
+
+            channel?.Writer.TryComplete();
+            senderCts?.Cancel();
+
+            if (senderTask != null)
+            {
+                try
+                {
+                    await senderTask;
+                }
+                catch (OperationCanceledException)
+                {
+                    // Expected while disconnecting.
+                }
+            }
+
+            senderCts?.Dispose();
+        }
+
+        private async Task SendMessageAsync(string message, CancellationToken cancellationToken = default)
+        {
+            var effectiveCancellationToken = cancellationToken.CanBeCanceled
+                ? cancellationToken
+                : _cts?.Token ?? CancellationToken.None;
+            var lockTaken = false;
+
+            try
+            {
+                await _sendLock.WaitAsync(effectiveCancellationToken);
+                lockTaken = true;
+
                 if (_webSocket?.State != WebSocketState.Open)
                     return;
 
                 var buffer = Encoding.UTF8.GetBytes(message);
-                await _webSocket.SendAsync(new ArraySegment<byte>(buffer), WebSocketMessageType.Text, true, CancellationToken.None);
+                await _webSocket.SendAsync(
+                    new ArraySegment<byte>(buffer),
+                    WebSocketMessageType.Text,
+                    true,
+                    effectiveCancellationToken);
+            }
+            catch (OperationCanceledException) when (effectiveCancellationToken.IsCancellationRequested)
+            {
+                // Expected while disconnecting or cancelling the audio sender.
             }
             catch (ObjectDisposedException)
             {
@@ -567,6 +711,13 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi
             catch (WebSocketException ex)
             {
                 _logAction(LogLevel.Warn, $"WebSocket send failed: {ex.Message}");
+            }
+            finally
+            {
+                if (lockTaken)
+                {
+                    _sendLock.Release();
+                }
             }
         }
 
@@ -716,12 +867,6 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi
                 var audioData = delta.GetString();
                 if (!string.IsNullOrEmpty(audioData))
                 {
-                    if (ShouldBufferOutput())
-                    {
-                        GetOrCreateBufferedOutput(root).AudioChunks.Add(audioData);
-                        return;
-                    }
-
                     // Don't log every audio chunk - too verbose
                     OnAudioReceived?.Invoke(audioData);
                 }
@@ -901,12 +1046,6 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi
                 var text = transcript.GetString();
                 if (!string.IsNullOrEmpty(text))
                 {
-                    if (ShouldBufferOutput())
-                    {
-                        GetOrCreateBufferedOutput(root).Transcript = text;
-                        return;
-                    }
-
                     _logAction(LogLevel.Info, $"Audio transcript: {text}");
                     _currentResponseAudioTranscript = text;
                     if (_currentResponseTrace != null)
@@ -943,12 +1082,6 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi
             if (root.TryGetProperty("delta", out var deltaElem) &&
                 TryExtractTextDelta(deltaElem, out var deltaText))
             {
-                if (ShouldBufferOutput())
-                {
-                    GetOrCreateBufferedOutput(root).Text.Append(deltaText);
-                    return;
-                }
-
                 _currentAiMessage.Append(deltaText);
                 _currentResponseOutputText.Append(deltaText);
                 if (_currentResponseTrace != null)
@@ -967,7 +1100,6 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi
                 _hasActiveResponse = true;
                 _currentResponseOutputText.Clear();
                 _currentResponseAudioTranscript = null;
-                ClearBufferedOutput();
                 _currentResponseTrace = new OpenAiRealtimeResponseTrace
                 {
                     ResponseId = _currentResponseId,
@@ -1006,11 +1138,6 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi
                 OnUsageReceived?.Invoke(report);
             }
 
-            // Bei deaktivierten Zwischenansagen ist die Phase erst in response.done
-            // zuverlässig bekannt. Usage wird unabhängig vom Endstatus erfasst, aber
-            // nur vollständig abgeschlossene Antworten dürfen Audio zustellen.
-            FlushBufferedOutput(root);
-
             if (trace != null)
             {
                 PopulateResponseTrace(root, trace, report);
@@ -1020,7 +1147,6 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi
             _currentResponseTrace = null;
             _currentResponseOutputText.Clear();
             _currentResponseAudioTranscript = null;
-            ClearBufferedOutput();
 
             await Task.CompletedTask;
         }
@@ -1141,179 +1267,8 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi
                 : null;
         }
 
-        private bool ShouldBufferOutput()
-        {
-            return _settings?.ToolCallPreambleMode == ToolCallPreambleMode.Disabled;
-        }
-
-        private static string GetOutputItemKey(JsonElement root)
-        {
-            var itemId = TryGetString(root, "item_id");
-            if (!string.IsNullOrWhiteSpace(itemId))
-            {
-                return itemId;
-            }
-
-            if (root.TryGetProperty("output_index", out var outputIndex) &&
-                outputIndex.TryGetInt32(out var index))
-            {
-                return $"output:{index}";
-            }
-
-            return "output:unknown";
-        }
-
-        private BufferedOutputItem GetOrCreateBufferedOutput(JsonElement root)
-        {
-            var itemId = GetOutputItemKey(root);
-            if (_bufferedOutputByItemId.TryGetValue(itemId, out var existing))
-            {
-                return existing;
-            }
-
-            var created = new BufferedOutputItem();
-            _bufferedOutputByItemId[itemId] = created;
-            _bufferedOutputOrder.Add(itemId);
-            return created;
-        }
-
-        private void FlushBufferedOutput(JsonElement root)
-        {
-            if (!ShouldBufferOutput())
-            {
-                FlushAllBufferedOutput();
-                return;
-            }
-
-            if (!root.TryGetProperty("response", out var response))
-            {
-                FlushAllBufferedOutput();
-                return;
-            }
-
-            var status = TryGetString(response, "status");
-            if (!string.IsNullOrWhiteSpace(status) &&
-                !string.Equals(status, "completed", StringComparison.OrdinalIgnoreCase))
-            {
-                _logAction(LogLevel.Warn, $"Discarding buffered output for response with status '{status}'. Usage and trace data remain available.");
-                if (!string.Equals(status, "cancelled", StringComparison.OrdinalIgnoreCase))
-                {
-                    OnError?.Invoke($"OpenAI response ended with status '{status}'. Buffered speech was discarded because the intended response was not complete.");
-                }
-
-                ClearBufferedOutput();
-                return;
-            }
-
-            if (!response.TryGetProperty("output", out var output) || output.ValueKind != JsonValueKind.Array)
-            {
-                FlushAllBufferedOutput();
-                return;
-            }
-
-            var outputItems = output.EnumerateArray().ToArray();
-            var hasPhaseMetadata = outputItems.Any(item => !string.IsNullOrWhiteSpace(TryGetString(item, "phase")));
-
-            for (var index = 0; index < outputItems.Length; index++)
-            {
-                var item = outputItems[index];
-                var phase = TryGetString(item, "phase");
-                if (hasPhaseMetadata && !string.Equals(phase, "final_answer", StringComparison.OrdinalIgnoreCase))
-                {
-                    continue;
-                }
-
-                var itemId = TryGetString(item, "id") ?? $"output:{index}";
-                var buffered = GetBufferedOutput(itemId);
-                FlushBufferedAudio(buffered);
-
-                var transcript = GetOutputItemContent(item, "output_audio", "transcript")
-                    ?? buffered?.Transcript;
-                var text = GetOutputItemContent(item, "output_text", "text")
-                    ?? buffered?.Text.ToString();
-                var messageText = !string.IsNullOrWhiteSpace(transcript) ? transcript : text;
-                if (!string.IsNullOrWhiteSpace(messageText))
-                {
-                    _currentResponseAudioTranscript = transcript;
-                    _currentResponseOutputText.Clear();
-                    _currentResponseOutputText.Append(text);
-                    OnMessageReceived?.Invoke(ChatMessage.CreateAssistantMessage(messageText));
-                }
-            }
-        }
-
-        private void FlushAllBufferedOutput()
-        {
-            foreach (var itemId in _bufferedOutputOrder)
-            {
-                if (!_bufferedOutputByItemId.TryGetValue(itemId, out var buffered))
-                {
-                    continue;
-                }
-
-                FlushBufferedAudio(buffered);
-
-                var messageText = !string.IsNullOrWhiteSpace(buffered.Transcript)
-                    ? buffered.Transcript
-                    : buffered.Text.ToString();
-                if (!string.IsNullOrWhiteSpace(messageText))
-                {
-                    OnMessageReceived?.Invoke(ChatMessage.CreateAssistantMessage(messageText));
-                }
-            }
-        }
-
-        private void FlushBufferedAudio(BufferedOutputItem? buffered)
-        {
-            if (buffered is null)
-            {
-                return;
-            }
-
-            foreach (var chunk in buffered.AudioChunks)
-            {
-                OnAudioReceived?.Invoke(chunk);
-            }
-        }
-
-        private static string? GetOutputItemContent(JsonElement item, string contentType, string valueProperty)
-        {
-            if (!item.TryGetProperty("content", out var content) || content.ValueKind != JsonValueKind.Array)
-            {
-                return null;
-            }
-
-            foreach (var part in content.EnumerateArray())
-            {
-                if (string.Equals(TryGetString(part, "type"), contentType, StringComparison.Ordinal) &&
-                    !string.IsNullOrWhiteSpace(TryGetString(part, valueProperty)))
-                {
-                    return TryGetString(part, valueProperty);
-                }
-            }
-
-            return null;
-        }
-
-        private BufferedOutputItem? GetBufferedOutput(string itemId)
-        {
-            return _bufferedOutputByItemId.TryGetValue(itemId, out var value) ? value : null;
-        }
-
-        private void ClearBufferedOutput()
-        {
-            _bufferedOutputByItemId.Clear();
-            _bufferedOutputOrder.Clear();
-        }
-
         private async Task HandleTextDone()
         {
-            if (ShouldBufferOutput())
-            {
-                await Task.CompletedTask;
-                return;
-            }
-
             if (_currentAiMessage.Length > 0)
             {
                 string messageText = _currentAiMessage.ToString();
@@ -1337,10 +1292,6 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi
             try
             {
                 _logAction(LogLevel.Info, "Speech detected - user interruption");
-
-                // Buffered audio has not reached the playback queue yet. Clear it before
-                // cancelling so response.done cannot replay the interrupted response.
-                ClearBufferedOutput();
 
                 // Always clear audio queue when speech is detected (like in the old code)
                 OnInterruptDetected?.Invoke();
@@ -1391,15 +1342,6 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi
             }
         }
 
-        private sealed class BufferedOutputItem
-        {
-            public List<string> AudioChunks { get; } = [];
-
-            public string? Transcript { get; set; }
-
-            public StringBuilder Text { get; } = new();
-        }
-
         /// <summary>
         /// Performs application-defined tasks associated with freeing, releasing, or resetting unmanaged resources asynchronously.
         /// </summary>
@@ -1421,6 +1363,7 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi
                     _httpClient.Dispose();
                 }
 
+                _sendLock.Dispose();
                 _isDisposed = true;
                 _logAction(LogLevel.Info, "OpenAI voice provider disposed");
             }

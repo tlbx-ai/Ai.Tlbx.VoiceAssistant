@@ -162,10 +162,10 @@ new OpenAiVoiceSettings
 {
     Voice = AssistantVoice.Coral,
     Model = OpenAiRealtimeModel.GptRealtime21,
-    ReasoningEffort = SessionReasoningEffort.Medium,
+    ReasoningEffort = SessionReasoningEffort.Low,
     ToolCallPreambleMode = ToolCallPreambleMode.BeforeToolBurst,
     TalkingSpeed = 1.2,
-    Eagerness = Eagerness.auto,
+    Eagerness = Eagerness.high,
     TurnDetection = new TurnDetection { SilenceDurationMs = 200 },
     MostLikelySpokenLanguage = "en"
 };
@@ -211,6 +211,8 @@ tool list, reasoning effort, or voice settings without restarting audio.
 ### Current model guidance
 
 - OpenAI: `OpenAiRealtimeModel.GptRealtime21` is the default full reasoning voice model; `GptRealtime21Mini` is the faster, lower-cost option. Older model IDs remain available for compatibility.
+- OpenAI voice settings default to `SessionReasoningEffort.Low`, 200 ms server-VAD silence detection, and `Eagerness.high` when semantic VAD is selected. The selected model remains entirely controlled by `OpenAiVoiceSettings.Model`; the library never switches a session to the mini model automatically.
+- `ToolCallPreambleMode.Disabled` is a provider instruction, not an audio gate: every received audio delta is forwarded immediately in both WebSocket and Direct WebRTC sessions.
 - Google: `GoogleModel.Gemini31FlashLivePreview` is the current default for the Gemini Live API. `GoogleModel.Gemini25FlashNativeAudioLatest` is also available for testing Google's rolling native-audio Live API alias. The `gemini-3.1-flash-tts-preview` and older `gemini-2.5-*-tts` models are text-to-speech `generateContent` models, not realtime `bidiGenerateContent` voice-session models, so they are not exposed through this realtime provider.
 - xAI: `XaiVoiceModel.GrokVoiceLatest` follows xAI's current recommended alias. Use `GrokVoiceThinkFast10` when a pinned production version is preferable; `GrokVoiceFast10` remains for legacy compatibility but is deprecated by xAI.
 

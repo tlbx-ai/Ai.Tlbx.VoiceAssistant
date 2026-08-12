@@ -50,9 +50,10 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi.Models
         public double TalkingSpeed { get; set; } = 1.0;
 
         /// <summary>
-        /// Used only for semantic_vad mode. The eagerness of the model to respond. low will wait longer for the user to continue speaking, high will respond more quickly. auto is the default and is equivalent to medium
+        /// Used only for semantic_vad mode. Low waits longer for the user to continue speaking;
+        /// high responds more quickly and is the library default. OpenAI's auto value is equivalent to medium.
         /// </summary>
-        public Eagerness Eagerness { get; set; } = Eagerness.auto;
+        public Eagerness Eagerness { get; set; } = Eagerness.high;
 
         /// <summary>
         /// Maximum number of tokens for the response.
@@ -94,9 +95,10 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi.Models
         public NoiseReductionMode NoiseReduction { get; set; } = NoiseReductionMode.FarField;
 
         /// <summary>
-        /// Optional reasoning effort. Supported by full GPT Realtime 2 and 2.1 models; ignored by other OpenAI realtime models.
+        /// Reasoning effort. Defaults to low for latency-sensitive voice conversations.
+        /// Supported by full GPT Realtime 2 and 2.1 models; ignored by other OpenAI realtime models.
         /// </summary>
-        public SessionReasoningEffort? ReasoningEffort { get; set; }
+        public SessionReasoningEffort? ReasoningEffort { get; set; } = SessionReasoningEffort.Low;
 
         /// <summary>
         /// Spoken bridge policy for tool calls. Applied through OpenAI Realtime instructions.

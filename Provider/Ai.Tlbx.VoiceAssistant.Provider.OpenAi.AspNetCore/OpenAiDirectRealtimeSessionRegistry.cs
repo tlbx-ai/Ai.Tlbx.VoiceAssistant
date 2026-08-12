@@ -71,6 +71,7 @@ internal sealed class OpenAiDirectRealtimeSessionRegistry : IOpenAiDirectRealtim
 
     public SessionConfig BuildSessionConfig(OpenAiVoiceSettings settings)
     {
+        var semanticVad = IsSemanticVad(settings.TurnDetection.Type);
         return new SessionConfig
         {
             Type = "realtime",
@@ -108,11 +109,11 @@ internal sealed class OpenAiDirectRealtimeSessionRegistry : IOpenAiDirectRealtim
                     TurnDetection = new TurnDetectionConfig
                     {
                         Type = settings.TurnDetection.Type,
-                        Eagerness = IsSemanticVad(settings.TurnDetection.Type) ? settings.Eagerness.ToString() : null,
-                        Threshold = settings.TurnDetection.Threshold,
-                        PrefixPaddingMs = settings.TurnDetection.PrefixPaddingMs,
-                        SilenceDurationMs = settings.TurnDetection.SilenceDurationMs,
-                        IdleTimeoutMs = settings.TurnDetection.IdleTimeoutMs,
+                        Eagerness = semanticVad ? settings.Eagerness.ToString() : null,
+                        Threshold = semanticVad ? null : settings.TurnDetection.Threshold,
+                        PrefixPaddingMs = semanticVad ? null : settings.TurnDetection.PrefixPaddingMs,
+                        SilenceDurationMs = semanticVad ? null : settings.TurnDetection.SilenceDurationMs,
+                        IdleTimeoutMs = semanticVad ? null : settings.TurnDetection.IdleTimeoutMs,
                         CreateResponse = settings.TurnDetection.CreateResponse,
                         InterruptResponse = settings.TurnDetection.InterruptResponse
                     }

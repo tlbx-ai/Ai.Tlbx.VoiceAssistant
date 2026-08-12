@@ -70,7 +70,7 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi.Extensions
                     Type = "server_vad",
                     Threshold = 0.65,
                     PrefixPaddingMs = 500,
-                    SilenceDurationMs = 400,
+                    SilenceDurationMs = 200,
                     CreateResponse = true,
                     InterruptResponse = true,
                 },

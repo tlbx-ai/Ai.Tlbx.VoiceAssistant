@@ -30,6 +30,13 @@ namespace Ai.Tlbx.VoiceAssistant.Hardware.Windows
         private bool _playbackSessionLogged = false;
         private bool _isPlayingAudio = false;
 
+        // Keep the device buffer small enough for conversational realtime playback.
+        // WaveOutEvent otherwise defaults to a much larger latency intended for
+        // general media playback.
+        private const int PlaybackLatencyMilliseconds = 50;
+        private const int PlaybackBufferCount = 2;
+        private const int RecordingBufferMilliseconds = 20;
+
         // Mic test support
         private bool _isMicTesting = false;
         private WaveInEvent? _micTestWaveIn;
@@ -83,7 +90,7 @@ namespace Ai.Tlbx.VoiceAssistant.Hardware.Windows
 
                 Log(LogLevel.Info, $"Found {deviceCount} input devices");
 
-                _waveOut = new WaveOutEvent();
+                _waveOut = CreateWaveOut();
                 _bufferedWaveProvider = new BufferedWaveProvider(new WaveFormat(_sampleRate, _bitsPerSample, _channelCount))
                 {
                     DiscardOnBufferOverflow = true,
@@ -174,7 +181,7 @@ namespace Ai.Tlbx.VoiceAssistant.Hardware.Windows
             _waveOut?.Dispose();
 
             _playbackSampleRate = sampleRate;
-            _waveOut = new WaveOutEvent();
+            _waveOut = CreateWaveOut();
             _bufferedWaveProvider = new BufferedWaveProvider(new WaveFormat(_playbackSampleRate, _bitsPerSample, _channelCount))
             {
                 DiscardOnBufferOverflow = true,
@@ -182,6 +189,15 @@ namespace Ai.Tlbx.VoiceAssistant.Hardware.Windows
             };
             _waveOut.Init(_bufferedWaveProvider);
             Log(LogLevel.Info, $"Playback format set to {_playbackSampleRate}Hz");
+        }
+
+        private static WaveOutEvent CreateWaveOut()
+        {
+            return new WaveOutEvent
+            {
+                DesiredLatency = PlaybackLatencyMilliseconds,
+                NumberOfBuffers = PlaybackBufferCount
+            };
         }
 
         public async Task<bool> StartRecordingAudio(MicrophoneAudioReceivedEventHandler audioDataReceivedHandler, AudioSampleRate targetSampleRate = AudioSampleRate.Rate24000)
@@ -215,7 +231,7 @@ namespace Ai.Tlbx.VoiceAssistant.Hardware.Windows
                 {
                     DeviceNumber = _selectedDeviceNumber,
                     WaveFormat = new WaveFormat(_currentRecordingSampleRate, _bitsPerSample, _channelCount),
-                    BufferMilliseconds = 50
+                    BufferMilliseconds = RecordingBufferMilliseconds
                 };
 
                 _waveIn.RecordingStopped += (s, e) =>

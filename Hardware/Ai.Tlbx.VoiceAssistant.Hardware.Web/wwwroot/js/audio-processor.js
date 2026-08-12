@@ -13,7 +13,9 @@ class AudioRecorderProcessor extends AudioWorkletProcessor {
 
         console.log(`[AudioProcessor] ${this.sourceRate}Hz -> ${this.targetRate}Hz PCM16 (step ${this.resampleStep.toFixed(6)})`);
 
-        const targetChunkMs = 80;
+        // Keep microphone packets small so realtime providers can process speech
+        // without waiting for a media-sized client buffer to fill.
+        const targetChunkMs = 20;
         const bufferSize = Math.max(320, Math.round(this.targetRate * targetChunkMs / 1000));
         this.buffer = new Int16Array(bufferSize);
         this.bufferIndex = 0;
@@ -123,7 +125,6 @@ registerProcessor('audio-recorder-processor', AudioRecorderProcessor);
 
 const BUFFER_SIZE = 8640000; // ~180s (3 min) at 48kHz – ~34MB, prevents overflow on very long responses
 const CROSSFADE_SAMPLES = 256; // Number of samples for crossfade (doubled for 48kHz)
-const MIN_START_BUFFER = 9600; // ~200 ms @ 48 kHz – buffer before starting playback
 
 class PlaybackProcessor extends AudioWorkletProcessor {
     constructor(options) {
@@ -174,8 +175,9 @@ class PlaybackProcessor extends AudioWorkletProcessor {
             }
              else if (event.data.audioData) {
                 this._handleAudioData(event.data.audioData);
-                // Start playing only when we have a bit of buffered audio to avoid underruns
-                if (!this._isPlaying && this._bufferFill >= MIN_START_BUFFER) {
+                // Realtime speech should reach the speakers on the next render quantum.
+                // Do not add a client-side jitter buffer before starting or resuming.
+                if (!this._isPlaying && this._bufferFill > 0) {
                     this._isPlaying = true;
                 }
                 this._isStopping = false; // Resume playing if stopped
@@ -298,10 +300,10 @@ class PlaybackProcessor extends AudioWorkletProcessor {
 
         // Decide whether we should start or pause playback based on buffer level
         if (!this._isPlaying) {
-            if (this._bufferFill >= MIN_START_BUFFER) {
-                this._isPlaying = true; // Enough buffered, start playback
+            if (this._bufferFill > 0) {
+                this._isPlaying = true;
             } else {
-                // Not enough buffered yet – output silence and wait
+                // No audio has arrived yet.
                 if (channel) channel.fill(0);
                 return true;
             }
@@ -339,10 +341,9 @@ class PlaybackProcessor extends AudioWorkletProcessor {
             } else {
                 // Buffer underrun - fill with silence
                 channel[i] = 0.0;
-                 // Not enough data – pause playback until buffer refills
-                 if (this._bufferFill < MIN_START_BUFFER) {
-                     this._isPlaying = false;
-                 }
+                 // Resume with the very next received chunk instead of rebuilding
+                 // an artificial startup buffer.
+                 this._isPlaying = false;
                   // Store the last samples for potential crossfade next time
                  if (generatedSamples > 0) {
                      const start = (this._readIndex - Math.min(generatedSamples, CROSSFADE_SAMPLES) + BUFFER_SIZE) % BUFFER_SIZE;

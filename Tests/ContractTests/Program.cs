@@ -1,5 +1,8 @@
+using System.Collections.Concurrent;
 using System.Text.Json;
 using System.Reflection;
+using System.Threading.Channels;
+using Ai.Tlbx.VoiceAssistant.Interfaces;
 using Ai.Tlbx.VoiceAssistant.Managers;
 using Ai.Tlbx.VoiceAssistant.Models;
 using Ai.Tlbx.VoiceAssistant.Provider.Google;
@@ -7,7 +10,9 @@ using Ai.Tlbx.VoiceAssistant.Provider.Google.Models;
 using Ai.Tlbx.VoiceAssistant.Provider.Google.Protocol;
 using Ai.Tlbx.VoiceAssistant.Provider.OpenAi;
 using Ai.Tlbx.VoiceAssistant.Provider.OpenAi.AspNetCore;
+using Ai.Tlbx.VoiceAssistant.Provider.OpenAi.Extensions;
 using Ai.Tlbx.VoiceAssistant.Provider.OpenAi.Models;
+using Ai.Tlbx.VoiceAssistant.Provider.OpenAi.Protocol;
 using Ai.Tlbx.VoiceAssistant.Provider.XAi;
 using Ai.Tlbx.VoiceAssistant.Provider.XAi.Models;
 using Ai.Tlbx.VoiceAssistant.Provider.XAi.Protocol;
@@ -17,6 +22,10 @@ Assert(Enum.GetValues<GoogleVoice>().Length == 30, "Gemini voice roster");
 Assert(Enum.GetValues<XaiVoice>().Length == 26, "xAI voice roster");
 Assert(new OpenAiVoiceSettings().Model == OpenAiRealtimeModel.GptRealtime21, "OpenAI default model");
 Assert(new OpenAiVoiceSettings().Voice == AssistantVoice.Marin, "OpenAI default voice");
+Assert(new OpenAiVoiceSettings().ReasoningEffort == SessionReasoningEffort.Low, "OpenAI low-latency reasoning default");
+Assert(new OpenAiVoiceSettings().TurnDetection.SilenceDurationMs == 200, "OpenAI low-latency VAD default");
+Assert(new OpenAiVoiceSettings().Eagerness == Eagerness.high, "OpenAI low-latency semantic VAD default");
+Assert(ServiceCollectionExtensions.CreateDefaultOpenAiSettings().TurnDetection.SilenceDurationMs == 200, "OpenAI DI VAD default matches settings default");
 Assert(OpenAiRealtimeModel.GptRealtime21.ToApiString() == "gpt-realtime-2.1", "OpenAI 2.1 model id");
 Assert(OpenAiRealtimeModel.GptRealtime21Mini.ToApiString() == "gpt-realtime-2.1-mini", "OpenAI 2.1 mini model id");
 Assert(new XaiVoiceSettings().Model == XaiVoiceModel.GrokVoiceLatest, "xAI default model");
@@ -24,7 +33,13 @@ Assert(XaiVoiceModel.GrokVoiceLatest.ToApiString() == "grok-voice-latest", "xAI 
 
 await VerifyOpenAiPreambleOutputPolicyAsync();
 VerifyOpenAiPreambleInstructionPolicy();
-VerifyOpenAiDirectPreamblePolicy();
+VerifyOpenAiTurnDetectionPolicy();
+VerifyOpenAiReasoningPolicy();
+await VerifyOpenAiMiniEphemeralSessionAsync();
+VerifyLowLatencyPlaybackPolicy();
+await VerifyOpenAiAudioBackpressurePolicyAsync();
+await VerifyPreConnectAudioBackpressurePolicyAsync();
+await VerifyFailedStartCleanupAsync();
 
 var directRealtimeClient = File.ReadAllText(FindRepositoryFile(
     "Provider",
@@ -40,6 +55,7 @@ Assert(directRealtimeClient.Contains("itemId,", StringComparison.Ordinal), "dire
 Assert(directRealtimeClient.Contains("'OnDirectRealtimeTranscriptionUsage'", StringComparison.Ordinal), "direct Realtime transcription usage .NET callback");
 Assert(directRealtimeClient.Contains("'OnDirectRealtimeUsageWithMetadata'", StringComparison.Ordinal), "direct Realtime usage metadata .NET callback");
 Assert(directRealtimeClient.Contains("event?.response?.model ?? null", StringComparison.Ordinal), "direct Realtime response model forwarding");
+Assert(directRealtimeClient.Contains("await Promise.allSettled([", StringComparison.Ordinal), "direct Realtime opens control and media channels in parallel");
 
 using (var openAiUsageJson = JsonDocument.Parse(
     """
@@ -228,79 +244,15 @@ static async Task VerifyOpenAiPreambleOutputPolicyAsync()
 
     var audio = new List<string>();
     var messages = new List<ChatMessage>();
-    var usageReports = new List<UsageReport>();
-    var errors = new List<string>();
     provider.OnAudioReceived = audio.Add;
     provider.OnMessageReceived = messages.Add;
-    provider.OnUsageReceived = usageReports.Add;
-    provider.OnError = errors.Add;
 
     await DeliverOpenAiEventAsync(provider,
-        """{"type":"response.output_audio.delta","item_id":"commentary_1","delta":"ignored-audio"}""");
+        """{"type":"response.output_audio.delta","item_id":"commentary_1","delta":"immediate-audio"}""");
     await DeliverOpenAiEventAsync(provider,
         """{"type":"response.output_audio_transcript.done","item_id":"commentary_1","transcript":"Einen Moment, ich schaue nach."}""");
-    Assert(audio.Count == 0, "OpenAI disabled preamble suppresses commentary audio");
-    Assert(messages.Count == 0, "OpenAI disabled preamble suppresses commentary transcript");
-    await DeliverOpenAiEventAsync(provider,
-        """{"type":"response.done","response":{"id":"commentary-response","status":"completed","output":[{"id":"commentary_1","type":"message","phase":"commentary","content":[{"type":"output_audio","transcript":"Einen Moment, ich schaue nach."}]}]}}""");
-    Assert(audio.Count == 0, "OpenAI disabled preamble discards completed commentary audio");
-    Assert(messages.Count == 0, "OpenAI disabled preamble discards completed commentary transcript");
-
-    await DeliverOpenAiEventAsync(provider,
-        """{"type":"response.output_audio.delta","item_id":"final_1","delta":"final-audio-1"}""");
-    await DeliverOpenAiEventAsync(provider,
-        """{"type":"response.output_audio.delta","item_id":"final_1","delta":"final-audio-2"}""");
-    await DeliverOpenAiEventAsync(provider,
-        """{"type":"response.output_audio.delta","item_id":"final_2","delta":"final-audio-3"}""");
-    await DeliverOpenAiEventAsync(provider,
-        """{"type":"response.output_audio_transcript.done","item_id":"final_1","transcript":"Die Betonsorte ist"}""");
-    await DeliverOpenAiEventAsync(provider,
-        """{"type":"response.output_audio_transcript.done","item_id":"final_2","transcript":" C25/30."}""");
-    Assert(audio.Count == 0, "OpenAI disabled preamble buffers final audio until its phase is known");
-    await DeliverOpenAiEventAsync(provider,
-        """{"type":"response.done","response":{"id":"final-response","status":"completed","usage":{"total_tokens":7,"input_tokens":5,"output_tokens":2},"output":[{"id":"final_1","type":"message","phase":"final_answer","content":[{"type":"output_audio","transcript":"Die Betonsorte ist"}]},{"id":"final_2","type":"message","phase":"final_answer","content":[{"type":"output_audio","transcript":" C25/30."}]}]}}""");
-    Assert(audio.SequenceEqual(["final-audio-1", "final-audio-2", "final-audio-3"]), "OpenAI disabled preamble preserves every final audio chunk in output order");
-    Assert(messages.Select(message => message.Content).SequenceEqual(["Die Betonsorte ist", " C25/30."]), "OpenAI disabled preamble preserves every intended final transcript");
-    Assert(usageReports.Count == 1 && usageReports[0].TotalTokens == 7, "OpenAI completed response usage remains counted");
-
-    audio.Clear();
-    messages.Clear();
-    await DeliverOpenAiEventAsync(provider,
-        """{"type":"response.output_audio.delta","item_id":"mixed_commentary","delta":"discard-this"}""");
-    await DeliverOpenAiEventAsync(provider,
-        """{"type":"response.output_audio.delta","item_id":"mixed_final","delta":"play-this"}""");
-    await DeliverOpenAiEventAsync(provider,
-        """{"type":"response.done","response":{"id":"mixed-response","status":"completed","output":[{"id":"mixed_commentary","type":"message","phase":"commentary","content":[{"type":"output_audio","transcript":"Ich sehe kurz nach."}]},{"id":"mixed_final","type":"message","phase":"final_answer","content":[{"type":"output_audio","transcript":"Gefordert ist C30/37."}]}]}}""");
-    Assert(audio.SequenceEqual(["play-this"]), "OpenAI disabled preamble filters mixed response phases");
-    Assert(messages.Count == 1 && messages[0].Content == "Gefordert ist C30/37.", "OpenAI disabled preamble preserves only mixed final transcript");
-
-    audio.Clear();
-    messages.Clear();
-    await DeliverOpenAiEventAsync(provider,
-        """{"type":"response.output_audio.delta","item_id":"cancelled_1","delta":"never-play-this"}""");
-    await DeliverOpenAiEventAsync(provider,
-        """{"type":"response.output_audio_transcript.done","item_id":"cancelled_1","transcript":"Diese Antwort wurde unterbrochen."}""");
-    await DeliverOpenAiEventAsync(provider, """{"type":"input_audio_buffer.speech_started"}""");
-    await DeliverOpenAiEventAsync(provider,
-        """{"type":"response.done","response":{"id":"cancelled-response","status":"cancelled","usage":{"total_tokens":4,"input_tokens":3,"output_tokens":1},"output":[{"id":"cancelled_1","type":"message","phase":"final_answer","content":[{"type":"output_audio","transcript":"Diese Antwort wurde unterbrochen."}]}]}}""");
-    Assert(audio.Count == 0 && messages.Count == 0, "OpenAI interruption never replays buffered speech");
-    Assert(usageReports.Count == 2 && usageReports[1].TotalTokens == 4, "OpenAI cancelled response usage remains counted");
-
-    await DeliverOpenAiEventAsync(provider,
-        """{"type":"response.output_audio.delta","item_id":"incomplete_1","delta":"partial-audio"}""");
-    await DeliverOpenAiEventAsync(provider,
-        """{"type":"response.done","response":{"id":"incomplete-response","status":"incomplete","output":[{"id":"incomplete_1","type":"message","phase":"final_answer","content":[{"type":"output_audio","transcript":"Unvollständige Antwort"}]}]}}""");
-    Assert(audio.Count == 0 && messages.Count == 0, "OpenAI incomplete response is not presented as complete intended speech");
-    Assert(errors.Count == 1 && errors[0].Contains("status 'incomplete'", StringComparison.Ordinal), "OpenAI incomplete response is surfaced as an error");
-
-    await DeliverOpenAiEventAsync(provider,
-        """{"type":"response.output_audio.delta","item_id":"legacy_1","delta":"legacy-audio"}""");
-    await DeliverOpenAiEventAsync(provider,
-        """{"type":"response.output_audio_transcript.done","item_id":"legacy_1","transcript":"Kompatible Ausgabe."}""");
-    await DeliverOpenAiEventAsync(provider,
-        """{"type":"response.done","response":{"id":"legacy-response","status":"completed","output":[{"id":"legacy_1","type":"message","content":[{"type":"output_audio","transcript":"Kompatible Ausgabe."}]}]}}""");
-    Assert(audio.SequenceEqual(["legacy-audio"]), "OpenAI disabled preamble preserves providers without phase metadata");
-    Assert(messages.Count == 1 && messages[0].Content == "Kompatible Ausgabe.", "OpenAI disabled preamble preserves transcript without phase metadata");
+    Assert(audio.SequenceEqual(["immediate-audio"]), "OpenAI streams received audio immediately even when preambles are disabled");
+    Assert(messages.Count == 1 && messages[0].Content == "Einen Moment, ich schaue nach.", "OpenAI streams the accompanying transcript immediately");
 
     audio.Clear();
     messages.Clear();
@@ -309,18 +261,9 @@ static async Task VerifyOpenAiPreambleOutputPolicyAsync()
     await DeliverOpenAiEventAsync(provider,
         """{"type":"response.output_text.delta","item_id":"text_1","delta":"ständig."}""");
     await DeliverOpenAiEventAsync(provider,
-        """{"type":"response.done","response":{"id":"text-response","status":"completed","output":[{"id":"text_1","type":"message","phase":"final_answer","content":[{"type":"output_text","text":"Vollständig."}]}]}}""");
-    Assert(messages.Count == 1 && messages[0].Content == "Vollständig.", "OpenAI disabled preamble preserves complete text output");
+        """{"type":"response.output_text.done","item_id":"text_1","text":"Vollständig."}""");
 
-    provider.Settings.ToolCallPreambleMode = ToolCallPreambleMode.BeforeToolBurst;
-    audio.Clear();
-    messages.Clear();
-    await DeliverOpenAiEventAsync(provider,
-        """{"type":"response.output_audio.delta","item_id":"commentary_2","delta":"burst-audio"}""");
-    await DeliverOpenAiEventAsync(provider,
-        """{"type":"response.output_audio_transcript.done","item_id":"commentary_2","transcript":"Ich prüfe das kurz."}""");
-    Assert(audio.SequenceEqual(["burst-audio"]), "OpenAI enabled preamble preserves commentary audio");
-    Assert(messages.Count == 1 && messages[0].Content == "Ich prüfe das kurz.", "OpenAI enabled preamble preserves commentary transcript");
+    Assert(messages.Count == 1 && messages[0].Content == "Vollständig.", "OpenAI text output remains available with disabled preambles");
 }
 
 static void VerifyOpenAiPreambleInstructionPolicy()
@@ -339,23 +282,192 @@ static void VerifyOpenAiPreambleInstructionPolicy()
     Assert(Build(ToolCallPreambleMode.BeforeEveryToolCall).Contains("Before any tool call", StringComparison.Ordinal), "OpenAI every-tool instruction");
 }
 
-static void VerifyOpenAiDirectPreamblePolicy()
+static void VerifyOpenAiTurnDetectionPolicy()
 {
-    var method = typeof(OpenAiDirectRealtimeVoiceProvider).GetMethod(
-        "EnsurePreambleModeIsSupported",
+    var method = typeof(OpenAiVoiceProvider).GetMethod(
+        "BuildTurnDetectionConfig",
         BindingFlags.Static | BindingFlags.NonPublic)
-        ?? throw new MissingMethodException(typeof(OpenAiDirectRealtimeVoiceProvider).FullName, "EnsurePreambleModeIsSupported");
+        ?? throw new MissingMethodException(typeof(OpenAiVoiceProvider).FullName, "BuildTurnDetectionConfig");
 
-    method.Invoke(null, [new OpenAiVoiceSettings { ToolCallPreambleMode = ToolCallPreambleMode.BeforeToolBurst }]);
+    TurnDetectionConfig Build(OpenAiVoiceSettings settings) =>
+        method.Invoke(null, [settings]) as TurnDetectionConfig
+        ?? throw new InvalidOperationException("OpenAI turn detection builder returned no configuration.");
+
+    var serverVad = Build(new OpenAiVoiceSettings());
+    Assert(serverVad.Eagerness is null, "OpenAI server VAD omits semantic eagerness");
+    Assert(serverVad.SilenceDurationMs == 200 && serverVad.Threshold.HasValue, "OpenAI server VAD carries latency settings");
+
+    var semanticVad = Build(new OpenAiVoiceSettings
+    {
+        Eagerness = Eagerness.high,
+        TurnDetection = new TurnDetection { Type = "semantic_vad" }
+    });
+    Assert(semanticVad.Eagerness == "high", "OpenAI semantic VAD carries eagerness");
+    Assert(semanticVad.Threshold is null && semanticVad.PrefixPaddingMs is null && semanticVad.SilenceDurationMs is null,
+        "OpenAI semantic VAD omits server VAD-only fields");
+}
+
+static void VerifyOpenAiReasoningPolicy()
+{
+    var method = typeof(OpenAiVoiceProvider).GetMethod(
+        "BuildReasoningConfig",
+        BindingFlags.Static | BindingFlags.NonPublic)
+        ?? throw new MissingMethodException(typeof(OpenAiVoiceProvider).FullName, "BuildReasoningConfig");
+
+    var fullModelReasoning = method.Invoke(null, [new OpenAiVoiceSettings()]) as OpenAiReasoningConfig;
+    Assert(fullModelReasoning?.Effort == "low", "OpenAI full realtime model sends low reasoning effort by default");
+
+    var miniModelReasoning = method.Invoke(null,
+        [new OpenAiVoiceSettings { Model = OpenAiRealtimeModel.GptRealtime21Mini }]);
+    Assert(miniModelReasoning is null, "OpenAI mini model omits unsupported reasoning configuration");
+}
+
+static async Task VerifyOpenAiMiniEphemeralSessionAsync()
+{
+    var handler = new CaptureHttpMessageHandler();
+    using var httpClient = new HttpClient(handler);
+    await using var provider = new OpenAiVoiceProvider("contract-test-key", httpClient: httpClient)
+    {
+        Settings = new OpenAiVoiceSettings { Model = OpenAiRealtimeModel.GptRealtime21Mini }
+    };
+
+    var method = typeof(OpenAiVoiceProvider).GetMethod(
+        "CreateSessionAsync",
+        BindingFlags.Instance | BindingFlags.NonPublic)
+        ?? throw new MissingMethodException(typeof(OpenAiVoiceProvider).FullName, "CreateSessionAsync");
+    var task = method.Invoke(provider, null) as Task<string>
+        ?? throw new InvalidOperationException("OpenAI session factory did not return a task.");
+
+    Assert(await task == "ephemeral-contract-key", "OpenAI ephemeral key response remains in use");
+    Assert(handler.RequestUri?.AbsoluteUri == "https://api.openai.com/v1/realtime/client_secrets",
+        "OpenAI session still uses the client secrets endpoint");
+    Assert(handler.Authorization == "Bearer contract-test-key", "OpenAI client secret request uses the library API key");
+
+    using var requestJson = JsonDocument.Parse(handler.RequestBody
+        ?? throw new InvalidOperationException("OpenAI client secret request body was not captured."));
+    var session = requestJson.RootElement.GetProperty("session");
+    Assert(session.GetProperty("model").GetString() == "gpt-realtime-2.1-mini",
+        "OpenAI caller-selected mini model reaches ephemeral session creation");
+    Assert(!session.TryGetProperty("reasoning", out _), "OpenAI mini session omits unsupported reasoning configuration");
+}
+
+static void VerifyLowLatencyPlaybackPolicy()
+{
+    var webPlaybackProcessor = File.ReadAllText(FindRepositoryFile(
+        "Hardware",
+        "Ai.Tlbx.VoiceAssistant.Hardware.Web",
+        "wwwroot",
+        "js",
+        "audio-processor.js"));
+    Assert(!webPlaybackProcessor.Contains("MIN_START_BUFFER", StringComparison.Ordinal),
+        "web playback does not wait for an artificial startup buffer");
+    Assert(webPlaybackProcessor.Contains("this._bufferFill > 0", StringComparison.Ordinal),
+        "web playback starts with the first received audio samples");
+    Assert(webPlaybackProcessor.Contains("targetChunkMs = 20", StringComparison.Ordinal),
+        "web microphone uses 20 ms realtime packets");
+
+    var windowsAudioHardware = File.ReadAllText(FindRepositoryFile(
+        "Hardware",
+        "Ai.Tlbx.VoiceAssistant.Hardware.Windows",
+        "WindowsAudioHardware.cs"));
+    Assert(windowsAudioHardware.Contains("PlaybackLatencyMilliseconds = 50", StringComparison.Ordinal),
+        "Windows playback uses a low-latency output buffer");
+    Assert(windowsAudioHardware.Contains("RecordingBufferMilliseconds = 20", StringComparison.Ordinal),
+        "Windows microphone uses 20 ms realtime packets");
+
+    var openAiProvider = File.ReadAllText(FindRepositoryFile(
+        "Provider",
+        "Ai.Tlbx.VoiceAssistant.Provider.OpenAi",
+        "OpenAiVoiceProvider.cs"));
+    Assert(!openAiProvider.Contains("Task.Delay(50)", StringComparison.Ordinal),
+        "OpenAI history injection has no artificial per-message delay");
+    Assert(!openAiProvider.Contains("BufferedOutputItem", StringComparison.Ordinal),
+        "OpenAI output is never held until response completion");
+}
+
+static async Task VerifyOpenAiAudioBackpressurePolicyAsync()
+{
+    await using var provider = new OpenAiVoiceProvider("contract-test-key");
+    var createChannel = typeof(OpenAiVoiceProvider).GetMethod(
+        "CreateAudioSendChannel",
+        BindingFlags.Static | BindingFlags.NonPublic)
+        ?? throw new MissingMethodException(typeof(OpenAiVoiceProvider).FullName, "CreateAudioSendChannel");
+    var tryEnqueue = typeof(OpenAiVoiceProvider).GetMethod(
+        "TryEnqueueAudio",
+        BindingFlags.Instance | BindingFlags.NonPublic)
+        ?? throw new MissingMethodException(typeof(OpenAiVoiceProvider).FullName, "TryEnqueueAudio");
+    var channelField = typeof(OpenAiVoiceProvider).GetField(
+        "_audioSendChannel",
+        BindingFlags.Instance | BindingFlags.NonPublic)
+        ?? throw new MissingFieldException(typeof(OpenAiVoiceProvider).FullName, "_audioSendChannel");
+    var droppedField = typeof(OpenAiVoiceProvider).GetField(
+        "_droppedAudioChunks",
+        BindingFlags.Instance | BindingFlags.NonPublic)
+        ?? throw new MissingFieldException(typeof(OpenAiVoiceProvider).FullName, "_droppedAudioChunks");
+
+    var channel = createChannel.Invoke(null, null) as Channel<string>
+        ?? throw new InvalidOperationException("OpenAI audio queue factory returned no channel.");
+    channelField.SetValue(provider, channel);
+
+    for (var i = 0; i < 5_000; i++)
+    {
+        Assert(tryEnqueue.Invoke(provider, [$"chunk-{i}"]) as bool? == true,
+            "OpenAI audio queue accepts current audio while saturated");
+    }
+
+    Assert(channel.Reader.Count == 100, "OpenAI audio send queue remains bounded at 100 chunks");
+    Assert(channel.Reader.TryRead(out var firstRetained) && firstRetained == "chunk-4900",
+        "OpenAI audio send queue drops oldest audio and retains the newest speech");
+    Assert((long)(droppedField.GetValue(provider) ?? 0L) == 4_900,
+        "OpenAI audio send queue records dropped chunks");
+}
+
+static async Task VerifyPreConnectAudioBackpressurePolicyAsync()
+{
+    await using var assistant = new Ai.Tlbx.VoiceAssistant.VoiceAssistant(
+        new ContractAudioHardware(),
+        provider: null);
+    var bufferField = typeof(Ai.Tlbx.VoiceAssistant.VoiceAssistant).GetField(
+        "_preConnectBuffer",
+        BindingFlags.Instance | BindingFlags.NonPublic)
+        ?? throw new MissingFieldException(typeof(Ai.Tlbx.VoiceAssistant.VoiceAssistant).FullName, "_preConnectBuffer");
+    var bufferAudio = typeof(Ai.Tlbx.VoiceAssistant.VoiceAssistant).GetMethod(
+        "BufferPreConnectAudio",
+        BindingFlags.Instance | BindingFlags.NonPublic)
+        ?? throw new MissingMethodException(typeof(Ai.Tlbx.VoiceAssistant.VoiceAssistant).FullName, "BufferPreConnectAudio");
+    var buffer = new ConcurrentQueue<string>();
+    bufferField.SetValue(assistant, buffer);
+
+    for (var i = 0; i < 5_000; i++)
+    {
+        bufferAudio.Invoke(assistant, [buffer, $"chunk-{i}"]);
+    }
+
+    Assert(buffer.Count == 100, "pre-connect audio queue remains bounded at 100 chunks");
+    Assert(buffer.TryDequeue(out var firstRetained) && firstRetained == "chunk-4900",
+        "pre-connect audio queue drops oldest audio and retains the newest speech");
+}
+
+static async Task VerifyFailedStartCleanupAsync()
+{
+    var hardware = new ContractAudioHardware();
+    var provider = new FailingConnectVoiceProvider();
+    await using var assistant = new Ai.Tlbx.VoiceAssistant.VoiceAssistant(hardware, provider);
 
     try
     {
-        method.Invoke(null, [new OpenAiVoiceSettings { ToolCallPreambleMode = ToolCallPreambleMode.Disabled }]);
-        throw new InvalidOperationException("Direct WebRTC accepted a preamble mode it cannot enforce.");
+        await assistant.StartAsync(new OpenAiVoiceSettings());
+        throw new InvalidOperationException("Contract failed: provider startup failure propagates");
     }
-    catch (TargetInvocationException exception) when (exception.InnerException is NotSupportedException)
+    catch (InvalidOperationException ex) when (ex.Message == FailingConnectVoiceProvider.FailureMessage)
     {
+        // Expected test failure.
     }
+
+    Assert(hardware.StopRecordingCalls == 1, "failed startup stops microphone recording");
+    Assert(provider.DisconnectCalls == 1, "failed startup disconnects partially initialized provider");
+    Assert(!assistant.IsRecording && !assistant.IsInitialized && !assistant.IsConnecting,
+        "failed startup resets assistant state");
 }
 
 static async Task DeliverOpenAiEventAsync(OpenAiVoiceProvider provider, string json)
@@ -382,4 +494,88 @@ static string FindRepositoryFile(params string[] relativeSegments)
     }
 
     throw new FileNotFoundException($"Could not locate repository file '{Path.Combine(relativeSegments)}'.");
+}
+
+sealed class CaptureHttpMessageHandler : HttpMessageHandler
+{
+    public Uri? RequestUri { get; private set; }
+    public string? Authorization { get; private set; }
+    public string? RequestBody { get; private set; }
+
+    protected override async Task<HttpResponseMessage> SendAsync(
+        HttpRequestMessage request,
+        CancellationToken cancellationToken)
+    {
+        RequestUri = request.RequestUri;
+        Authorization = request.Headers.Authorization?.ToString();
+        RequestBody = request.Content is null
+            ? null
+            : await request.Content.ReadAsStringAsync(cancellationToken);
+
+        return new HttpResponseMessage(System.Net.HttpStatusCode.OK)
+        {
+            Content = new StringContent("{\"value\":\"ephemeral-contract-key\",\"expires_at\":4102444800}")
+        };
+    }
+}
+
+sealed class ContractAudioHardware : IAudioHardwareAccess
+{
+    public int StopRecordingCalls { get; private set; }
+
+    public event EventHandler<string>? AudioError
+    {
+        add { }
+        remove { }
+    }
+
+    public Task InitAudioAsync() => Task.CompletedTask;
+    public Task<bool> StartRecordingAudio(
+        MicrophoneAudioReceivedEventHandler audioDataReceivedHandler,
+        AudioSampleRate targetSampleRate = AudioSampleRate.Rate24000) => Task.FromResult(true);
+    public bool PlayAudio(string base64EncodedPcm16Audio, int sampleRate) => true;
+    public Task<bool> StopRecordingAudio()
+    {
+        StopRecordingCalls++;
+        return Task.FromResult(true);
+    }
+    public Task ClearAudioQueueAsync() => Task.CompletedTask;
+    public Task<List<AudioDeviceInfo>> GetAvailableMicrophonesAsync() => Task.FromResult(new List<AudioDeviceInfo>());
+    public Task<List<AudioDeviceInfo>> RequestMicrophonePermissionAndGetDevicesAsync() => Task.FromResult(new List<AudioDeviceInfo>());
+    public Task<bool> SetMicrophoneDeviceAsync(string deviceId) => Task.FromResult(true);
+    public Task<string?> GetCurrentMicrophoneDeviceAsync() => Task.FromResult<string?>(null);
+    public Task<bool> SetDiagnosticLevelAsync(DiagnosticLevel level) => Task.FromResult(true);
+    public Task<DiagnosticLevel> GetDiagnosticLevelAsync() => Task.FromResult(DiagnosticLevel.None);
+    public void SetLogAction(Action<LogLevel, string> logAction) { }
+    public Task<bool> WaitForPlaybackDrainAsync(TimeSpan? timeout = null) => Task.FromResult(true);
+    public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+}
+
+sealed class FailingConnectVoiceProvider : IVoiceProvider
+{
+    public const string FailureMessage = "Contract provider connection failure";
+    public int DisconnectCalls { get; private set; }
+    public bool IsConnected => false;
+    public AudioSampleRate RequiredInputSampleRate => AudioSampleRate.Rate24000;
+    public Action<ChatMessage>? OnMessageReceived { get; set; }
+    public Action<string>? OnAudioReceived { get; set; }
+    public Func<TimeSpan?, Task<bool>>? WaitForPlaybackDrainAsync { get; set; }
+    public Action<string>? OnStatusChanged { get; set; }
+    public Action<string>? OnError { get; set; }
+    public Action? OnInterruptDetected { get; set; }
+    public Action<UsageReport>? OnUsageReceived { get; set; }
+    public Action<string>? OnTranscriptionDelta { get; set; }
+    public Action<string>? OnTranscriptionCompleted { get; set; }
+
+    public Task ConnectAsync(IVoiceSettings settings) => throw new InvalidOperationException(FailureMessage);
+    public Task DisconnectAsync()
+    {
+        DisconnectCalls++;
+        return Task.CompletedTask;
+    }
+    public Task UpdateSettingsAsync(IVoiceSettings settings) => Task.CompletedTask;
+    public Task ProcessAudioAsync(string base64Audio) => Task.CompletedTask;
+    public Task SendInterruptAsync() => Task.CompletedTask;
+    public Task InjectConversationHistoryAsync(IEnumerable<ChatMessage> messages) => Task.CompletedTask;
+    public ValueTask DisposeAsync() => ValueTask.CompletedTask;
 }

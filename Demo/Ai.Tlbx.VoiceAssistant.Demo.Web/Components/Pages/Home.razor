@@ -188,8 +188,7 @@
                                                     disabled="@((voiceAssistant?.IsConnecting ?? false) || (voiceAssistant?.IsRecording ?? false))">
                                                 @foreach (var mode in _toolCallPreambleModes)
                                                 {
-                                                    <option value="@mode.Value"
-                                                            disabled="@(_selectedProviderString == "OpenAI" && mode.Value == nameof(ToolCallPreambleMode.Disabled))">@mode.Label</option>
+                                                    <option value="@mode.Value">@mode.Label</option>
                                                 }
                                             </select>
                                             <p class="mt-1 text-xs text-gray-500">@GetToolCallPreambleModeHint()</p>
@@ -1095,8 +1094,7 @@
         return sessionSettings.ToolCallPreambleMode switch
         {
             ToolCallPreambleMode.ProviderDefault => "Let the model decide whether to speak before tool calls.",
-            ToolCallPreambleMode.Disabled when _selectedProviderString == "OpenAI" => "Strict suppression requires the WebSocket OpenAI provider and is unavailable in this direct WebRTC demo.",
-            ToolCallPreambleMode.Disabled => "No spoken bridge messages before tool calls.",
+            ToolCallPreambleMode.Disabled => "Ask the provider to stay silent before tool calls; any audio it sends is still played immediately.",
             ToolCallPreambleMode.BeforeToolBurst => "Best for 7-10 call bursts: one bridge sentence before the burst, not before each call.",
             ToolCallPreambleMode.ForLongRunningTools => "Only bridge noticeable waits or visible external actions.",
             ToolCallPreambleMode.BeforeEveryToolCall => "Useful for debugging, but noisy when tools are called in bursts.",
