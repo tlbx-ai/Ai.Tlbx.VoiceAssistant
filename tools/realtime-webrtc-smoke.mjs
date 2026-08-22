@@ -38,8 +38,8 @@ if (daiInputConfig) {
     format: { type: 'audio/pcm', rate: 24000 },
     noise_reduction: { type: 'near_field' },
     transcription: {
-      model: 'gpt-realtime-whisper',
-      language: 'de'
+      model: 'gpt-live-transcribe',
+      languages: ['de']
     },
     turn_detection: {
       type: 'server_vad',

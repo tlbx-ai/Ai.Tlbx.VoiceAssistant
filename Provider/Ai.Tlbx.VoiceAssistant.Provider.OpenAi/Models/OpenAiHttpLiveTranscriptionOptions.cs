@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 
 namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi.Models
 {
@@ -11,7 +12,7 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi.Models
         /// <summary>
         /// The transcription model to use. Defaults to OpenAI's current recommended HTTP transcription model.
         /// </summary>
-        public OpenAiTranscriptionModel TranscriptionModel { get; set; } = OpenAiTranscriptionModel.Gpt4oMiniTranscribe;
+        public OpenAiTranscriptionModel TranscriptionModel { get; set; } = OpenAiTranscriptionModel.GptTranscribe;
 
         /// <summary>
         /// Optional spoken language hint (for example "en" or "de").
@@ -22,6 +23,18 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi.Models
         /// Optional transcription prompt to bias recognition.
         /// </summary>
         public string? Prompt { get; set; }
+
+        /// <summary>Literal domain terms to favor with gpt-transcribe.</summary>
+        public List<string> Keywords { get; set; } = new();
+
+        /// <summary>Expected language codes for gpt-transcribe.</summary>
+        public List<string> Languages { get; set; } = new();
+
+        /// <summary>
+        /// Optional known speaker labels mapped to short audio reference data URLs.
+        /// OpenAI accepts at most four references for diarized transcription.
+        /// </summary>
+        public Dictionary<string, string> KnownSpeakerReferences { get; set; } = new();
 
         /// <summary>
         /// Include token log probabilities when supported by the selected model and response format.

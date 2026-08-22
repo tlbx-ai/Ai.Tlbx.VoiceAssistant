@@ -1,6 +1,8 @@
 using System;
 using System.Globalization;
+using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using System.Net.Http;
 using System.Net.Http.Headers;
 using System.Text;
@@ -18,7 +20,7 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi
     /// This avoids the realtime WebSocket API by repeatedly uploading the full
     /// audio captured since the user pressed the push-to-talk button.
     /// </summary>
-    public sealed class OpenAiHttpLiveTranscriber : IAsyncDisposable
+    public sealed class OpenAiHttpLiveTranscriber : IAsyncDisposable, IStructuredTranscriptionProvider
     {
         private const string TRANSCRIPTION_ENDPOINT = "https://api.openai.com/v1/audio/transcriptions";
         private const int SAMPLE_RATE = 24000;
@@ -45,6 +47,11 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi
         /// exact PCM duration submitted to OpenAI for that request.
         /// </summary>
         public Action<UsageReport>? OnUsageReceived { get; set; }
+
+        /// <summary>
+        /// Receives provider-neutral speaker segments and timestamps when the selected model exposes them.
+        /// </summary>
+        public Action<StructuredTranscript>? OnStructuredTranscriptionReceived { get; set; }
 
         public OpenAiHttpLiveTranscriber(
             IAudioHardwareAccess hardwareAccess,
@@ -260,7 +267,32 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi
 
             if (!string.IsNullOrWhiteSpace(Options.Language))
             {
-                form.Add(new StringContent(Options.Language), "language");
+                if (Options.TranscriptionModel.SupportsContextLists())
+                {
+                    form.Add(new StringContent(Options.Language), "languages[]");
+                }
+                else
+                {
+                    form.Add(new StringContent(Options.Language), "language");
+                }
+            }
+
+            if (Options.TranscriptionModel.SupportsContextLists())
+            {
+                foreach (var language in Options.Languages
+                    .Where(language => !string.IsNullOrWhiteSpace(language))
+                    .Distinct(StringComparer.OrdinalIgnoreCase))
+                {
+                    if (!string.Equals(language, Options.Language, StringComparison.OrdinalIgnoreCase))
+                    {
+                        form.Add(new StringContent(language), "languages[]");
+                    }
+                }
+
+                foreach (var keyword in Options.Keywords)
+                {
+                    form.Add(new StringContent(keyword), "keywords[]");
+                }
             }
 
             if (Options.TranscriptionModel.SupportsTranscriptionPrompt() &&
@@ -274,6 +306,15 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi
                 !useDiarizedJson)
             {
                 form.Add(new StringContent("logprobs"), "include[]");
+            }
+
+            if (useDiarizedJson)
+            {
+                foreach (var reference in Options.KnownSpeakerReferences)
+                {
+                    form.Add(new StringContent(reference.Key), "known_speaker_names[]");
+                    form.Add(new StringContent(reference.Value), "known_speaker_references[]");
+                }
             }
 
             using var request = new HttpRequestMessage(HttpMethod.Post, TRANSCRIPTION_ENDPOINT)
@@ -305,6 +346,7 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi
             await using var responseStream = await response.Content.ReadAsStreamAsync();
             using var reader = new StreamReader(responseStream);
             var hypothesis = new StringBuilder();
+            var structuredSegments = new List<TranscriptSegment>();
             string? currentEvent = null;
             var currentData = new StringBuilder();
 
@@ -318,7 +360,7 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi
 
                 if (line.Length == 0)
                 {
-                    ApplyStreamingEvent(snapshot, currentEvent, currentData.ToString(), hypothesis, onTextChunk);
+                    ApplyStreamingEvent(snapshot, currentEvent, currentData.ToString(), hypothesis, structuredSegments, onTextChunk);
                     currentEvent = null;
                     currentData.Clear();
                     continue;
@@ -341,7 +383,7 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi
                 }
             }
 
-            ApplyStreamingEvent(snapshot, currentEvent, currentData.ToString(), hypothesis, onTextChunk);
+            ApplyStreamingEvent(snapshot, currentEvent, currentData.ToString(), hypothesis, structuredSegments, onTextChunk);
         }
 
         private void ApplyStreamingEvent(
@@ -349,6 +391,7 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi
             string? eventName,
             string data,
             StringBuilder hypothesis,
+            List<TranscriptSegment> structuredSegments,
             Action<string> onTextChunk)
         {
             if (string.IsNullOrWhiteSpace(data) || string.Equals(data, "[DONE]", StringComparison.Ordinal))
@@ -387,16 +430,18 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi
                         break;
 
                     case "transcript.text.segment":
-                        var segmentText = TryGetDiarizedSegmentText(root);
-                        if (!string.IsNullOrWhiteSpace(segmentText))
+                        var segment = TryParseDiarizedSegment(root);
+                        if (segment != null)
                         {
+                            structuredSegments.Add(segment);
                             if (hypothesis.Length > 0 && hypothesis[^1] != '\n')
                             {
                                 hypothesis.AppendLine();
                             }
 
-                            hypothesis.Append(segmentText);
+                            hypothesis.Append(FormatSegment(segment));
                             PublishHypothesisUpdate(snapshot, hypothesis.ToString(), onTextChunk);
+                            PublishStructuredTranscript(structuredSegments, hypothesis.ToString(), isFinal: false);
                         }
                         break;
 
@@ -409,6 +454,14 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi
                                 hypothesis.Clear();
                                 hypothesis.Append(finalText);
                                 PublishHypothesisUpdate(snapshot, finalText, onTextChunk);
+                                var finalSegments = structuredSegments.Count > 0
+                                    ? structuredSegments
+                                    : new List<TranscriptSegment> { new() { Text = finalText } };
+                                PublishStructuredTranscript(
+                                    finalSegments,
+                                    finalText,
+                                    isFinal: true,
+                                    GetDetectedLanguage(root));
                             }
                         }
                         break;
@@ -418,6 +471,49 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi
             {
                 _logAction(LogLevel.Warn, $"Could not parse transcription stream event: {data}");
             }
+        }
+
+        private void PublishStructuredTranscript(
+            IReadOnlyList<TranscriptSegment> segments,
+            string text,
+            bool isFinal,
+            string? detectedLanguage = null)
+        {
+            try
+            {
+                OnStructuredTranscriptionReceived?.Invoke(new StructuredTranscript
+                {
+                    ProviderId = "openai",
+                    ModelId = Options.TranscriptionModel.ToApiString(),
+                    Text = text,
+                    Language = detectedLanguage ?? Options.Language,
+                    IsFinal = isFinal,
+                    IsSpeechFinal = isFinal,
+                    Segments = segments.ToArray()
+                });
+            }
+            catch (Exception ex)
+            {
+                _logAction(LogLevel.Error, $"Structured transcription callback failed: {ex.Message}");
+            }
+        }
+
+        private static string? GetDetectedLanguage(JsonElement root)
+        {
+            if (!root.TryGetProperty("languages", out var languages) || languages.ValueKind != JsonValueKind.Array)
+            {
+                return null;
+            }
+
+            foreach (var language in languages.EnumerateArray())
+            {
+                if (language.TryGetProperty("code", out var code))
+                {
+                    return code.GetString();
+                }
+            }
+
+            return null;
         }
 
         private void PublishHypothesisUpdate(SnapshotWorkItem snapshot, string latestHypothesis, Action<string> onTextChunk)
@@ -493,6 +589,34 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi
                 !string.IsNullOrWhiteSpace(Options.Prompt))
             {
                 _logAction(LogLevel.Warn, "Ignoring transcription prompt because gpt-4o-transcribe-diarize does not support prompting.");
+            }
+
+            if (Options.KnownSpeakerReferences.Count > 4)
+            {
+                throw new InvalidOperationException("OpenAI diarization supports at most four known speaker references.");
+            }
+
+            if (Options.KnownSpeakerReferences.Count > 0 &&
+                !Options.TranscriptionModel.SupportsDiarizedJson())
+            {
+                throw new InvalidOperationException("Known speaker references require Gpt4oTranscribeDiarize.");
+            }
+
+            foreach (var reference in Options.KnownSpeakerReferences)
+            {
+                if (string.IsNullOrWhiteSpace(reference.Key) ||
+                    !reference.Value.StartsWith("data:audio/", StringComparison.OrdinalIgnoreCase))
+                {
+                    throw new InvalidOperationException("Known speaker references require a non-empty label and an audio data URL.");
+                }
+            }
+
+            foreach (var keyword in Options.Keywords)
+            {
+                if (string.IsNullOrWhiteSpace(keyword) || keyword.IndexOfAny(new[] { '<', '>', '\r', '\n' }) >= 0)
+                {
+                    throw new InvalidOperationException("OpenAI transcription keywords must be non-empty single-line text without angle brackets.");
+                }
             }
 
             if (Options.SnapshotInterval <= TimeSpan.Zero)
@@ -708,7 +832,7 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi
                 (commonPrefixLength * 4) >= (shorterLength * 3);
         }
 
-        private static string? TryGetDiarizedSegmentText(JsonElement root)
+        private static TranscriptSegment? TryParseDiarizedSegment(JsonElement root)
         {
             var segment = root.TryGetProperty("segment", out var segmentElement)
                 ? segmentElement
@@ -739,7 +863,25 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi
                 speaker = speakerLabelElement.GetString() ?? speaker;
             }
 
-            return $"[{speaker}] {text.Trim()}";
+            return new TranscriptSegment
+            {
+                Speaker = speaker,
+                Text = text.Trim(),
+                Start = TryGetSeconds(segment, "start"),
+                End = TryGetSeconds(segment, "end")
+            };
+        }
+
+        private static string FormatSegment(TranscriptSegment segment) =>
+            string.IsNullOrWhiteSpace(segment.Speaker)
+                ? segment.Text
+                : $"[{segment.Speaker}] {segment.Text}";
+
+        private static TimeSpan? TryGetSeconds(JsonElement element, string propertyName)
+        {
+            return element.TryGetProperty(propertyName, out var value) && value.TryGetDouble(out var seconds)
+                ? TimeSpan.FromSeconds(seconds)
+                : null;
         }
 
         private static int GetCommonPrefixLength(string left, string right)

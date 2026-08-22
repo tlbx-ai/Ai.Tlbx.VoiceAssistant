@@ -27,6 +27,8 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.XAi.Models
         Castor,
         Naksh,
         Atlas,
+        Aurora,
+        Liora,
 
         /// <summary>
         /// Ara - Female, warm and friendly. Default voice, balanced and conversational.

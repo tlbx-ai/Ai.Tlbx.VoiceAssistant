@@ -78,6 +78,11 @@ namespace Ai.Tlbx.VoiceAssistant
         /// </summary>
         public Action<string>? OnTranscriptionCompleted { get; set; }
 
+        /// <summary>
+        /// Callback that fires when a provider exposes speaker, channel, timing, or turn metadata.
+        /// </summary>
+        public Action<StructuredTranscript>? OnStructuredTranscriptionReceived { get; set; }
+
         // Public properties
         /// <summary>
         /// Gets a value indicating whether the voice assistant is initialized.
@@ -244,21 +249,8 @@ namespace Ai.Tlbx.VoiceAssistant
                     _isInitialized = true;
                     _isConnecting = false;
 
-                    // Flush pre-connect buffer
-                    var buffer = _preConnectBuffer;
-                    _preConnectBuffer = null;
-                    if (buffer != null)
-                    {
-                        int flushed = 0;
-                        while (buffer.TryDequeue(out var audio))
-                        {
-                            await _provider.ProcessAudioAsync(audio);
-                            flushed++;
-                        }
-                        _logAction(LogLevel.Info, $"Flushed {flushed} pre-connect audio chunks");
-                    }
-
-                    // Inject conversation history if available
+                    // Inject initial history before any buffered realtime input. Gemini 3.1
+                    // only accepts clientContent as the first session context operation.
                     var history = _chatHistory.GetMessages();
                     if (history.Any())
                     {
@@ -279,6 +271,20 @@ namespace Ai.Tlbx.VoiceAssistant
                             _logAction(LogLevel.Info, $"Injecting {messagesToInject.Count} messages from conversation history (excluded last assistant message if any)");
                             await _provider.InjectConversationHistoryAsync(messagesToInject);
                         }
+                    }
+
+                    // Flush pre-connect buffer after initial context has been seeded.
+                    var buffer = _preConnectBuffer;
+                    _preConnectBuffer = null;
+                    if (buffer != null)
+                    {
+                        int flushed = 0;
+                        while (buffer.TryDequeue(out var audio))
+                        {
+                            await _provider.ProcessAudioAsync(audio);
+                            flushed++;
+                        }
+                        _logAction(LogLevel.Info, $"Flushed {flushed} pre-connect audio chunks");
                     }
                 }
                 else
@@ -947,6 +953,14 @@ namespace Ai.Tlbx.VoiceAssistant
                 OnTranscriptionCompleted?.Invoke(transcript);
                 _logAction(LogLevel.Info, $"Transcription completed: {transcript.Length} chars");
             };
+
+            if (_provider is IStructuredTranscriptionProvider structuredProvider)
+            {
+                structuredProvider.OnStructuredTranscriptionReceived = transcript =>
+                {
+                    OnStructuredTranscriptionReceived?.Invoke(transcript);
+                };
+            }
         }
 
         private int _audioReceivedCount = 0;
@@ -1053,6 +1067,10 @@ namespace Ai.Tlbx.VoiceAssistant
                     _provider.OnUsageReceived = null;
                     _provider.OnTranscriptionDelta = null;
                     _provider.OnTranscriptionCompleted = null;
+                    if (_provider is IStructuredTranscriptionProvider structuredProvider)
+                    {
+                        structuredProvider.OnStructuredTranscriptionReceived = null;
+                    }
                     await _provider.DisposeAsync();
                 }
                 await _hardwareAccess.DisposeAsync();

@@ -25,11 +25,32 @@ var settings = new XaiVoiceSettings
     EnableSessionResumption = true
 };
 
-var assistant = new VoiceAssistant(provider, audioHardware);
+var assistant = new VoiceAssistant(audioHardware, provider);
 await assistant.StartAsync(settings);
 ```
 
-`XaiVoice` contains all 26 current built-in voices. Set `VoiceId` to use a custom xAI voice ID instead. Use `GrokVoiceThinkFast10` instead of the default `GrokVoiceLatest` when you need a pinned production model.
+`XaiVoice` contains all 28 current built-in voices. Set `VoiceId` to use a custom xAI voice ID instead. Use `GrokVoiceThinkFast20` instead of the moving `GrokVoiceLatest` alias when you need a pinned production model.
+
+## Streaming Speech to Text
+
+```csharp
+var provider = new XaiTranscriptionProvider(apiKey);
+var assistant = new VoiceAssistant(audioHardware, provider);
+
+assistant.OnStructuredTranscriptionReceived = transcript =>
+    Console.WriteLine(transcript.ToSpeakerLabeledText());
+
+await assistant.StartAsync(new XaiTranscriptionSettings
+{
+    Language = "de",
+    Keyterms = ["TLBX"],
+    Diarize = true,
+    SmartTurnThreshold = 0.7,
+    SmartTurnTimeoutMs = 3000
+});
+```
+
+The structured callback preserves word timestamps, acoustic speaker labels, optional channel assignment, final/chunk-final state, and Smart Turn confidence. For calls recorded with one speaker per channel, prefer `Multichannel = true` plus `Channels = 2` over acoustic diarization.
 
 ## Full Documentation
 

@@ -77,7 +77,7 @@ The demo provides a complete reference implementation showing how to:
 
 ## Environmental Variables
 
-Set `OPENAI_API_KEY` in the environment for OpenAI sessions. Set `GOOGLE_API_KEY` or `XAI_API_KEY` when testing those providers.
+Set `OPENAI_API_KEY` in the environment for OpenAI sessions. Set `GOOGLE_API_KEY` (or `GEMINI_API_KEY`) or `XAI_API_KEY` when testing those providers.
 
 ## Local Development
 

@@ -21,7 +21,7 @@ dotnet add package Ai.Tlbx.VoiceAssistant.Hardware.Web
 **2. Set API keys** (environment variables or pass directly to provider constructors):
 ```
 OPENAI_API_KEY=sk-...
-GOOGLE_API_KEY=AIza...
+GOOGLE_API_KEY=AIza... # GEMINI_API_KEY is also supported
 XAI_API_KEY=xai-...
 ```
 
@@ -139,7 +139,7 @@ var settings = new GoogleVoiceSettings
     Model = GoogleModel.Gemini31FlashLivePreview
 };
 
-// xAI Grok — all 26 built-in voices plus custom voice IDs
+// xAI Grok — all 28 built-in voices plus custom voice IDs
 var provider = new XaiVoiceProvider(apiKey);
 var settings = new XaiVoiceSettings
 {
@@ -214,7 +214,7 @@ tool list, reasoning effort, or voice settings without restarting audio.
 - OpenAI voice settings default to `SessionReasoningEffort.Low`, 200 ms server-VAD silence detection, and `Eagerness.high` when semantic VAD is selected. The selected model remains entirely controlled by `OpenAiVoiceSettings.Model`; the library never switches a session to the mini model automatically.
 - `ToolCallPreambleMode.Disabled` is a provider instruction, not an audio gate: every received audio delta is forwarded immediately in both WebSocket and Direct WebRTC sessions.
 - Google: `GoogleModel.Gemini31FlashLivePreview` is the current default for the Gemini Live API. `GoogleModel.Gemini25FlashNativeAudioLatest` is also available for testing Google's rolling native-audio Live API alias. The `gemini-3.1-flash-tts-preview` and older `gemini-2.5-*-tts` models are text-to-speech `generateContent` models, not realtime `bidiGenerateContent` voice-session models, so they are not exposed through this realtime provider.
-- xAI: `XaiVoiceModel.GrokVoiceLatest` follows xAI's current recommended alias. Use `GrokVoiceThinkFast10` when a pinned production version is preferable; `GrokVoiceFast10` remains for legacy compatibility but is deprecated by xAI.
+- xAI: `XaiVoiceModel.GrokVoiceLatest` follows xAI's moving alias, which points to `grok-voice-think-fast-2.0` as of August 2026. Use `GrokVoiceThinkFast20` to pin the current flagship; the 1.0 models remain only for compatibility.
 
 ### xAI Tool Continuations
 
@@ -232,7 +232,7 @@ Before packaging, `verify-release.ps1` runs the full solution build, provider co
 
 ## Speech-to-Text Only
 
-The OpenAI provider package also includes speech-to-text APIs when you want transcription without an assistant voice response. Install the same core, OpenAI provider, and hardware packages:
+The OpenAI and xAI provider packages include speech-to-text APIs when you want transcription without an assistant voice response. Both can surface provider-neutral `StructuredTranscript` data with speaker/channel boundaries and timestamps when the selected API supports them.
 
 ```bash
 dotnet add package Ai.Tlbx.VoiceAssistant
@@ -261,9 +261,11 @@ assistant.OnTranscriptionCompleted = transcript =>
 
 await assistant.StartAsync(new OpenAiTranscriptionSettings
 {
-    TranscriptionModel = OpenAiTranscriptionModel.GptRealtimeWhisper,
-    Language = "de",
-    IncludeLogProbabilities = true
+    TranscriptionModel = OpenAiTranscriptionModel.GptLiveTranscribe,
+    Languages = ["de", "en"],
+    Keywords = ["TLBX", "VoiceAssistant"],
+    TranscriptionPrompt = "A German software architecture meeting",
+    Delay = OpenAiTranscriptionDelay.Low
 });
 
 // Later:
@@ -281,8 +283,9 @@ await using var transcriber = new OpenAiHttpLiveTranscriber(
     audioHardware,
     new OpenAiHttpLiveTranscriptionOptions
     {
-        TranscriptionModel = OpenAiTranscriptionModel.Gpt4oTranscribe,
-        Language = "de",
+        TranscriptionModel = OpenAiTranscriptionModel.GptTranscribe,
+        Languages = ["de", "en"],
+        Keywords = ["TLBX", "VoiceAssistant"],
         Prompt = "Expect German with business and IT terms",
         SnapshotInterval = TimeSpan.FromMilliseconds(700),
         MinimumUtteranceDuration = TimeSpan.FromMilliseconds(350)
@@ -312,14 +315,41 @@ await liveTask;
 
 | Model enum | Best fit | Notes |
 |------------|----------|-------|
-| `GptRealtimeWhisper` | Low-latency realtime transcription | Default for live microphone deltas. Does not accept `TranscriptionPrompt` and omits server-side turn detection. |
+| `GptLiveTranscribe` | Low-latency realtime transcription | Recommended live default. Supports prompt, keywords, multiple language hints, and the `Delay` latency/accuracy control. |
+| `GptTranscribe` | High-accuracy file or committed-turn transcription | Recommended HTTP default. Supports prompt, keywords, multiple language hints, and detected languages. |
+| `GptRealtimeWhisper` | Compatibility realtime transcription | Still supported, but lacks the richer context controls of `GptLiveTranscribe`. |
 | `Gpt4oTranscribe` | Higher-quality HTTP transcription | Use for request-response or hold-to-transcribe workflows. Supports prompt steering and log probabilities. |
-| `Gpt4oMiniTranscribe` | Lower-cost HTTP transcription | Current recommended HTTP transcription model. Supports prompt steering and log probabilities. |
+| `Gpt4oMiniTranscribe` | Lower-cost compatibility HTTP transcription | Supports prompt steering and log probabilities; prefer `GptTranscribe` for new general-purpose transcription. |
 | `Gpt4oMiniTranscribe20251215` | Pinned lower-cost HTTP transcription snapshot | Use for compatibility checks against the current mini snapshot. Supports prompt steering and log probabilities. |
 | `Gpt4oTranscribeDiarize` | HTTP transcription with speaker labels | Use the HTTP transcriber path; it is not supported by the realtime transcription stream. |
 | `Whisper1` | Legacy compatibility | Available in OpenAI's bounded transcription API, but not exposed by the demos because they rely on live deltas or streamed HTTP responses. |
 
 The web and terminal demos expose both transcription modes: streaming transcription and hold-to-transcribe.
+
+### xAI Streaming Transcription with Speaker Assignment
+
+`XaiTranscriptionProvider` uses xAI's dedicated binary-audio WebSocket. It supports interim results, word timestamps, speaker diarization, up to eight separately assigned channels, domain keyterms, and Smart Turn end-of-turn detection.
+
+```csharp
+var provider = new XaiTranscriptionProvider("xai-...");
+var assistant = new VoiceAssistant(audioHardware, provider);
+
+assistant.OnStructuredTranscriptionReceived = transcript =>
+{
+    Console.WriteLine(transcript.ToSpeakerLabeledText());
+};
+
+await assistant.StartAsync(new XaiTranscriptionSettings
+{
+    Language = "de",
+    Keyterms = ["TLBX", "VoiceAssistant"],
+    Diarize = true,
+    SmartTurnThreshold = 0.7,
+    SmartTurnTimeoutMs = 3000
+});
+```
+
+For call recordings with agent and customer already separated into audio channels, set `Multichannel = true` and `Channels = 2`. Channel assignment is more deterministic than acoustic diarization; each `TranscriptSegment` retains both `ChannelIndex` and word timing metadata.
 
 ---
 

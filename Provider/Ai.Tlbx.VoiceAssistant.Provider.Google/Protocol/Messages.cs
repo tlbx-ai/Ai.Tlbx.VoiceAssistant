@@ -46,6 +46,15 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.Google.Protocol
 
         [JsonPropertyName("sessionResumption")]
         public SessionResumptionConfig? SessionResumption { get; set; }
+
+        [JsonPropertyName("historyConfig")]
+        public HistoryConfig? HistoryConfig { get; set; }
+    }
+
+    public class HistoryConfig
+    {
+        [JsonPropertyName("initialHistoryInClientContent")]
+        public bool InitialHistoryInClientContent { get; set; }
     }
 
     public class ContextWindowCompressionConfig

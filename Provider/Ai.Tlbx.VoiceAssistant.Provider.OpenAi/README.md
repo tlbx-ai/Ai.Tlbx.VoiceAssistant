@@ -21,24 +21,17 @@ var settings = new OpenAiVoiceSettings
     Instructions = "You are a helpful assistant."
 };
 
-var assistant = new VoiceAssistant(provider, audioHardware);
+var assistant = new VoiceAssistant(audioHardware, provider);
 await assistant.StartAsync(settings);
 ```
 
 ## Tool-call speech policy
 
-`ToolCallPreambleMode.Disabled` is enforced by buffering response output until
-OpenAI reports `response.done`. Commentary-phase audio is suppressed, while all
-final-answer audio chunks and transcripts are delivered in response order.
-Cancelled, failed, or incomplete responses are never replayed as complete
-speech; token usage is still reported for those responses. Failed and
-incomplete responses also invoke `OnError` so an application can retry or tell
-the user that the answer did not finish.
-
-This strict policy applies to the WebSocket provider in this package. Direct
-browser WebRTC starts playing its remote media track before phase metadata is
-available, so the ASP.NET Core direct provider rejects `Disabled` instead of
-claiming a guarantee it cannot provide.
+`ToolCallPreambleMode.Disabled` adds a strong Realtime instruction asking the
+model to remain silent until its final answer. It is intentionally not an audio
+gate: received audio is forwarded immediately, so the setting improves model
+behavior without adding response-completion latency. Applications that require
+deterministic phase filtering should filter transcripts at the application layer.
 
 ## HTTP Live Transcription
 
@@ -77,10 +70,11 @@ so partials may arrive a bit later. The callback receives the latest current
 hypothesis for the active push-to-talk segment, which lets a UI replace the
 current line as the model revises earlier words.
 
-For low-latency live transcript deltas use `GptRealtimeWhisper`, the current
-default for realtime transcription. For higher-quality file/HTTP transcription
-use `Gpt4oTranscribe`; for lower cost use `Gpt4oMiniTranscribe` or the pinned
-current `Gpt4oMiniTranscribe20251215` snapshot.
+For low-latency live transcript deltas use `GptLiveTranscribe`, the current
+default. It supports prompt, keyword and multiple-language hints plus a tunable
+delay. For high-quality file/HTTP transcription use `GptTranscribe`, the current
+HTTP default. The older GPT-4o and Realtime Whisper variants remain available
+for compatibility.
 `Gpt4oTranscribeDiarize` enables speaker labels through the HTTP transcription
 endpoint and is not supported by OpenAI's Realtime transcription stream.
 Realtime Whisper does not accept the `prompt` parameter, so the provider omits

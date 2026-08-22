@@ -52,7 +52,7 @@ internal static class Program
     private static ProviderChoice selectedProvider = ProviderChoice.OpenAI;
     private static string selectedVoice = nameof(AssistantVoice.Marin);
     private static string selectedModel = nameof(OpenAiRealtimeModel.GptRealtime21);
-    private static OpenAiTranscriptionModel transcriptionModel = OpenAiTranscriptionModel.GptRealtimeWhisper;
+    private static OpenAiTranscriptionModel transcriptionModel = OpenAiTranscriptionModel.GptLiveTranscribe;
     private static bool includeTranscriptionLogProbabilities;
     private static double talkingSpeed = 1.0;
     private static SessionReasoningEffort? reasoningEffort = SessionReasoningEffort.Low;
@@ -226,7 +226,7 @@ internal static class Program
         table.AddRow("Mode", mode.ToString());
         table.AddRow("Status", Markup.Escape(status));
         table.AddRow("Platform", RuntimeInformation.OSDescription);
-        table.AddRow("API keys", $"OpenAI={HasKey("OPENAI_API_KEY")}, Google={HasKey("GOOGLE_API_KEY")}, xAI={HasKey("XAI_API_KEY")}");
+        table.AddRow("API keys", $"OpenAI={HasKey("OPENAI_API_KEY")}, Google={HasAnyKey("GOOGLE_API_KEY", "GEMINI_API_KEY")}, xAI={HasKey("XAI_API_KEY")}");
 
         if (!string.IsNullOrWhiteSpace(pttTranscript))
         {
@@ -564,7 +564,7 @@ internal static class Program
             Instructions = DefaultInstructions,
             InputAudioTranscription = new InputAudioTranscription
             {
-                Model = OpenAiTranscriptionModel.GptRealtimeWhisper,
+                Model = OpenAiTranscriptionModel.GptLiveTranscribe,
                 Prompt = "Expect German with slight accent",
                 Enabled = true
             },
@@ -581,7 +581,7 @@ internal static class Program
 
     private static (IVoiceProvider Provider, IVoiceSettings Settings) CreateGoogle()
     {
-        EnsureKey("GOOGLE_API_KEY");
+        EnsureAnyKey("GOOGLE_API_KEY", "GEMINI_API_KEY");
         var voice = ParseOrDefault(selectedVoice, GoogleVoice.Puck);
         var model = ParseOrDefault(selectedModel, GoogleModel.Gemini31FlashLivePreview);
         var settings = new GoogleVoiceSettings
@@ -750,12 +750,25 @@ internal static class Program
         }
     }
 
+    private static void EnsureAnyKey(params string[] variables)
+    {
+        if (!variables.Any(variable => !string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable(variable))))
+        {
+            throw new InvalidOperationException($"Set one of: {string.Join(", ", variables)}.");
+        }
+    }
+
     private static string HasKey(string variable)
     {
         return string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable(variable))
             ? "[red]missing[/]"
             : "[green]set[/]";
     }
+
+    private static string HasAnyKey(params string[] variables) =>
+        variables.Any(variable => !string.IsNullOrWhiteSpace(Environment.GetEnvironmentVariable(variable)))
+            ? "[green]set[/]"
+            : "[red]missing[/]";
 
     private static string GetSelectedMicrophoneName()
     {

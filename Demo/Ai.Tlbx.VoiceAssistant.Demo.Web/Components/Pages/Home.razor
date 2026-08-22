@@ -584,7 +584,7 @@
     private CancellationTokenSource? _pttLiveTranscriptionCts;
     private Task? _pttLiveTranscriptionTask;
     private OpenAiHttpLiveTranscriber? _pttLiveTranscriber;
-    private string _transcriptionModelString = nameof(OpenAiTranscriptionModel.GptRealtimeWhisper);
+    private string _transcriptionModelString = nameof(OpenAiTranscriptionModel.GptLiveTranscribe);
     private bool _includeTranscriptionLogProbabilities = false;
     private List<string> _transcriptionModels = GetSelectableEnumValues<OpenAiTranscriptionModel>()
         .Select(v => v.ToString()).ToList();
@@ -1056,7 +1056,7 @@
     {
         return Enum.TryParse<OpenAiTranscriptionModel>(_transcriptionModelString, out var model)
             ? model
-            : OpenAiTranscriptionModel.GptRealtimeWhisper;
+            : OpenAiTranscriptionModel.GptLiveTranscribe;
     }
 
     private string GetGoogleThinkingLevelHint()
@@ -1106,9 +1106,11 @@
     {
         return SelectedTranscriptionModel switch
         {
-            OpenAiTranscriptionModel.GptRealtimeWhisper => "Default for low-latency live transcript deltas; priced by audio duration.",
+            OpenAiTranscriptionModel.GptRealtimeWhisper => "Compatibility model for low-latency live transcript deltas; priced by audio duration.",
+            OpenAiTranscriptionModel.GptLiveTranscribe => "Recommended live transcription model with language and keyword context.",
+            OpenAiTranscriptionModel.GptTranscribe => "Current transcription model; supports realtime and HTTP snapshot transcription.",
             OpenAiTranscriptionModel.Gpt4oTranscribe => "Higher-accuracy HTTP transcription. Use Hold; OpenAI does not recommend this for ongoing Realtime microphone streams.",
-            OpenAiTranscriptionModel.Gpt4oMiniTranscribe => "Current recommended lower-cost HTTP transcription model. Use Hold.",
+            OpenAiTranscriptionModel.Gpt4oMiniTranscribe => "Lower-cost compatibility HTTP transcription model. Prefer GptTranscribe for new work. Use Hold.",
             OpenAiTranscriptionModel.Gpt4oMiniTranscribe20251215 => "Pinned current mini snapshot for HTTP transcription compatibility checks. Use Hold.",
             OpenAiTranscriptionModel.Gpt4oTranscribeDiarize => "Speaker diarization. OpenAI currently supports this only through the HTTP Transcription API, so use Hold.",
             _ => "Legacy or compatibility model."
@@ -1252,7 +1254,7 @@
                     Voice = openAiVoice,
                     InputAudioTranscription = new InputAudioTranscription
                     {
-                        Model = OpenAiTranscriptionModel.GptRealtimeWhisper,
+                        Model = OpenAiTranscriptionModel.GptLiveTranscribe,
                         Prompt = "Expect German with slight accent",
                         Enabled = true,
                     },

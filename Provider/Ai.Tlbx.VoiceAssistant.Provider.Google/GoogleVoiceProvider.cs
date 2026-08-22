@@ -99,12 +99,14 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.Google
         /// <summary>
         /// Initializes a new instance of the <see cref="GoogleVoiceProvider"/> class.
         /// </summary>
-        /// <param name="apiKey">The Google API key. If null, will try to get from environment variable GOOGLE_API_KEY.</param>
+        /// <param name="apiKey">The Google API key. If null, reads GOOGLE_API_KEY and then GEMINI_API_KEY.</param>
         /// <param name="logAction">Optional logging action.</param>
         public GoogleVoiceProvider(string? apiKey = null, Action<LogLevel, string>? logAction = null)
         {
-            _apiKey = apiKey ?? Environment.GetEnvironmentVariable("GOOGLE_API_KEY")
-                ?? throw new InvalidOperationException("Google API key must be provided or set in GOOGLE_API_KEY environment variable");
+            _apiKey = apiKey
+                ?? Environment.GetEnvironmentVariable("GOOGLE_API_KEY")
+                ?? Environment.GetEnvironmentVariable("GEMINI_API_KEY")
+                ?? throw new InvalidOperationException("Google API key must be provided or set in GOOGLE_API_KEY or GEMINI_API_KEY");
             _logAction = logAction ?? ((level, message) => { /* no-op */ });
         }
 
@@ -129,7 +131,7 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.Google
             {
                 if (string.IsNullOrEmpty(_apiKey))
                 {
-                    throw new InvalidOperationException("Google API key is not set. Please set the GOOGLE_API_KEY environment variable.");
+                    throw new InvalidOperationException("Google API key is not set. Please set GOOGLE_API_KEY or GEMINI_API_KEY.");
                 }
 
                 OnStatusChanged?.Invoke("Connecting to Google Gemini...");
@@ -451,6 +453,9 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.Google
                         {
                             Handle = _settings.SessionResumptionHandle
                         }
+                        : null,
+                    HistoryConfig = _settings.Model == GoogleModel.Gemini31FlashLivePreview
+                        ? new HistoryConfig { InitialHistoryInClientContent = true }
                         : null
                 }
             };

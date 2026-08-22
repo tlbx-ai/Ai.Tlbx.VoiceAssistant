@@ -19,7 +19,7 @@ using Ai.Tlbx.VoiceAssistant.Provider.XAi.Protocol;
 
 Assert(Enum.GetValues<AssistantVoice>().Length == 10, "OpenAI voice roster");
 Assert(Enum.GetValues<GoogleVoice>().Length == 30, "Gemini voice roster");
-Assert(Enum.GetValues<XaiVoice>().Length == 26, "xAI voice roster");
+Assert(Enum.GetValues<XaiVoice>().Length == 28, "xAI voice roster");
 Assert(new OpenAiVoiceSettings().Model == OpenAiRealtimeModel.GptRealtime21, "OpenAI default model");
 Assert(new OpenAiVoiceSettings().Voice == AssistantVoice.Marin, "OpenAI default voice");
 Assert(new OpenAiVoiceSettings().ReasoningEffort == SessionReasoningEffort.Low, "OpenAI low-latency reasoning default");
@@ -28,8 +28,17 @@ Assert(new OpenAiVoiceSettings().Eagerness == Eagerness.high, "OpenAI low-latenc
 Assert(ServiceCollectionExtensions.CreateDefaultOpenAiSettings().TurnDetection.SilenceDurationMs == 200, "OpenAI DI VAD default matches settings default");
 Assert(OpenAiRealtimeModel.GptRealtime21.ToApiString() == "gpt-realtime-2.1", "OpenAI 2.1 model id");
 Assert(OpenAiRealtimeModel.GptRealtime21Mini.ToApiString() == "gpt-realtime-2.1-mini", "OpenAI 2.1 mini model id");
+Assert(new OpenAiTranscriptionSettings().TranscriptionModel == OpenAiTranscriptionModel.GptLiveTranscribe, "OpenAI live transcription default");
+Assert(new OpenAiHttpLiveTranscriptionOptions().TranscriptionModel == OpenAiTranscriptionModel.GptTranscribe, "OpenAI file transcription default");
+Assert(OpenAiTranscriptionModel.GptLiveTranscribe.ToApiString() == "gpt-live-transcribe", "OpenAI live transcription model id");
+Assert(OpenAiTranscriptionModel.GptTranscribe.ToApiString() == "gpt-transcribe", "OpenAI high-accuracy transcription model id");
 Assert(new XaiVoiceSettings().Model == XaiVoiceModel.GrokVoiceLatest, "xAI default model");
 Assert(XaiVoiceModel.GrokVoiceLatest.ToApiString() == "grok-voice-latest", "xAI latest model id");
+Assert(XaiVoiceModel.GrokVoiceThinkFast20.ToApiString() == "grok-voice-think-fast-2.0", "xAI Think Fast 2.0 model id");
+
+VerifyOpenAiTranscriptionContextContract();
+VerifyGoogleInitialHistoryContract();
+VerifyXaiStructuredTranscriptionContract();
 
 await VerifyOpenAiPreambleOutputPolicyAsync();
 VerifyOpenAiPreambleInstructionPolicy();
@@ -40,6 +49,136 @@ VerifyLowLatencyPlaybackPolicy();
 await VerifyOpenAiAudioBackpressurePolicyAsync();
 await VerifyPreConnectAudioBackpressurePolicyAsync();
 await VerifyFailedStartCleanupAsync();
+
+if (args.Contains("--live-provider-smoke", StringComparer.Ordinal))
+{
+    await VerifyLiveProviderConnectionsAsync();
+}
+
+static void VerifyOpenAiTranscriptionContextContract()
+{
+    var config = new TranscriptionConfig
+    {
+        Model = OpenAiTranscriptionModel.GptLiveTranscribe.ToApiString(),
+        Prompt = "A German construction meeting",
+        Keywords = ["TLBX", "VOB"],
+        Languages = ["de", "en"],
+        Delay = OpenAiTranscriptionDelay.Low.ToApiString()
+    };
+    using var json = JsonDocument.Parse(JsonSerializer.Serialize(config, OpenAiJsonContext.Default.TranscriptionConfig));
+    Assert(json.RootElement.GetProperty("model").GetString() == "gpt-live-transcribe", "OpenAI live transcription request model");
+    Assert(json.RootElement.GetProperty("keywords").GetArrayLength() == 2, "OpenAI transcription keyword hints");
+    Assert(json.RootElement.GetProperty("languages").GetArrayLength() == 2, "OpenAI transcription language hints");
+    Assert(json.RootElement.GetProperty("delay").GetString() == "low", "OpenAI transcription delay control");
+
+    var parser = typeof(OpenAiHttpLiveTranscriber).GetMethod("TryParseDiarizedSegment", BindingFlags.Static | BindingFlags.NonPublic)
+        ?? throw new MissingMethodException(typeof(OpenAiHttpLiveTranscriber).FullName, "TryParseDiarizedSegment");
+    using var segmentJson = JsonDocument.Parse(
+        """{"type":"transcript.text.segment","segment":{"speaker":"Johannes","text":"Guten Morgen","start":1.25,"end":2.5}}""");
+    var segment = parser.Invoke(null, [segmentJson.RootElement]) as TranscriptSegment
+        ?? throw new InvalidOperationException("OpenAI diarized segment parser returned no result.");
+    Assert(segment.Speaker == "Johannes" && segment.Text == "Guten Morgen", "OpenAI known speaker label preservation");
+    Assert(segment.Start == TimeSpan.FromSeconds(1.25) && segment.End == TimeSpan.FromSeconds(2.5), "OpenAI diarized timing preservation");
+}
+
+static void VerifyGoogleInitialHistoryContract()
+{
+    var setup = new SetupMessage
+    {
+        Setup = new Setup
+        {
+            Model = GoogleModel.Gemini31FlashLivePreview.ToApiString(),
+            HistoryConfig = new HistoryConfig { InitialHistoryInClientContent = true }
+        }
+    };
+    using var json = JsonDocument.Parse(JsonSerializer.Serialize(setup, GoogleJsonContext.Default.SetupMessage));
+    Assert(
+        json.RootElement.GetProperty("setup").GetProperty("historyConfig").GetProperty("initialHistoryInClientContent").GetBoolean(),
+        "Gemini 3.1 initial history setup contract");
+}
+
+static async Task VerifyLiveProviderConnectionsAsync()
+{
+    await using (var openAi = new OpenAiTranscriptionProvider())
+    {
+        await openAi.ConnectAsync(new OpenAiTranscriptionSettings
+        {
+            TranscriptionModel = OpenAiTranscriptionModel.GptLiveTranscribe,
+            Languages = ["de", "en"],
+            Keywords = ["TLBX"]
+        });
+        Assert(openAi.IsConnected, "OpenAI live transcription API connection");
+        await openAi.DisconnectAsync();
+    }
+    Console.WriteLine("OpenAI live transcription connection passed.");
+
+    await using (var xai = new XaiTranscriptionProvider())
+    {
+        await xai.ConnectAsync(new XaiTranscriptionSettings
+        {
+            Language = "de",
+            Diarize = true,
+            SmartTurnThreshold = 0.7
+        });
+        Assert(xai.IsConnected, "xAI streaming transcription API connection");
+        await xai.DisconnectAsync();
+    }
+    Console.WriteLine("xAI streaming transcription connection passed.");
+
+    await using (var google = new GoogleVoiceProvider(Environment.GetEnvironmentVariable("GEMINI_API_KEY")))
+    {
+        await google.ConnectAsync(new GoogleVoiceSettings
+        {
+            Model = GoogleModel.Gemini31FlashLivePreview,
+            Instructions = "Connection verification only."
+        });
+        Assert(google.IsConnected, "Gemini 3.1 Live API connection with history config");
+        await google.DisconnectAsync();
+    }
+    Console.WriteLine("Gemini 3.1 Live API connection passed.");
+
+    Console.WriteLine("Live provider connection smoke tests passed.");
+}
+
+static void VerifyXaiStructuredTranscriptionContract()
+{
+    var endpointBuilder = typeof(XaiTranscriptionProvider).GetMethod("BuildEndpoint", BindingFlags.Static | BindingFlags.NonPublic)
+        ?? throw new MissingMethodException(typeof(XaiTranscriptionProvider).FullName, "BuildEndpoint");
+    var endpoint = endpointBuilder.Invoke(null,
+        [new XaiTranscriptionSettings { Language = "de", Keyterms = ["TLBX Voice"], Diarize = true }]) as Uri
+        ?? throw new InvalidOperationException("xAI transcription endpoint builder returned no URI.");
+    Assert(endpoint.Query.Contains("diarize=true", StringComparison.Ordinal), "xAI streaming diarization query");
+    Assert(endpoint.Query.Contains("smart_turn=0.7", StringComparison.Ordinal), "xAI Smart Turn query");
+    Assert(endpoint.Query.Contains("keyterm=TLBX%20Voice", StringComparison.Ordinal), "xAI keyterm query encoding");
+
+    var parser = typeof(XaiTranscriptionProvider).GetMethod("ParseTranscript", BindingFlags.Static | BindingFlags.NonPublic)
+        ?? throw new MissingMethodException(typeof(XaiTranscriptionProvider).FullName, "ParseTranscript");
+    using var eventJson = JsonDocument.Parse(
+        """
+        {
+          "type":"transcript.partial",
+          "text":"Hallo Johannes Guten Morgen",
+          "is_final":true,
+          "speech_final":true,
+          "start":0.0,
+          "duration":2.0,
+          "end_of_turn_confidence":0.97,
+          "words":[
+            {"text":"Hallo","start":0.0,"end":0.4,"speaker":0},
+            {"text":"Johannes","start":0.4,"end":0.9,"speaker":0},
+            {"text":"Guten","start":1.1,"end":1.5,"speaker":1},
+            {"text":"Morgen","start":1.5,"end":2.0,"speaker":1}
+          ]
+        }
+        """);
+    var transcript = parser.Invoke(null, [eventJson.RootElement, false]) as StructuredTranscript
+        ?? throw new InvalidOperationException("xAI transcription parser returned no result.");
+    Assert(transcript.IsFinal && transcript.IsSpeechFinal, "xAI final turn flags");
+    Assert(transcript.Segments.Count == 2, "xAI words grouped into speaker segments");
+    Assert(transcript.Segments[0].Speaker == "speaker-0" && transcript.Segments[1].Speaker == "speaker-1", "xAI speaker assignment");
+    Assert(transcript.Segments[0].Start == TimeSpan.Zero && transcript.Segments[1].End == TimeSpan.FromSeconds(2), "xAI word timing preservation");
+    Assert(transcript.ToSpeakerLabeledText().Contains("[speaker-1] Guten Morgen", StringComparison.Ordinal), "provider-neutral speaker rendering");
+}
 
 var directRealtimeClient = File.ReadAllText(FindRepositoryFile(
     "Provider",

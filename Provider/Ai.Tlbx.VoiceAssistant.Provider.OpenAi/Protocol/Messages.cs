@@ -306,6 +306,15 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi.Protocol
 
         [JsonPropertyName("language")]
         public string? Language { get; set; }
+
+        [JsonPropertyName("keywords")]
+        public List<string>? Keywords { get; set; }
+
+        [JsonPropertyName("languages")]
+        public List<string>? Languages { get; set; }
+
+        [JsonPropertyName("delay")]
+        public string? Delay { get; set; }
     }
 
     public class TurnDetectionConfig

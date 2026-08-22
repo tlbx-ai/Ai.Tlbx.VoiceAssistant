@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Linq;
 using System.Net.WebSockets;
 using System.Text;
 using System.Text.Json;
@@ -13,7 +14,7 @@ using Ai.Tlbx.VoiceAssistant.Provider.OpenAi.Protocol;
 
 namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi
 {
-    public sealed class OpenAiTranscriptionProvider : IVoiceProvider
+    public sealed class OpenAiTranscriptionProvider : IVoiceProvider, IStructuredTranscriptionProvider
     {
         private const string REALTIME_WEBSOCKET_ENDPOINT = "wss://api.openai.com/v1/realtime";
         private const int CONNECTION_TIMEOUT_MS = 10000;
@@ -41,6 +42,7 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi
         public Action<UsageReport>? OnUsageReceived { get; set; }
         public Action<string>? OnTranscriptionDelta { get; set; }
         public Action<string>? OnTranscriptionCompleted { get; set; }
+        public Action<StructuredTranscript>? OnStructuredTranscriptionReceived { get; set; }
 
         public OpenAiTranscriptionProvider(string? apiKey = null, Action<LogLevel, string>? logAction = null)
         {
@@ -56,6 +58,7 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi
                 throw new ArgumentException("Settings must be of type OpenAiTranscriptionSettings", nameof(settings));
             }
 
+            ValidateSettings(transcriptionSettings);
             _settings = transcriptionSettings;
             Interlocked.Exchange(ref _pendingInputAudioBytes, 0);
             _logAction(LogLevel.Info, $"Transcription settings configured - Model: {_settings.TranscriptionModel}");
@@ -122,6 +125,7 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi
                 throw new ArgumentException("Settings must be of type OpenAiTranscriptionSettings", nameof(settings));
             }
 
+            ValidateSettings(transcriptionSettings);
             _settings = transcriptionSettings;
 
             if (IsConnected)
@@ -182,7 +186,18 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi
                                 Prompt = _settings.TranscriptionModel.SupportsTranscriptionPrompt()
                                     ? _settings.TranscriptionPrompt
                                     : null,
-                                Language = _settings.Language
+                                Language = !_settings.TranscriptionModel.SupportsContextLists()
+                                    ? _settings.Language
+                                    : null,
+                                Keywords = _settings.TranscriptionModel.SupportsContextLists() && _settings.Keywords.Count > 0
+                                    ? _settings.Keywords
+                                    : null,
+                                Languages = _settings.TranscriptionModel.SupportsContextLists()
+                                    ? BuildLanguageHints(_settings)
+                                    : null,
+                                Delay = _settings.TranscriptionModel.SupportsDelayControl()
+                                    ? _settings.Delay.ToApiString()
+                                    : null
                             },
                             TurnDetection = _settings.TranscriptionModel.SupportsRealtimeTurnDetection()
                                 ? new TurnDetectionConfig
@@ -208,6 +223,21 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi
             var json = JsonSerializer.Serialize(sessionUpdate, OpenAiJsonContext.Default.SessionUpdateMessage);
             _logAction(LogLevel.Info, $"Sending transcription session config: {json}");
             await SendMessageAsync(json);
+        }
+
+        private static List<string>? BuildLanguageHints(OpenAiTranscriptionSettings settings)
+        {
+            var languages = settings.Languages
+                .Where(language => !string.IsNullOrWhiteSpace(language))
+                .Distinct(StringComparer.OrdinalIgnoreCase)
+                .ToList();
+            if (!string.IsNullOrWhiteSpace(settings.Language) &&
+                !languages.Contains(settings.Language, StringComparer.OrdinalIgnoreCase))
+            {
+                languages.Add(settings.Language);
+            }
+
+            return languages.Count > 0 ? languages : null;
         }
 
         private async Task<bool> SendMessageAsync(string message)
@@ -363,6 +393,45 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi
                 if (!string.IsNullOrEmpty(text))
                 {
                     OnTranscriptionCompleted?.Invoke(text);
+                    OnStructuredTranscriptionReceived?.Invoke(new StructuredTranscript
+                    {
+                        ProviderId = "openai",
+                        ModelId = _settings?.TranscriptionModel.ToApiString(),
+                        Text = text,
+                        Language = GetDetectedLanguage(root) ?? _settings?.Language,
+                        IsFinal = true,
+                        IsSpeechFinal = true,
+                        Segments = new[] { new TranscriptSegment { Text = text } }
+                    });
+                }
+            }
+        }
+
+        private static string? GetDetectedLanguage(JsonElement root)
+        {
+            if (!root.TryGetProperty("languages", out var languages) || languages.ValueKind != JsonValueKind.Array)
+            {
+                return null;
+            }
+
+            foreach (var language in languages.EnumerateArray())
+            {
+                if (language.TryGetProperty("code", out var code))
+                {
+                    return code.GetString();
+                }
+            }
+
+            return null;
+        }
+
+        private static void ValidateSettings(OpenAiTranscriptionSettings settings)
+        {
+            foreach (var keyword in settings.Keywords)
+            {
+                if (string.IsNullOrWhiteSpace(keyword) || keyword.IndexOfAny(new[] { '<', '>', '\r', '\n' }) >= 0)
+                {
+                    throw new InvalidOperationException("OpenAI transcription keywords must be non-empty single-line text without angle brackets.");
                 }
             }
         }

@@ -28,8 +28,9 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi.Models
 
         /// <summary>
         /// Latest GPT Realtime mini model.
-        /// Recommended when you want lower cost and lower latency than the full realtime model.
+        /// Deprecated by OpenAI. Use GPT Realtime 2.1 mini instead.
         /// </summary>
+        [Obsolete("OpenAI deprecated gpt-realtime-mini. Use GptRealtime21Mini.")]
         GptRealtimeMini,
 
         /// <summary>
@@ -71,7 +72,7 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi.Models
         /// <summary>
         /// GPT-4o Mini Realtime preview from December 2024.
         /// </summary>
-        [Obsolete("Legacy GPT-4o Mini Realtime preview model. Migrate to GptRealtimeMini before the preview shutdown path becomes unusable.")]
+        [Obsolete("Legacy GPT-4o Mini Realtime preview model. Migrate to GptRealtime21Mini.")]
         Gpt4oMiniRealtimePreview20241217,
     }
     

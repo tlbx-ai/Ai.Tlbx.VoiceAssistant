@@ -17,7 +17,7 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.Google.Extensions
         /// Adds the Google Gemini voice provider to the voice assistant configuration.
         /// </summary>
         /// <param name="builder">The voice assistant builder.</param>
-        /// <param name="apiKey">Optional Google API key. If not provided, will use GOOGLE_API_KEY environment variable.</param>
+        /// <param name="apiKey">Optional Google API key. If not provided, uses GOOGLE_API_KEY or GEMINI_API_KEY.</param>
         /// <returns>The builder instance for method chaining.</returns>
         public static VoiceAssistantBuilder WithGoogle(this VoiceAssistantBuilder builder, string? apiKey = null)
         {

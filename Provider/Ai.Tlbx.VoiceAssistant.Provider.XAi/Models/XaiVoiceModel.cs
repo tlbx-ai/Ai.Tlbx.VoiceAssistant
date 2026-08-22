@@ -14,14 +14,20 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.XAi.Models
         GrokVoiceLatest,
 
         /// <summary>
+        /// xAI's current flagship voice model, released August 5, 2026.
+        /// </summary>
+        GrokVoiceThinkFast20,
+
+        /// <summary>
         /// xAI's flagship realtime voice model for multi-step, tool-heavy voice workflows.
         /// </summary>
+        [Obsolete("grok-voice-think-fast-1.0 is the previous generation. Use GrokVoiceLatest or GrokVoiceThinkFast20.")]
         GrokVoiceThinkFast10,
 
         /// <summary>
         /// Previous realtime voice model. Useful as an A/B baseline.
         /// </summary>
-        [Obsolete("grok-voice-fast-1.0 is deprecated by xAI. Use GrokVoiceLatest or GrokVoiceThinkFast10.")]
+        [Obsolete("grok-voice-fast-1.0 is deprecated by xAI. Use GrokVoiceLatest or GrokVoiceThinkFast20.")]
         GrokVoiceFast10
     }
 
@@ -39,6 +45,7 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.XAi.Models
             return model switch
             {
                 XaiVoiceModel.GrokVoiceLatest => "grok-voice-latest",
+                XaiVoiceModel.GrokVoiceThinkFast20 => "grok-voice-think-fast-2.0",
                 XaiVoiceModel.GrokVoiceThinkFast10 => "grok-voice-think-fast-1.0",
                 XaiVoiceModel.GrokVoiceFast10 => "grok-voice-fast-1.0",
                 _ => throw new ArgumentOutOfRangeException(nameof(model), model, "Unsupported xAI voice model")

@@ -32,7 +32,7 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.XAi.Models
 
         /// <summary>
         /// The xAI realtime voice model to use for the conversation.
-        /// Defaults to xAI's latest alias. Select GrokVoiceThinkFast10 to pin the current release.
+        /// Defaults to xAI's latest alias. Select GrokVoiceThinkFast20 to pin the current release.
         /// </summary>
         public XaiVoiceModel Model { get; set; } = XaiVoiceModel.GrokVoiceLatest;
 
