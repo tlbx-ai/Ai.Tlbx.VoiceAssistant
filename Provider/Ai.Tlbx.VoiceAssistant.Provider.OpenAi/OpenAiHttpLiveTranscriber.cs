@@ -20,7 +20,7 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi
     /// This avoids the realtime WebSocket API by repeatedly uploading the full
     /// audio captured since the user pressed the push-to-talk button.
     /// </summary>
-    public sealed class OpenAiHttpLiveTranscriber : IAsyncDisposable, IStructuredTranscriptionProvider
+    public sealed class OpenAiHttpLiveTranscriber : IAsyncDisposable, IStructuredTranscriptionProvider, IStructuredTranscriptionProgressProvider
     {
         private const string TRANSCRIPTION_ENDPOINT = "https://api.openai.com/v1/audio/transcriptions";
         private const int SAMPLE_RATE = 24000;
@@ -36,9 +36,11 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi
         private bool _isRunning;
         private bool _snapshotInFlight;
         private int _sessionId;
+        private long _snapshotRevision;
         private int _lastSnapshotByteCount;
         private MemoryStream _capturedAudio = new();
         private string _latestPublishedText = string.Empty;
+        private StructuredTranscript? _latestStructuredTranscript;
 
         public OpenAiHttpLiveTranscriptionOptions Options { get; }
 
@@ -49,9 +51,30 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi
         public Action<UsageReport>? OnUsageReceived { get; set; }
 
         /// <summary>
-        /// Receives provider-neutral speaker segments and timestamps when the selected model exposes them.
+        /// Receives only complete, authoritative session snapshots. Replays from a newer request are
+        /// withheld until that request completes and proves at least the previously confirmed audio coverage.
         /// </summary>
         public Action<StructuredTranscript>? OnStructuredTranscriptionReceived { get; set; }
+
+        /// <summary>
+        /// Receives individual completed speaker segments while a snapshot request is still streaming.
+        /// These events are revision-scoped progress and must not replace an authoritative session snapshot.
+        /// </summary>
+        public Action<StructuredTranscript>? OnStructuredTranscriptionProgress { get; set; }
+
+        /// <summary>
+        /// The most complete authoritative structured state confirmed for the current or last session.
+        /// </summary>
+        public StructuredTranscript? LatestStructuredTranscript
+        {
+            get
+            {
+                lock (_sync)
+                {
+                    return _latestStructuredTranscript;
+                }
+            }
+        }
 
         public OpenAiHttpLiveTranscriber(
             IAudioHardwareAccess hardwareAccess,
@@ -100,7 +123,7 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi
                     throw new InvalidOperationException("Live transcription is already running.");
                 }
 
-                ResetRunState();
+                ResetRunState(clearTranscriptResult: true);
                 _sessionId++;
                 _runCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
                 runCts = _runCts;
@@ -130,7 +153,7 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi
                     _runCts?.Dispose();
                     _runCts = null;
 
-                    ResetRunState();
+                    ResetRunState(clearTranscriptResult: false);
                 }
             }
         }
@@ -211,12 +234,16 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi
 
                 _snapshotInFlight = true;
                 _lastSnapshotByteCount = capturedBytes;
+                _snapshotRevision++;
 
                 return new SnapshotWorkItem(
                     _sessionId,
+                    _snapshotRevision,
                     effectiveAudio,
                     forceFinal,
-                    _latestPublishedText);
+                    _latestPublishedText,
+                    TimeSpan.FromSeconds((capturedBytes - effectiveAudio.Length) / (double)BYTES_PER_SECOND),
+                    TimeSpan.FromSeconds(capturedBytes / (double)BYTES_PER_SECOND));
             }
         }
 
@@ -229,6 +256,10 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi
             catch (Exception ex)
             {
                 _logAction(LogLevel.Error, $"HTTP live transcription snapshot failed: {ex.Message}");
+                if (snapshot.IsFinal)
+                {
+                    PublishLastConfirmedAsSessionFinal(snapshot, onTextChunk, "final snapshot failed");
+                }
             }
             finally
             {
@@ -241,6 +272,8 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi
 
         private async Task TranscribeSnapshotAsync(SnapshotWorkItem snapshot, Action<string> onTextChunk)
         {
+            _logAction(LogLevel.Info,
+                $"Processing transcription snapshot {snapshot.Revision}: audio_end={FormatCoverage(snapshot.AudioEnd)}, final={snapshot.IsFinal}.");
             byte[] wavAudio = BuildWav(snapshot.Audio, SAMPLE_RATE);
 
             using var form = new MultipartFormDataContent();
@@ -347,6 +380,8 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi
             using var reader = new StreamReader(responseStream);
             var hypothesis = new StringBuilder();
             var structuredSegments = new List<TranscriptSegment>();
+            var structuredSegmentKeys = new HashSet<string>(StringComparer.Ordinal);
+            var snapshotCompleted = false;
             string? currentEvent = null;
             var currentData = new StringBuilder();
 
@@ -360,7 +395,7 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi
 
                 if (line.Length == 0)
                 {
-                    ApplyStreamingEvent(snapshot, currentEvent, currentData.ToString(), hypothesis, structuredSegments, onTextChunk);
+                    snapshotCompleted |= ApplyStreamingEvent(snapshot, currentEvent, currentData.ToString(), hypothesis, structuredSegments, structuredSegmentKeys, onTextChunk);
                     currentEvent = null;
                     currentData.Clear();
                     continue;
@@ -383,20 +418,26 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi
                 }
             }
 
-            ApplyStreamingEvent(snapshot, currentEvent, currentData.ToString(), hypothesis, structuredSegments, onTextChunk);
+            snapshotCompleted |= ApplyStreamingEvent(snapshot, currentEvent, currentData.ToString(), hypothesis, structuredSegments, structuredSegmentKeys, onTextChunk);
+
+            if (snapshot.IsFinal && !snapshotCompleted)
+            {
+                PublishLastConfirmedAsSessionFinal(snapshot, onTextChunk, "final snapshot ended before transcript.text.done");
+            }
         }
 
-        private void ApplyStreamingEvent(
+        private bool ApplyStreamingEvent(
             SnapshotWorkItem snapshot,
             string? eventName,
             string data,
             StringBuilder hypothesis,
             List<TranscriptSegment> structuredSegments,
+            HashSet<string> structuredSegmentKeys,
             Action<string> onTextChunk)
         {
             if (string.IsNullOrWhiteSpace(data) || string.Equals(data, "[DONE]", StringComparison.Ordinal))
             {
-                return;
+                return false;
             }
 
             try
@@ -431,7 +472,7 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi
 
                     case "transcript.text.segment":
                         var segment = TryParseDiarizedSegment(root);
-                        if (segment != null)
+                        if (segment != null && structuredSegmentKeys.Add(GetSegmentKey(segment)))
                         {
                             structuredSegments.Add(segment);
                             if (hypothesis.Length > 0 && hypothesis[^1] != '\n')
@@ -440,57 +481,236 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi
                             }
 
                             hypothesis.Append(FormatSegment(segment));
-                            PublishHypothesisUpdate(snapshot, hypothesis.ToString(), onTextChunk);
-                            PublishStructuredTranscript(structuredSegments, hypothesis.ToString(), isFinal: false);
+                            PublishStructuredProgress(snapshot, segment);
                         }
                         break;
 
                     case "transcript.text.done":
-                        if (root.TryGetProperty("text", out var textElement))
+                        string finalText = root.TryGetProperty("text", out var textElement)
+                            ? textElement.GetString() ?? string.Empty
+                            : string.Empty;
+                        if (string.IsNullOrWhiteSpace(finalText))
                         {
-                            string finalText = textElement.GetString() ?? hypothesis.ToString();
-                            if (finalText.Length > 0)
-                            {
-                                hypothesis.Clear();
-                                hypothesis.Append(finalText);
-                                PublishHypothesisUpdate(snapshot, finalText, onTextChunk);
-                                var finalSegments = structuredSegments.Count > 0
-                                    ? structuredSegments
-                                    : new List<TranscriptSegment> { new() { Text = finalText } };
-                                PublishStructuredTranscript(
-                                    finalSegments,
-                                    finalText,
-                                    isFinal: true,
-                                    GetDetectedLanguage(root));
-                            }
+                            finalText = hypothesis.ToString();
                         }
-                        break;
+
+                        if (!string.IsNullOrWhiteSpace(finalText) || structuredSegments.Count > 0)
+                        {
+                            PublishCompletedSnapshot(
+                                snapshot,
+                                structuredSegments,
+                                finalText,
+                                GetDetectedLanguage(root),
+                                onTextChunk);
+                            return true;
+                        }
+                        return false;
                 }
             }
             catch (JsonException)
             {
                 _logAction(LogLevel.Warn, $"Could not parse transcription stream event: {data}");
             }
+
+            return false;
         }
 
-        private void PublishStructuredTranscript(
-            IReadOnlyList<TranscriptSegment> segments,
-            string text,
-            bool isFinal,
-            string? detectedLanguage = null)
+        private void PublishStructuredProgress(SnapshotWorkItem snapshot, TranscriptSegment segment)
         {
             try
             {
-                OnStructuredTranscriptionReceived?.Invoke(new StructuredTranscript
+                OnStructuredTranscriptionProgress?.Invoke(new StructuredTranscript
                 {
                     ProviderId = "openai",
                     ModelId = Options.TranscriptionModel.ToApiString(),
-                    Text = text,
-                    Language = detectedLanguage ?? Options.Language,
-                    IsFinal = isFinal,
-                    IsSpeechFinal = isFinal,
-                    Segments = segments.ToArray()
+                    Text = segment.Text,
+                    Language = Options.Language,
+                    IsFinal = false,
+                    IsSpeechFinal = true,
+                    SnapshotRevision = snapshot.Revision,
+                    IsSnapshotComplete = false,
+                    IsSessionFinal = false,
+                    AudioStart = snapshot.AudioStart,
+                    AudioEnd = snapshot.AudioEnd,
+                    Segments = new[] { segment }
                 });
+            }
+            catch (Exception ex)
+            {
+                _logAction(LogLevel.Error, $"Structured transcription progress callback failed: {ex.Message}");
+            }
+        }
+
+        private void PublishCompletedSnapshot(
+            SnapshotWorkItem snapshot,
+            IReadOnlyList<TranscriptSegment> segments,
+            string providerText,
+            string? detectedLanguage,
+            Action<string> onTextChunk)
+        {
+            StructuredTranscript? transcriptToPublish = null;
+            string? textToPublish = null;
+            string? rejectionReason = null;
+
+            lock (_sync)
+            {
+                if (snapshot.SessionId != _sessionId)
+                {
+                    return;
+                }
+
+                var previous = _latestStructuredTranscript;
+                var candidateCoverageStart = GetSegmentCoverageStart(segments);
+                var candidateCoverage = GetSegmentCoverageEnd(segments);
+                var previousCoverageStart = previous is null ? null : GetSegmentCoverageStart(previous.Segments);
+                var previousCoverage = previous is null ? null : GetSegmentCoverageEnd(previous.Segments);
+                var hasTimedSegments = candidateCoverage.HasValue;
+                var previousHasTimedSegments = previousCoverage.HasValue;
+
+                if (segments.Count > 0 && previousHasTimedSegments &&
+                    (!hasTimedSegments ||
+                     candidateCoverage!.Value < previousCoverage!.Value ||
+                     (previousCoverageStart.HasValue &&
+                      (!candidateCoverageStart.HasValue || candidateCoverageStart.Value > previousCoverageStart.Value))))
+                {
+                    rejectionReason = $"segment coverage {FormatCoverageRange(candidateCoverageStart, candidateCoverage)} does not contain confirmed {FormatCoverageRange(previousCoverageStart, previousCoverage)}";
+                }
+                else if (segments.Count == 0 && previous is not null && HasStructuredDetail(previous.Segments))
+                {
+                    rejectionReason = "text-only fallback cannot replace a confirmed structured snapshot";
+                }
+                else
+                {
+                    string acceptedText;
+                    IReadOnlyList<TranscriptSegment> acceptedSegments;
+
+                    if (segments.Count > 0)
+                    {
+                        acceptedSegments = segments.ToArray();
+                        acceptedText = string.IsNullOrWhiteSpace(providerText)
+                            ? string.Join(Environment.NewLine, acceptedSegments.Select(FormatSegment))
+                            : providerText;
+                    }
+                    else
+                    {
+                        var mergedText = MergeSnapshotHypothesis(snapshot.DisplayFloor, _latestPublishedText, providerText);
+                        if (string.IsNullOrWhiteSpace(mergedText))
+                        {
+                            rejectionReason = "text snapshot did not advance the confirmed session state";
+                            acceptedSegments = Array.Empty<TranscriptSegment>();
+                            acceptedText = string.Empty;
+                        }
+                        else
+                        {
+                            acceptedText = mergedText;
+                            acceptedSegments = new[] { new TranscriptSegment { Text = mergedText } };
+                        }
+                    }
+
+                    if (rejectionReason is null)
+                    {
+                        transcriptToPublish = new StructuredTranscript
+                        {
+                            ProviderId = "openai",
+                            ModelId = Options.TranscriptionModel.ToApiString(),
+                            Text = acceptedText,
+                            Language = detectedLanguage ?? Options.Language,
+                            Duration = snapshot.AudioEnd - snapshot.AudioStart,
+                            // Legacy IsFinal remains request-finality. Use IsSessionFinal for session completion.
+                            IsFinal = true,
+                            IsSpeechFinal = true,
+                            SnapshotRevision = snapshot.Revision,
+                            IsSnapshotComplete = true,
+                            IsSessionFinal = snapshot.IsFinal,
+                            AudioStart = snapshot.AudioStart,
+                            AudioEnd = snapshot.AudioEnd,
+                            Segments = acceptedSegments
+                        };
+                        _latestStructuredTranscript = transcriptToPublish;
+                        if (!string.Equals(_latestPublishedText, acceptedText, StringComparison.Ordinal))
+                        {
+                            _latestPublishedText = acceptedText;
+                            textToPublish = acceptedText;
+                        }
+                    }
+                }
+            }
+
+            if (rejectionReason is not null)
+            {
+                _logAction(LogLevel.Warn,
+                    $"Discarded completed transcription snapshot {snapshot.Revision}: {rejectionReason}.");
+                if (snapshot.IsFinal)
+                {
+                    PublishLastConfirmedAsSessionFinal(snapshot, onTextChunk, rejectionReason);
+                }
+                return;
+            }
+
+            _logAction(LogLevel.Info,
+                $"Accepted completed transcription snapshot {snapshot.Revision}: segments={transcriptToPublish!.Segments.Count}, segment_end={FormatCoverage(GetSegmentCoverageEnd(transcriptToPublish.Segments))}, session_final={transcriptToPublish.IsSessionFinal}.");
+            PublishCallbacks(transcriptToPublish!, textToPublish, onTextChunk);
+        }
+
+        private void PublishLastConfirmedAsSessionFinal(
+            SnapshotWorkItem snapshot,
+            Action<string> onTextChunk,
+            string reason)
+        {
+            StructuredTranscript? finalTranscript;
+            lock (_sync)
+            {
+                var previous = _latestStructuredTranscript;
+                if (previous is null || previous.IsSessionFinal)
+                {
+                    return;
+                }
+
+                finalTranscript = new StructuredTranscript
+                {
+                    ProviderId = previous.ProviderId,
+                    ModelId = previous.ModelId,
+                    Text = previous.Text,
+                    Language = previous.Language,
+                    Duration = previous.Duration,
+                    IsFinal = true,
+                    IsSpeechFinal = true,
+                    SnapshotRevision = previous.SnapshotRevision,
+                    IsSnapshotComplete = true,
+                    IsSessionFinal = true,
+                    AudioStart = previous.AudioStart,
+                    AudioEnd = previous.AudioEnd,
+                    EndOfTurnConfidence = previous.EndOfTurnConfidence,
+                    Segments = previous.Segments
+                };
+                _latestStructuredTranscript = finalTranscript;
+            }
+
+            _logAction(LogLevel.Warn,
+                $"Final transcription snapshot {snapshot.Revision} was not authoritative ({reason}); preserving confirmed snapshot {finalTranscript.SnapshotRevision}.");
+            PublishCallbacks(finalTranscript, null, onTextChunk);
+        }
+
+        private void PublishCallbacks(
+            StructuredTranscript transcript,
+            string? textToPublish,
+            Action<string> onTextChunk)
+        {
+            if (textToPublish is not null)
+            {
+                try
+                {
+                    onTextChunk(textToPublish);
+                }
+                catch (Exception ex)
+                {
+                    _logAction(LogLevel.Error, $"Text chunk callback failed: {ex.Message}");
+                }
+            }
+
+            try
+            {
+                OnStructuredTranscriptionReceived?.Invoke(transcript);
             }
             catch (Exception ex)
             {
@@ -532,9 +752,10 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi
                     return;
                 }
 
-                string? mergedHypothesis = snapshot.IsFinal
-                    ? latestHypothesis
-                    : MergeSnapshotHypothesis(snapshot.DisplayFloor, _latestPublishedText, latestHypothesis);
+                string? mergedHypothesis = MergeSnapshotHypothesis(
+                    snapshot.DisplayFloor,
+                    _latestPublishedText,
+                    latestHypothesis);
 
                 if (string.IsNullOrEmpty(mergedHypothesis))
                 {
@@ -650,11 +871,16 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi
             }
         }
 
-        private void ResetRunState()
+        private void ResetRunState(bool clearTranscriptResult)
         {
             _snapshotInFlight = false;
+            _snapshotRevision = 0;
             _lastSnapshotByteCount = 0;
             _latestPublishedText = string.Empty;
+            if (clearTranscriptResult)
+            {
+                _latestStructuredTranscript = null;
+            }
 
             _capturedAudio.Dispose();
             _capturedAudio = new MemoryStream();
@@ -865,12 +1091,83 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi
 
             return new TranscriptSegment
             {
+                Id = TryGetSegmentId(root, segment),
                 Speaker = speaker,
                 Text = text.Trim(),
                 Start = TryGetSeconds(segment, "start"),
                 End = TryGetSeconds(segment, "end")
             };
         }
+
+        private static string? TryGetSegmentId(JsonElement root, JsonElement segment)
+        {
+            foreach (var element in new[] { segment, root })
+            {
+                if (element.TryGetProperty("id", out var idElement) && idElement.ValueKind == JsonValueKind.String)
+                {
+                    return idElement.GetString();
+                }
+
+                if (element.TryGetProperty("segment_id", out var segmentIdElement) &&
+                    segmentIdElement.ValueKind == JsonValueKind.String)
+                {
+                    return segmentIdElement.GetString();
+                }
+            }
+
+            return null;
+        }
+
+        private static string GetSegmentKey(TranscriptSegment segment) =>
+            !string.IsNullOrWhiteSpace(segment.Id)
+                ? $"id:{segment.Id}"
+                : string.Create(CultureInfo.InvariantCulture,
+                    $"value:{segment.Speaker}|{segment.Start?.Ticks}|{segment.End?.Ticks}|{segment.Text}");
+
+        private static TimeSpan? GetSegmentCoverageEnd(IReadOnlyList<TranscriptSegment> segments)
+        {
+            TimeSpan? result = null;
+            foreach (var segment in segments)
+            {
+                if (segment.End.HasValue && (!result.HasValue || segment.End.Value > result.Value))
+                {
+                    result = segment.End;
+                }
+            }
+
+            return result;
+        }
+
+        private static TimeSpan? GetSegmentCoverageStart(IReadOnlyList<TranscriptSegment> segments)
+        {
+            TimeSpan? result = null;
+            foreach (var segment in segments)
+            {
+                if (segment.Start.HasValue && (!result.HasValue || segment.Start.Value < result.Value))
+                {
+                    result = segment.Start;
+                }
+            }
+
+            return result;
+        }
+
+        private static bool HasStructuredDetail(IReadOnlyList<TranscriptSegment> segments) =>
+            segments.Any(segment =>
+                !string.IsNullOrWhiteSpace(segment.Id) ||
+                !string.IsNullOrWhiteSpace(segment.Speaker) ||
+                segment.ChannelIndex.HasValue ||
+                segment.Start.HasValue ||
+                segment.End.HasValue ||
+                segment.Words.Count > 0);
+
+        private static string FormatCoverage(TimeSpan? coverage) =>
+            coverage.HasValue
+                ? $"{coverage.Value.TotalSeconds.ToString("0.###", CultureInfo.InvariantCulture)}s"
+                : "unknown";
+
+        private static string FormatCoverageRange(TimeSpan? start, TimeSpan? end) =>
+            $"{FormatCoverage(start)}..{FormatCoverage(end)}";
 
         private static string FormatSegment(TranscriptSegment segment) =>
             string.IsNullOrWhiteSpace(segment.Speaker)
@@ -899,8 +1196,11 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi
 
         private readonly record struct SnapshotWorkItem(
             int SessionId,
+            long Revision,
             byte[] Audio,
             bool IsFinal,
-            string DisplayFloor);
+            string DisplayFloor,
+            TimeSpan AudioStart,
+            TimeSpan AudioEnd);
     }
 }

@@ -279,6 +279,7 @@ public sealed class XaiTranscriptionProvider : IVoiceProvider, IStructuredTransc
             ? channelIndex
             : (int?)null;
         var words = ParseWords(root);
+        var isFinal = forceFinal || GetBoolean(root, "is_final");
 
         return new StructuredTranscript
         {
@@ -287,8 +288,9 @@ public sealed class XaiTranscriptionProvider : IVoiceProvider, IStructuredTransc
             Text = text,
             Language = root.TryGetProperty("language", out var languageElement) ? languageElement.GetString() : null,
             Duration = GetSeconds(root, "duration"),
-            IsFinal = forceFinal || GetBoolean(root, "is_final"),
+            IsFinal = isFinal,
             IsSpeechFinal = forceFinal || GetBoolean(root, "speech_final"),
+            IsSnapshotComplete = isFinal,
             EndOfTurnConfidence = root.TryGetProperty("end_of_turn_confidence", out var confidence) && confidence.TryGetDouble(out var score)
                 ? score
                 : null,

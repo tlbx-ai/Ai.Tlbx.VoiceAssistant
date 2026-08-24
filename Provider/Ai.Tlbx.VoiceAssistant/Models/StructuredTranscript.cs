@@ -13,8 +13,34 @@ public sealed class StructuredTranscript
     public string Text { get; init; } = string.Empty;
     public string? Language { get; init; }
     public TimeSpan? Duration { get; init; }
+    /// <summary>
+    /// Provider-native finality. Its exact scope can be an utterance or request; use
+    /// <see cref="IsSnapshotComplete"/> and <see cref="IsSessionFinal"/> when consuming
+    /// repeated HTTP live-transcription snapshots.
+    /// </summary>
     public bool IsFinal { get; init; }
     public bool IsSpeechFinal { get; init; }
+    /// <summary>
+    /// Monotonically increasing identifier for a provider request within the current session.
+    /// Providers that do not use repeated snapshots leave this at zero.
+    /// </summary>
+    public long SnapshotRevision { get; init; }
+    /// <summary>
+    /// True when the provider request represented by <see cref="SnapshotRevision"/> completed.
+    /// </summary>
+    public bool IsSnapshotComplete { get; init; }
+    /// <summary>
+    /// True only for the authoritative state emitted when the complete live session ends.
+    /// </summary>
+    public bool IsSessionFinal { get; init; }
+    /// <summary>
+    /// Start of the audio range covered by this update, relative to the live session.
+    /// </summary>
+    public TimeSpan? AudioStart { get; init; }
+    /// <summary>
+    /// End of the audio range covered by this update, relative to the live session.
+    /// </summary>
+    public TimeSpan? AudioEnd { get; init; }
     public double? EndOfTurnConfidence { get; init; }
     public IReadOnlyList<TranscriptSegment> Segments { get; init; } = Array.Empty<TranscriptSegment>();
 
@@ -56,6 +82,11 @@ public sealed class StructuredTranscript
 
 public sealed class TranscriptSegment
 {
+    /// <summary>
+    /// Provider segment identifier when one is available. It is scoped to a provider request
+    /// and must not be assumed stable across separate snapshot requests.
+    /// </summary>
+    public string? Id { get; init; }
     public string Text { get; init; } = string.Empty;
     public string? Speaker { get; init; }
     public int? ChannelIndex { get; init; }

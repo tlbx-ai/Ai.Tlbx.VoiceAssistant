@@ -298,6 +298,20 @@ transcriber.OnUsageReceived = usage =>
     Console.WriteLine($"Uploaded audio: {usage.InputAudioDuration?.TotalSeconds:F2}s");
 };
 
+transcriber.OnStructuredTranscriptionProgress = segmentUpdate =>
+{
+    // One completed segment from an in-flight request. This update is revision-scoped
+    // progress and must not replace the current authoritative session transcript.
+    Console.WriteLine($"Snapshot {segmentUpdate.SnapshotRevision}: {segmentUpdate.Segments[0].Text}");
+};
+
+transcriber.OnStructuredTranscriptionReceived = transcript =>
+{
+    // Complete, authoritative, cumulative state only. A later partial replay can never
+    // remove confirmed turns from this callback.
+    Console.WriteLine(transcript.ToSpeakerLabeledText());
+};
+
 using var cts = new CancellationTokenSource();
 
 var liveTask = transcriber.TranscribeLive(text =>
@@ -310,6 +324,12 @@ cts.Cancel();
 await transcriber.StopAsync();
 await liveTask;
 ```
+
+For repeated HTTP snapshots, `IsSnapshotComplete` identifies a completed request and
+`IsSessionFinal` identifies the final session state. `SnapshotRevision`, `AudioStart`, and
+`AudioEnd` identify the request and its audio coverage. The legacy `IsFinal` property retains
+provider/request finality; use `IsSessionFinal` when deciding that the whole recording ended.
+`TranscriptSegment.Id` is provider-scoped and may change across separate snapshot requests.
 
 ### Transcription Models
 

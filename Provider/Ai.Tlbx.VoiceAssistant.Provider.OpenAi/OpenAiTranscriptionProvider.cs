@@ -399,9 +399,10 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi
                         ModelId = _settings?.TranscriptionModel.ToApiString(),
                         Text = text,
                         Language = GetDetectedLanguage(root) ?? _settings?.Language,
-                        IsFinal = true,
-                        IsSpeechFinal = true,
-                        Segments = new[] { new TranscriptSegment { Text = text } }
+                         IsFinal = true,
+                         IsSpeechFinal = true,
+                         IsSnapshotComplete = true,
+                         Segments = new[] { new TranscriptSegment { Text = text } }
                     });
                 }
             }

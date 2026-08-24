@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Text;
 using System.Text.Json;
 using System.Reflection;
 using System.Threading.Channels;
@@ -37,6 +38,7 @@ Assert(XaiVoiceModel.GrokVoiceLatest.ToApiString() == "grok-voice-latest", "xAI 
 Assert(XaiVoiceModel.GrokVoiceThinkFast20.ToApiString() == "grok-voice-think-fast-2.0", "xAI Think Fast 2.0 model id");
 
 VerifyOpenAiTranscriptionContextContract();
+await VerifyOpenAiHttpStructuredSnapshotMonotonicityAsync();
 VerifyGoogleInitialHistoryContract();
 VerifyXaiStructuredTranscriptionContract();
 
@@ -79,6 +81,146 @@ static void VerifyOpenAiTranscriptionContextContract()
         ?? throw new InvalidOperationException("OpenAI diarized segment parser returned no result.");
     Assert(segment.Speaker == "Johannes" && segment.Text == "Guten Morgen", "OpenAI known speaker label preservation");
     Assert(segment.Start == TimeSpan.FromSeconds(1.25) && segment.End == TimeSpan.FromSeconds(2.5), "OpenAI diarized timing preservation");
+}
+
+static async Task VerifyOpenAiHttpStructuredSnapshotMonotonicityAsync()
+{
+    await using var transcriber = new OpenAiHttpLiveTranscriber(
+        new ContractAudioHardware(),
+        new OpenAiHttpLiveTranscriptionOptions
+        {
+            TranscriptionModel = OpenAiTranscriptionModel.Gpt4oTranscribeDiarize,
+            LeadingTrimDuration = TimeSpan.Zero
+        },
+        "contract-test-key");
+
+    var authoritative = new List<StructuredTranscript>();
+    var progress = new List<StructuredTranscript>();
+    var rawText = new List<string>();
+    transcriber.OnStructuredTranscriptionReceived = authoritative.Add;
+    transcriber.OnStructuredTranscriptionProgress = progress.Add;
+
+    var snapshotType = typeof(OpenAiHttpLiveTranscriber).GetNestedType(
+        "SnapshotWorkItem",
+        BindingFlags.NonPublic)
+        ?? throw new TypeLoadException("OpenAI HTTP snapshot work item was not found.");
+    var publishCompleted = typeof(OpenAiHttpLiveTranscriber).GetMethod(
+        "PublishCompletedSnapshot",
+        BindingFlags.Instance | BindingFlags.NonPublic)
+        ?? throw new MissingMethodException(typeof(OpenAiHttpLiveTranscriber).FullName, "PublishCompletedSnapshot");
+    var publishProgress = typeof(OpenAiHttpLiveTranscriber).GetMethod(
+        "PublishStructuredProgress",
+        BindingFlags.Instance | BindingFlags.NonPublic)
+        ?? throw new MissingMethodException(typeof(OpenAiHttpLiveTranscriber).FullName, "PublishStructuredProgress");
+    var applyEvent = typeof(OpenAiHttpLiveTranscriber).GetMethod(
+        "ApplyStreamingEvent",
+        BindingFlags.Instance | BindingFlags.NonPublic)
+        ?? throw new MissingMethodException(typeof(OpenAiHttpLiveTranscriber).FullName, "ApplyStreamingEvent");
+
+    object Snapshot(long revision, bool isFinal, double audioEndSeconds, string displayFloor) =>
+        Activator.CreateInstance(
+            snapshotType,
+            BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic,
+            binder: null,
+            args:
+            [
+                0,
+                revision,
+                Array.Empty<byte>(),
+                isFinal,
+                displayFloor,
+                TimeSpan.Zero,
+                TimeSpan.FromSeconds(audioEndSeconds)
+            ],
+            culture: null)
+        ?? throw new InvalidOperationException("OpenAI HTTP snapshot work item could not be created.");
+
+    static TranscriptSegment Segment(string id, string speaker, string text, double start, double end) => new()
+    {
+        Id = id,
+        Speaker = speaker,
+        Text = text,
+        Start = TimeSpan.FromSeconds(start),
+        End = TimeSpan.FromSeconds(end)
+    };
+
+    var completeSegments = new[]
+    {
+        Segment("turn-1", "A", "Turn 1", 0, 1),
+        Segment("turn-2", "B", "Turn 2", 1, 2),
+        Segment("turn-3", "A", "Turn 3", 2, 3),
+        Segment("turn-4", "B", "Turn 4", 3, 4)
+    };
+    var completeText = string.Join(Environment.NewLine, completeSegments.Select(segment => segment.Text));
+    publishCompleted.Invoke(transcriber,
+        [Snapshot(1, false, 4, string.Empty), completeSegments, completeText, "de", (Action<string>)rawText.Add]);
+
+    Assert(authoritative.Count == 1 && authoritative[0].Segments.Count == 4,
+        "OpenAI publishes a complete diarized snapshot as the authoritative state");
+    Assert(authoritative[0].SnapshotRevision == 1 && authoritative[0].IsSnapshotComplete && !authoritative[0].IsSessionFinal,
+        "OpenAI complete snapshot metadata distinguishes request and session finality");
+    Assert(rawText.SequenceEqual([completeText]),
+        "OpenAI raw and structured callbacks publish the same accepted snapshot text");
+
+    publishProgress.Invoke(transcriber, [Snapshot(2, false, 5, completeText), completeSegments[0]]);
+    publishProgress.Invoke(transcriber, [Snapshot(2, false, 5, completeText), completeSegments[1]]);
+    Assert(authoritative.Count == 1 && progress.Count == 2,
+        "OpenAI replay segments do not replace the authoritative structured state");
+    Assert(progress.All(update => update.SnapshotRevision == 2 && !update.IsSnapshotComplete && update.Segments.Count == 1),
+        "OpenAI segment progress is explicitly revision-scoped and incomplete");
+
+    var truncatedSegments = completeSegments.Take(2).ToArray();
+    publishCompleted.Invoke(transcriber,
+        [Snapshot(2, false, 5, completeText), truncatedSegments, "Turn 1\nTurn 2", "de", (Action<string>)rawText.Add]);
+    Assert(authoritative.Count == 1 && rawText.Count == 1 && transcriber.LatestStructuredTranscript?.Segments.Count == 4,
+        "OpenAI rejects a completed snapshot whose segment coverage regresses");
+
+    publishCompleted.Invoke(transcriber,
+        [Snapshot(3, true, 6, completeText), truncatedSegments, "Turn 1\nTurn 2", "de", (Action<string>)rawText.Add]);
+    Assert(authoritative.Count == 2 && authoritative[^1].IsSessionFinal,
+        "OpenAI finalizes the last confirmed snapshot when the final request regresses");
+    Assert(authoritative[^1].Segments.Count == 4 && authoritative[^1].Text == completeText && rawText.Count == 1,
+        "OpenAI final fallback preserves the last UI text and all confirmed speaker turns");
+    Assert(ReferenceEquals(transcriber.LatestStructuredTranscript, authoritative[^1]),
+        "OpenAI exposes the same final structured state that was last delivered to the UI");
+
+    publishCompleted.Invoke(transcriber,
+        [Snapshot(4, true, 7, completeText), Array.Empty<TranscriptSegment>(), "Short fallback", "de", (Action<string>)rawText.Add]);
+    Assert(authoritative.Count == 2 && transcriber.LatestStructuredTranscript?.Segments.Count == 4 && rawText.Count == 1,
+        "OpenAI text-only fallback cannot erase a confirmed diarized state");
+
+    var duplicateSegments = new List<TranscriptSegment>();
+    var duplicateKeys = new HashSet<string>(StringComparer.Ordinal);
+    var duplicateHypothesis = new StringBuilder();
+    const string duplicateEvent =
+        "{\"type\":\"transcript.text.segment\",\"segment\":{\"id\":\"stable-turn\",\"speaker\":\"A\",\"text\":\"Einmal\",\"start\":0,\"end\":1}}";
+    var duplicateSnapshot = Snapshot(4, false, 7, completeText);
+    applyEvent.Invoke(transcriber,
+        [duplicateSnapshot, "transcript.text.segment", duplicateEvent, duplicateHypothesis, duplicateSegments, duplicateKeys, (Action<string>)rawText.Add]);
+    applyEvent.Invoke(transcriber,
+        [duplicateSnapshot, "transcript.text.segment", duplicateEvent, duplicateHypothesis, duplicateSegments, duplicateKeys, (Action<string>)rawText.Add]);
+    Assert(duplicateSegments.Count == 1 && duplicateSegments[0].Id == "stable-turn",
+        "OpenAI preserves segment identity and deduplicates replayed events within a snapshot");
+
+    transcriber.OnStructuredTranscriptionProgress = _ => throw new InvalidOperationException("expected callback failure");
+    publishProgress.Invoke(transcriber, [Snapshot(5, false, 8, completeText), completeSegments[0]]);
+    transcriber.OnStructuredTranscriptionReceived = _ => throw new InvalidOperationException("expected callback failure");
+    publishCompleted.Invoke(transcriber,
+        [Snapshot(5, false, 9, completeText), new[] { Segment("turn-5", "A", "Turn 1 bis 5", 0, 9) }, "Turn 1 bis 5", "de", (Action<string>)(_ => throw new InvalidOperationException("expected callback failure"))]);
+
+    await using var fallbackTranscriber = new OpenAiHttpLiveTranscriber(
+        new ContractAudioHardware(),
+        new OpenAiHttpLiveTranscriptionOptions { TranscriptionModel = OpenAiTranscriptionModel.Gpt4oTranscribeDiarize },
+        "contract-test-key");
+    var fallbackStructured = new List<StructuredTranscript>();
+    var fallbackRaw = new List<string>();
+    fallbackTranscriber.OnStructuredTranscriptionReceived = fallbackStructured.Add;
+    publishCompleted.Invoke(fallbackTranscriber,
+        [Snapshot(1, true, 2, string.Empty), Array.Empty<TranscriptSegment>(), "Fallback text", "de", (Action<string>)fallbackRaw.Add]);
+    Assert(fallbackStructured.Count == 1 && fallbackStructured[0].Segments.Count == 1 && fallbackStructured[0].Text == "Fallback text",
+        "OpenAI retains non-empty text when a completed request contains no speaker segments");
+    Assert(fallbackRaw.SequenceEqual(["Fallback text"]),
+        "OpenAI text-only fallback keeps raw and structured callback state synchronized");
 }
 
 static void VerifyGoogleInitialHistoryContract()
