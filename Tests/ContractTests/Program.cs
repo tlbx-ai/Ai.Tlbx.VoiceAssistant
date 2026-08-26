@@ -27,6 +27,7 @@ Assert(new OpenAiVoiceSettings().ReasoningEffort == SessionReasoningEffort.Low, 
 Assert(new OpenAiVoiceSettings().TurnDetection.SilenceDurationMs == 200, "OpenAI low-latency VAD default");
 Assert(new OpenAiVoiceSettings().Eagerness == Eagerness.high, "OpenAI low-latency semantic VAD default");
 Assert(ServiceCollectionExtensions.CreateDefaultOpenAiSettings().TurnDetection.SilenceDurationMs == 200, "OpenAI DI VAD default matches settings default");
+VerifyVadThresholdConvenienceApi();
 Assert(OpenAiRealtimeModel.GptRealtime21.ToApiString() == "gpt-realtime-2.1", "OpenAI 2.1 model id");
 Assert(OpenAiRealtimeModel.GptRealtime21Mini.ToApiString() == "gpt-realtime-2.1-mini", "OpenAI 2.1 mini model id");
 Assert(new OpenAiTranscriptionSettings().TranscriptionModel == OpenAiTranscriptionModel.GptLiveTranscribe, "OpenAI live transcription default");
@@ -574,9 +575,10 @@ static void VerifyOpenAiTurnDetectionPolicy()
         method.Invoke(null, [settings]) as TurnDetectionConfig
         ?? throw new InvalidOperationException("OpenAI turn detection builder returned no configuration.");
 
-    var serverVad = Build(new OpenAiVoiceSettings());
+    var serverVadSettings = new OpenAiVoiceSettings { VadThreshold = 0.77 };
+    var serverVad = Build(serverVadSettings);
     Assert(serverVad.Eagerness is null, "OpenAI server VAD omits semantic eagerness");
-    Assert(serverVad.SilenceDurationMs == 200 && serverVad.Threshold.HasValue, "OpenAI server VAD carries latency settings");
+    Assert(serverVad.SilenceDurationMs == 200 && serverVad.Threshold == 0.77, "OpenAI server VAD carries directly configured threshold");
 
     var semanticVad = Build(new OpenAiVoiceSettings
     {
@@ -586,6 +588,24 @@ static void VerifyOpenAiTurnDetectionPolicy()
     Assert(semanticVad.Eagerness == "high", "OpenAI semantic VAD carries eagerness");
     Assert(semanticVad.Threshold is null && semanticVad.PrefixPaddingMs is null && semanticVad.SilenceDurationMs is null,
         "OpenAI semantic VAD omits server VAD-only fields");
+}
+
+static void VerifyVadThresholdConvenienceApi()
+{
+    var openAi = new OpenAiVoiceSettings { VadThreshold = 0.72 };
+    Assert(openAi.TurnDetection.Threshold == 0.72, "OpenAI direct VAD threshold forwards to turn detection");
+    openAi.TurnDetection.Threshold = 0.68;
+    Assert(openAi.VadThreshold == 0.68, "OpenAI direct VAD threshold reflects nested updates");
+    Assert(ServiceCollectionExtensions.CreateDefaultOpenAiSettings(vadThreshold: 0.74).VadThreshold == 0.74,
+        "OpenAI default settings accept a direct VAD threshold");
+
+    var xai = new XaiVoiceSettings { TurnDetection = null, VadThreshold = 0.82 };
+    Assert(xai.TurnDetection?.Threshold == 0.82, "xAI direct VAD threshold initializes and forwards to turn detection");
+    xai.TurnDetection!.Threshold = 0.79;
+    Assert(xai.VadThreshold == 0.79, "xAI direct VAD threshold reflects nested updates");
+    Assert(Ai.Tlbx.VoiceAssistant.Provider.XAi.Extensions.ServiceCollectionExtensions
+            .CreateDefaultXaiSettings(vadThreshold: 0.81).VadThreshold == 0.81,
+        "xAI default settings accept a direct VAD threshold");
 }
 
 static void VerifyOpenAiReasoningPolicy()

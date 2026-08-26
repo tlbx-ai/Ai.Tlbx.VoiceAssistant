@@ -81,5 +81,22 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi.Extensions
                 OutputAudioFormat = "pcm16"
             };
         }
+
+        /// <summary>
+        /// Creates default OpenAI voice settings with a directly supplied server-VAD threshold.
+        /// </summary>
+        /// <param name="vadThreshold">Voice activation threshold from 0.0 to 1.0. Higher values reduce sensitivity.</param>
+        /// <param name="instructions">Custom instructions for the AI assistant.</param>
+        /// <param name="voice">The voice to use for responses.</param>
+        /// <returns>Configured OpenAI voice settings.</returns>
+        public static OpenAiVoiceSettings CreateDefaultOpenAiSettings(
+            double vadThreshold,
+            string instructions = "You are a helpful assistant.",
+            AssistantVoice voice = AssistantVoice.Marin)
+        {
+            var settings = CreateDefaultOpenAiSettings(instructions, voice);
+            settings.VadThreshold = vadThreshold;
+            return settings;
+        }
     }
 }

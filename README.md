@@ -167,6 +167,7 @@ new OpenAiVoiceSettings
     TalkingSpeed = 1.2,
     Eagerness = Eagerness.high,
     TurnDetection = new TurnDetection { SilenceDurationMs = 200 },
+    VadThreshold = 0.75,
     MostLikelySpokenLanguage = "en"
 };
 
@@ -190,7 +191,8 @@ new XaiVoiceSettings
     InputAudioKeyterms = ["TLBX"],
     ReasoningEffort = SessionReasoningEffort.High,
     TalkingSpeed = 1.1,
-    TurnDetection = new XaiTurnDetection { SilenceDurationMs = 200, Threshold = 0.85 },
+    TurnDetection = new XaiTurnDetection { SilenceDurationMs = 200 },
+    VadThreshold = 0.85,
     EnableWebSearch = true
 };
 ```
@@ -198,7 +200,8 @@ new XaiVoiceSettings
 | Setting | OpenAI | Google | xAI |
 |---------|--------|--------|-----|
 | TalkingSpeed | 0.25–1.5 | prompt-controlled | 0.7–1.5 |
-| Turn detection / VAD | `TurnDetection` | `VoiceActivityDetection` | `XaiTurnDetection` |
+| VAD sensitivity | `VadThreshold` (0.0–1.0) | `VoiceActivityDetection.StartOfSpeechSensitivity` | `VadThreshold` (0.1–0.9) |
+| Detailed turn detection | `TurnDetection` | `VoiceActivityDetection` | `XaiTurnDetection` |
 | Language hint | `MostLikelySpokenLanguage` | `LanguageCode` | `InputAudioLanguage` |
 | Context management | `AutomaticContextTruncation` | compression + session resumption | session resumption |
 | Web search | — | — | `EnableWebSearch`, `EnableXSearch` |
@@ -207,6 +210,9 @@ Runtime changes can be applied to an active provider connection with
 `await assistant.UpdateSettingsAsync(settings);`. For OpenAI this sends a
 Realtime `session.update`, which is useful for changing the active prompt,
 tool list, reasoning effort, or voice settings without restarting audio.
+For example, increase `settings.VadThreshold` and apply the settings again to
+make OpenAI or xAI less sensitive to quiet background speech and noise. The
+OpenAI threshold applies only to `server_vad`; semantic VAD uses `Eagerness`.
 
 ### Current model guidance
 

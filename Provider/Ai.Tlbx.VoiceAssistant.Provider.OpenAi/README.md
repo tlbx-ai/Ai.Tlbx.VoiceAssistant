@@ -18,11 +18,23 @@ var settings = new OpenAiVoiceSettings
 {
     Voice = AssistantVoice.Marin,
     Model = OpenAiRealtimeModel.GptRealtime21,
-    Instructions = "You are a helpful assistant."
+    Instructions = "You are a helpful assistant.",
+    VadThreshold = 0.75
 };
 
 var assistant = new VoiceAssistant(audioHardware, provider);
 await assistant.StartAsync(settings);
+```
+
+`VadThreshold` directly controls the numeric `server_vad` activation threshold
+without requiring a nested `TurnDetection` object. Higher values make speech
+detection less sensitive and can reduce false interruptions from quiet background
+audio. It is a convenience alias for `TurnDetection.Threshold` and is ignored by
+`semantic_vad`. It can also be changed during a session:
+
+```csharp
+settings.VadThreshold = 0.8;
+await assistant.UpdateSettingsAsync(settings);
 ```
 
 ## Tool-call speech policy

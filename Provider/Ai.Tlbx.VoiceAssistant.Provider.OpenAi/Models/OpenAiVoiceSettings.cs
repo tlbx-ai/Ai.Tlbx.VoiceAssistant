@@ -78,6 +78,17 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi.Models
         /// </summary>
         public TurnDetection TurnDetection { get; set; } = new();
 
+        /// <summary>
+        /// Convenience access to the numeric server-VAD activation threshold (0.0 to 1.0).
+        /// Higher values require stronger input before speech is detected and can reduce false
+        /// interruptions in noisy environments. This value is ignored when semantic VAD is used.
+        /// </summary>
+        public double VadThreshold
+        {
+            get => TurnDetection.Threshold;
+            set => TurnDetection.Threshold = value;
+        }
+
         public string MostLikelySpokenLanguage { get; set; } = "de";
 
         public string TranscriptionHint { get; set; } = "expect german business/IT/Contstruction and Tender law terms";

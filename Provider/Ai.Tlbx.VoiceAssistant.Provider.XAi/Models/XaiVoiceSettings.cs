@@ -61,6 +61,21 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.XAi.Models
         public XaiTurnDetection? TurnDetection { get; set; } = new();
 
         /// <summary>
+        /// Convenience access to the numeric server-VAD activation threshold (0.1 to 0.9).
+        /// Higher values require stronger input before speech is detected and can reduce false
+        /// interruptions in noisy environments.
+        /// </summary>
+        public double VadThreshold
+        {
+            get => TurnDetection?.Threshold ?? 0.85;
+            set
+            {
+                TurnDetection ??= new XaiTurnDetection();
+                TurnDetection.Threshold = value;
+            }
+        }
+
+        /// <summary>
         /// Enable xAI's built-in web search tool for real-time internet search.
         /// </summary>
         public bool EnableWebSearch { get; set; } = false;

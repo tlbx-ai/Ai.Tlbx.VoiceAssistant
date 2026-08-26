@@ -20,6 +20,7 @@ var settings = new XaiVoiceSettings
     Voice = XaiVoice.Eve,
     Instructions = "You are a helpful assistant.",
     TalkingSpeed = 1.1,
+    VadThreshold = 0.85,
     InputAudioLanguage = "de-DE",
     InputAudioKeyterms = ["TLBX"],
     EnableSessionResumption = true
@@ -28,6 +29,11 @@ var settings = new XaiVoiceSettings
 var assistant = new VoiceAssistant(audioHardware, provider);
 await assistant.StartAsync(settings);
 ```
+
+`VadThreshold` directly controls xAI's numeric server-VAD activation threshold
+from 0.1 to 0.9. Higher values make speech detection less sensitive and can reduce
+false interruptions from quiet background audio. It is a convenience alias for
+`TurnDetection.Threshold` and can be changed together with the active settings.
 
 `XaiVoice` contains all 28 current built-in voices. Set `VoiceId` to use a custom xAI voice ID instead. Use `GrokVoiceThinkFast20` instead of the moving `GrokVoiceLatest` alias when you need a pinned production model.
 

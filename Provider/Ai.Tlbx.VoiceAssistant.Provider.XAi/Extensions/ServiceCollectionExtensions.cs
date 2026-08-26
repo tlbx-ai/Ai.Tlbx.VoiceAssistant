@@ -68,5 +68,22 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.XAi.Extensions
                 EnableXSearch = false
             };
         }
+
+        /// <summary>
+        /// Creates default xAI voice settings with a directly supplied server-VAD threshold.
+        /// </summary>
+        /// <param name="vadThreshold">Voice activation threshold from 0.1 to 0.9. Higher values reduce sensitivity.</param>
+        /// <param name="instructions">Custom instructions for the AI assistant.</param>
+        /// <param name="voice">The voice to use for responses.</param>
+        /// <returns>Configured xAI voice settings.</returns>
+        public static XaiVoiceSettings CreateDefaultXaiSettings(
+            double vadThreshold,
+            string instructions = "You are a helpful assistant.",
+            XaiVoice voice = XaiVoice.Eve)
+        {
+            var settings = CreateDefaultXaiSettings(instructions, voice);
+            settings.VadThreshold = vadThreshold;
+            return settings;
+        }
     }
 }
