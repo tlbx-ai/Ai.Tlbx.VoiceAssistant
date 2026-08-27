@@ -131,6 +131,7 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.XAi.Models
 
         /// <summary>
         /// xAI reasoning effort. The current Voice Agent API accepts None or High for latest/think-fast models.
+        /// When omitted, Grok Voice Think Fast 2.0 uses the provider default of High.
         /// </summary>
         public SessionReasoningEffort? ReasoningEffort { get; set; }
 

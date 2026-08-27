@@ -220,7 +220,7 @@ OpenAI threshold applies only to `server_vad`; semantic VAD uses `Eagerness`.
 - OpenAI voice settings default to `SessionReasoningEffort.Low`, 200 ms server-VAD silence detection, and `Eagerness.high` when semantic VAD is selected. The selected model remains entirely controlled by `OpenAiVoiceSettings.Model`; the library never switches a session to the mini model automatically.
 - `ToolCallPreambleMode.Disabled` is a provider instruction, not an audio gate: every received audio delta is forwarded immediately in both WebSocket and Direct WebRTC sessions.
 - Google: `GoogleModel.Gemini31FlashLivePreview` is the current default for the Gemini Live API. `GoogleModel.Gemini25FlashNativeAudioLatest` is also available for testing Google's rolling native-audio Live API alias. The `gemini-3.1-flash-tts-preview` and older `gemini-2.5-*-tts` models are text-to-speech `generateContent` models, not realtime `bidiGenerateContent` voice-session models, so they are not exposed through this realtime provider.
-- xAI: `XaiVoiceModel.GrokVoiceLatest` follows xAI's moving alias, which points to `grok-voice-think-fast-2.0` as of August 2026. Use `GrokVoiceThinkFast20` to pin the current flagship; the 1.0 models remain only for compatibility.
+- xAI: `XaiVoiceModel.GrokVoiceLatest` follows xAI's moving alias, which has pointed to `grok-voice-think-fast-2.0` since August 5, 2026. Use `GrokVoiceThinkFast20` to pin the current flagship; the 1.0 models remain only for compatibility. Think Fast 2.0 uses `high` reasoning when `ReasoningEffort` is omitted and accepts `None` to disable it. xAI prices it at USD 0.08 per audio minute plus USD 0.004 per text input.
 
 ### xAI Tool Continuations
 

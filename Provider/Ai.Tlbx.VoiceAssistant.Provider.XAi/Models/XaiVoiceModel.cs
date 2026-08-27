@@ -14,7 +14,8 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.XAi.Models
         GrokVoiceLatest,
 
         /// <summary>
-        /// xAI's current flagship voice model, released August 5, 2026.
+        /// xAI's current flagship voice model, released July 29, 2026.
+        /// The grok-voice-latest alias began routing to this version on August 5, 2026.
         /// </summary>
         GrokVoiceThinkFast20,
 

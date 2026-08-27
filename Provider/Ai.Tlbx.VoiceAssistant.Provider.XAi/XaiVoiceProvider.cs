@@ -397,7 +397,8 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.XAi
             if (settings.ReasoningEffort.HasValue && settings.Model == XaiVoiceModel.GrokVoiceFast10)
 #pragma warning restore CS0618
             {
-                throw new InvalidOperationException("xAI reasoning effort is supported only by grok-voice-latest and grok-voice-think-fast-1.0.");
+                throw new InvalidOperationException(
+                    "xAI reasoning effort is supported by grok-voice-latest and grok-voice-think-fast models, including 2.0.");
             }
 
             if (settings.ReasoningEffort is not null and not SessionReasoningEffort.None and not SessionReasoningEffort.High)

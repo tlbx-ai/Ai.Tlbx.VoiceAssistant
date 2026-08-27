@@ -37,6 +37,8 @@ Assert(OpenAiTranscriptionModel.GptTranscribe.ToApiString() == "gpt-transcribe",
 Assert(new XaiVoiceSettings().Model == XaiVoiceModel.GrokVoiceLatest, "xAI default model");
 Assert(XaiVoiceModel.GrokVoiceLatest.ToApiString() == "grok-voice-latest", "xAI latest model id");
 Assert(XaiVoiceModel.GrokVoiceThinkFast20.ToApiString() == "grok-voice-think-fast-2.0", "xAI Think Fast 2.0 model id");
+Assert(XaiVoiceModelExtensions.TryParseApiString("grok-voice-think-fast-2.0", out var xaiThinkFast20) &&
+    xaiThinkFast20 == XaiVoiceModel.GrokVoiceThinkFast20, "xAI Think Fast 2.0 model parsing");
 
 VerifyOpenAiTranscriptionContextContract();
 await VerifyOpenAiHttpStructuredSnapshotMonotonicityAsync();
@@ -56,6 +58,11 @@ await VerifyFailedStartCleanupAsync();
 if (args.Contains("--live-provider-smoke", StringComparer.Ordinal))
 {
     await VerifyLiveProviderConnectionsAsync();
+}
+
+if (args.Contains("--live-xai-voice-smoke", StringComparer.Ordinal))
+{
+    await VerifyLiveXaiVoice20ConnectionAsync();
 }
 
 static void VerifyOpenAiTranscriptionContextContract()
@@ -268,6 +275,8 @@ static async Task VerifyLiveProviderConnectionsAsync()
     }
     Console.WriteLine("xAI streaming transcription connection passed.");
 
+    await VerifyLiveXaiVoice20ConnectionAsync();
+
     await using (var google = new GoogleVoiceProvider(Environment.GetEnvironmentVariable("GEMINI_API_KEY")))
     {
         await google.ConnectAsync(new GoogleVoiceSettings
@@ -281,6 +290,22 @@ static async Task VerifyLiveProviderConnectionsAsync()
     Console.WriteLine("Gemini 3.1 Live API connection passed.");
 
     Console.WriteLine("Live provider connection smoke tests passed.");
+}
+
+static async Task VerifyLiveXaiVoice20ConnectionAsync()
+{
+    await using var xai = new XaiVoiceProvider();
+    await xai.ConnectAsync(new XaiVoiceSettings
+    {
+        Model = XaiVoiceModel.GrokVoiceThinkFast20,
+        Instructions = "Connection verification only.",
+        ReasoningEffort = SessionReasoningEffort.High,
+        EnableInputAudioTranscription = false,
+        EnableSessionResumption = false
+    });
+    Assert(xai.IsConnected, "xAI Grok Voice Think Fast 2.0 connection");
+    await xai.DisconnectAsync();
+    Console.WriteLine("xAI Grok Voice Think Fast 2.0 connection passed.");
 }
 
 static void VerifyXaiStructuredTranscriptionContract()

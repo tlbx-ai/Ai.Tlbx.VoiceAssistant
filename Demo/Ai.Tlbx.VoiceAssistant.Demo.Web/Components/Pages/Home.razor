@@ -547,7 +547,7 @@
         return _selectedProviderString switch
         {
             "OpenAI" => "Use GPT Realtime 2 for the new reasoning voice model, or 1.5 as the A/B baseline.",
-            "xAI" => "Use Think Fast for the new model, or Fast as the A/B baseline.",
+            "xAI" => "Latest currently uses Think Fast 2.0; pin GrokVoiceThinkFast20 for deterministic production rollout.",
             _ => "Obsolete models stay selectable here for manual compatibility checks."
         };
     }
