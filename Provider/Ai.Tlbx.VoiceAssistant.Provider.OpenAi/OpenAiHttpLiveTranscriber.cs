@@ -22,12 +22,13 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi
     /// </summary>
     public sealed class OpenAiHttpLiveTranscriber : IAsyncDisposable, IStructuredTranscriptionProvider, IStructuredTranscriptionProgressProvider
     {
-        private const string TRANSCRIPTION_ENDPOINT = "https://api.openai.com/v1/audio/transcriptions";
+        private readonly string _apiKey;
         private const int SAMPLE_RATE = 24000;
         private const int BYTES_PER_SECOND = SAMPLE_RATE * 2; // mono PCM16
 
         private readonly IAudioHardwareAccess _hardwareAccess;
         private readonly HttpClient _httpClient;
+        private readonly bool _ownsHttpClient;
         private readonly Action<LogLevel, string> _logAction;
         private readonly object _sync = new();
 
@@ -81,6 +82,17 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi
             OpenAiHttpLiveTranscriptionOptions? options = null,
             string? apiKey = null,
             Action<LogLevel, string>? logAction = null)
+            : this(hardwareAccess, options, apiKey, logAction, null)
+        {
+        }
+
+        /// <summary>Uses a caller-owned HTTP client, including its proxy and TLS configuration.</summary>
+        public OpenAiHttpLiveTranscriber(
+            IAudioHardwareAccess hardwareAccess,
+            OpenAiHttpLiveTranscriptionOptions? options,
+            string? apiKey,
+            Action<LogLevel, string>? logAction,
+            HttpClient? httpClient)
         {
             _hardwareAccess = hardwareAccess ?? throw new ArgumentNullException(nameof(hardwareAccess));
             _logAction = logAction ?? ((level, message) => { /* no-op */ });
@@ -89,11 +101,12 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi
             var resolvedApiKey = apiKey ?? Environment.GetEnvironmentVariable("OPENAI_API_KEY")
                 ?? throw new InvalidOperationException("OpenAI API key must be provided or set in OPENAI_API_KEY environment variable");
 
-            _httpClient = new HttpClient
+            _ownsHttpClient = httpClient == null;
+            _httpClient = httpClient ?? new HttpClient
             {
                 Timeout = TimeSpan.FromSeconds(30)
             };
-            _httpClient.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", resolvedApiKey);
+            _apiKey = resolvedApiKey;
         }
 
         /// <summary>
@@ -280,7 +293,7 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi
             using var audioContent = new ByteArrayContent(wavAudio);
             audioContent.Headers.ContentType = new MediaTypeHeaderValue("audio/wav");
             form.Add(audioContent, "file", $"hold-transcribe-{snapshot.SessionId}.wav");
-            form.Add(new StringContent(Options.TranscriptionModel.ToApiString()), "model");
+            form.Add(new StringContent(Options.GetModelId()), "model");
             form.Add(new StringContent("true"), "stream");
 
             var useDiarizedJson = Options.TranscriptionModel.SupportsDiarizedJson();
@@ -350,11 +363,12 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi
                 }
             }
 
-            using var request = new HttpRequestMessage(HttpMethod.Post, TRANSCRIPTION_ENDPOINT)
+            using var request = new HttpRequestMessage(HttpMethod.Post, Options.Connection.BuildUri(fallbackApiKey: _apiKey))
             {
                 Content = form
             };
 
+            Options.Connection.Apply(request, _apiKey);
             using var response = await _httpClient.SendAsync(
                 request,
                 HttpCompletionOption.ResponseHeadersRead,
@@ -369,7 +383,7 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi
             OnUsageReceived?.Invoke(new UsageReport
             {
                 ProviderId = "openai",
-                ModelId = Options.TranscriptionModel.ToApiString(),
+                ModelId = Options.GetModelId(),
                 OperationType = UsageOperationType.Transcription,
                 MeasurementSource = UsageMeasurementSource.ClientMeasured,
                 InputAudioDuration = TimeSpan.FromSeconds(snapshot.Audio.Length / (double)BYTES_PER_SECOND),
@@ -522,7 +536,7 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi
                 OnStructuredTranscriptionProgress?.Invoke(new StructuredTranscript
                 {
                     ProviderId = "openai",
-                    ModelId = Options.TranscriptionModel.ToApiString(),
+                    ModelId = Options.GetModelId(),
                     Text = segment.Text,
                     Language = Options.Language,
                     IsFinal = false,
@@ -612,7 +626,7 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi
                         transcriptToPublish = new StructuredTranscript
                         {
                             ProviderId = "openai",
-                            ModelId = Options.TranscriptionModel.ToApiString(),
+                            ModelId = Options.GetModelId(),
                             Text = acceptedText,
                             Language = detectedLanguage ?? Options.Language,
                             Duration = snapshot.AudioEnd - snapshot.AudioStart,
@@ -987,7 +1001,7 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi
                     _isDisposed = true;
                 }
 
-                _httpClient.Dispose();
+                if (_ownsHttpClient) _httpClient.Dispose();
             }
         }
 

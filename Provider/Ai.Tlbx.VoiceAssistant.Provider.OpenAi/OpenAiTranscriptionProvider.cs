@@ -16,7 +16,6 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi
 {
     public sealed class OpenAiTranscriptionProvider : IVoiceProvider, IStructuredTranscriptionProvider
     {
-        private const string REALTIME_WEBSOCKET_ENDPOINT = "wss://api.openai.com/v1/realtime";
         private const int CONNECTION_TIMEOUT_MS = 10000;
         private const int AUDIO_BUFFER_SIZE = 32384;
         private const int PCM16_BYTES_PER_SECOND = 24000 * 2;
@@ -68,9 +67,9 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi
                 OnStatusChanged?.Invoke("Connecting to OpenAI Transcription...");
 
                 _webSocket = new ClientWebSocket();
-                _webSocket.Options.SetRequestHeader("Authorization", $"Bearer {_apiKey}");
+                _settings.Connection.Apply(_webSocket.Options, _apiKey);
                 var connectionCts = new CancellationTokenSource(CONNECTION_TIMEOUT_MS);
-                var uri = new Uri($"{REALTIME_WEBSOCKET_ENDPOINT}?intent=transcription");
+                var uri = _settings.Connection.BuildUri("intent=transcription", _apiKey);
                 await _webSocket.ConnectAsync(uri, connectionCts.Token);
                 connectionCts.Dispose();
 
@@ -182,7 +181,7 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi
                             },
                             Transcription = new TranscriptionConfig
                             {
-                                Model = _settings.TranscriptionModel.ToApiString(),
+                                Model = _settings.GetModelId(),
                                 Prompt = _settings.TranscriptionModel.SupportsTranscriptionPrompt()
                                     ? _settings.TranscriptionPrompt
                                     : null,
@@ -396,7 +395,7 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi
                     OnStructuredTranscriptionReceived?.Invoke(new StructuredTranscript
                     {
                         ProviderId = "openai",
-                        ModelId = _settings?.TranscriptionModel.ToApiString(),
+                        ModelId = _settings?.GetModelId(),
                         Text = text,
                         Language = GetDetectedLanguage(root) ?? _settings?.Language,
                          IsFinal = true,
@@ -443,7 +442,7 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi
             var duration = audioBytes > 0
                 ? TimeSpan.FromSeconds(audioBytes / (double)PCM16_BYTES_PER_SECOND)
                 : (TimeSpan?)null;
-            var modelId = _settings?.TranscriptionModel.ToApiString();
+            var modelId = _settings?.GetModelId();
             var operationId = completedEvent.HasValue &&
                 completedEvent.Value.TryGetProperty("item_id", out var itemId)
                     ? itemId.GetString()

@@ -9,6 +9,14 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.XAi.Models
     /// </summary>
     public class XaiVoiceSettings : IVoiceSettings
     {
+        /// <summary>Routing and authentication, read on each request or reconnect.</summary>
+        public ProviderEndpointOptions Connection { get; set; } = new("wss://api.x.ai/v1/realtime");
+
+        /// <summary>Exact gateway model/deployment ID. Null uses the built-in model; the enum still selects protocol capabilities.</summary>
+        public string? ModelId { get; set; }
+        public string GetModelId() => string.IsNullOrWhiteSpace(ModelId) ? Model.ToApiString() : ModelId;
+        public string InputAudioTranscriptionModelId { get; set; } = "grok-transcribe";
+
         /// <summary>
         /// Instructions for the AI assistant's behavior and personality.
         /// </summary>

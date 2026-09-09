@@ -23,7 +23,6 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.XAi
     /// </summary>
     public sealed class XaiVoiceProvider : IVoiceProvider
     {
-        private const string REALTIME_WEBSOCKET_ENDPOINT = "wss://api.x.ai/v1/realtime";
         private const int CONNECTION_TIMEOUT_MS = 10000;
         private const int SESSION_UPDATE_TIMEOUT_MS = 10000;
         private const int AUDIO_BUFFER_SIZE = 32384;
@@ -139,16 +138,16 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.XAi
                 OnStatusChanged?.Invoke("Connecting to xAI...");
 
                 _webSocket = new ClientWebSocket();
-                _webSocket.Options.SetRequestHeader("Authorization", $"Bearer {_apiKey}");
+                _settings.Connection.Apply(_webSocket.Options, _apiKey);
                 _sessionUpdateCompletionSource = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
 
-                var query = $"model={Uri.EscapeDataString(_settings.Model.ToApiString())}";
+                var query = $"model={Uri.EscapeDataString(_settings.GetModelId())}";
                 if (_settings.EnableSessionResumption && !string.IsNullOrWhiteSpace(_settings.ConversationId))
                 {
                     query += $"&conversation_id={Uri.EscapeDataString(_settings.ConversationId)}";
                 }
 
-                var uri = new Uri($"{REALTIME_WEBSOCKET_ENDPOINT}?{query}");
+                var uri = _settings.Connection.BuildUri(query, _apiKey);
                 using (var connectionCts = new CancellationTokenSource(CONNECTION_TIMEOUT_MS))
                 {
                     await _webSocket.ConnectAsync(uri, connectionCts.Token);
@@ -518,6 +517,7 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.XAi
                             Transcription = _settings.EnableInputAudioTranscription
                                 ? new XaiInputAudioTranscriptionConfig
                                 {
+                                    Model = _settings.InputAudioTranscriptionModelId,
                                     LanguageHint = _settings.InputAudioLanguage,
                                     Keyterms = _settings.InputAudioKeyterms.Count > 0 ? _settings.InputAudioKeyterms : null
                                 }
@@ -1051,7 +1051,7 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.XAi
             var textEvents = Interlocked.Exchange(ref _pendingBillableTextInputEvents, 0);
             var report = XaiRealtimeUsageMapper.CreateUsageReport(
                 usage,
-                _settings?.Model.ToApiString(),
+                _settings?.GetModelId(),
                 operationId,
                 inputAudioBytes > 0
                     ? TimeSpan.FromSeconds(inputAudioBytes / (double)PCM16_BYTES_PER_SECOND)

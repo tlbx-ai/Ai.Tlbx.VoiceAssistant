@@ -9,7 +9,6 @@ using System.Threading;
 using System.Threading.Channels;
 using System.Threading.Tasks;
 using System.Net.Http;
-using System.Net.Http.Headers;
 using Ai.Tlbx.VoiceAssistant.Interfaces;
 using Ai.Tlbx.VoiceAssistant.Models;
 using Ai.Tlbx.VoiceAssistant.Reflection;
@@ -24,8 +23,6 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi
     /// </summary>
     public sealed class OpenAiVoiceProvider : IVoiceProvider
     {
-        private const string REALTIME_WEBSOCKET_ENDPOINT = "wss://api.openai.com/v1/realtime";
-        private const string REALTIME_SESSION_ENDPOINT = "https://api.openai.com/v1/realtime/client_secrets";
         private const int CONNECTION_TIMEOUT_MS = 10000;
         private const int DISCONNECTION_TIMEOUT_MS = 5000;
         private const int AUDIO_BUFFER_SIZE = 32384;
@@ -157,7 +154,7 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi
                 Session = new SessionSpec
                 {
                     Type = "realtime",
-                    Model = _settings.Model.ToApiString(),
+                    Model = _settings.GetModelId(),
                     Instructions = BuildInstructions(_settings),
                     Reasoning = BuildReasoningConfig(_settings)
                 }
@@ -165,15 +162,15 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi
 
             var json = JsonSerializer.Serialize(request, OpenAiJsonContext.Default.ClientSecretRequest);
 
-            using var httpRequest = new HttpRequestMessage(HttpMethod.Post, REALTIME_SESSION_ENDPOINT);
-            httpRequest.Headers.Authorization = new AuthenticationHeaderValue("Bearer", _apiKey);
+            using var httpRequest = new HttpRequestMessage(HttpMethod.Post, _settings.ClientSecretsConnection.BuildUri(fallbackApiKey: _apiKey));
             if (!string.IsNullOrWhiteSpace(_settings.SafetyIdentifier))
             {
                 httpRequest.Headers.TryAddWithoutValidation("OpenAI-Safety-Identifier", _settings.SafetyIdentifier);
             }
             httpRequest.Content = new StringContent(json, Encoding.UTF8, "application/json");
 
-            var response = await _httpClient.SendAsync(httpRequest);
+            _settings.ClientSecretsConnection.Apply(httpRequest, _apiKey);
+            using var response = await _httpClient.SendAsync(httpRequest);
             
             if (!response.IsSuccessStatusCode)
             {
@@ -235,18 +232,18 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi
                 // Getting ephemeral key for session
                 
                 // Get ephemeral key first
-                var ephemeralKey = await CreateSessionAsync();
+                var ephemeralKey = _settings.UseEphemeralKey ? await CreateSessionAsync() : _apiKey;
                 
                 OnStatusChanged?.Invoke("Connecting to OpenAI...");
                 // Establishing WebSocket connection
 
                 _webSocket = new ClientWebSocket();
-                _webSocket.Options.SetRequestHeader("Authorization", $"Bearer {ephemeralKey}");
+                _settings.Connection.Apply(_webSocket.Options, ephemeralKey);
                 // Beta header removed for production API
 
                 using var connectionCts = new CancellationTokenSource(CONNECTION_TIMEOUT_MS);
 
-                var uri = new Uri($"{REALTIME_WEBSOCKET_ENDPOINT}?model={_settings.Model.ToApiString()}");
+                var uri = _settings.Connection.BuildUri($"model={Uri.EscapeDataString(_settings.GetModelId())}", ephemeralKey);
                 await _webSocket.ConnectAsync(uri, connectionCts.Token);
 
                 // Start the message receiving task
@@ -479,7 +476,7 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi
                             Transcription = _settings.InputAudioTranscription.Enabled
                                 ? new TranscriptionConfig
                                 {
-                                    Model = _settings.InputAudioTranscription.Model.ToApiString(),
+                                    Model = _settings.InputAudioTranscription.GetModelId(),
                                     Prompt = _settings.InputAudioTranscription.Model.SupportsTranscriptionPrompt()
                                         ? _settings.InputAudioTranscription.Prompt
                                         : null
@@ -784,7 +781,7 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi
                         _logAction(LogLevel.Info, "Session created by OpenAI");
                         break;
                     case "session.updated":
-                        // Session updated - normal operation, no need to log
+                        _logAction(LogLevel.Info, "Session updated by OpenAI");
                         break;
                     case "response.created":
                         HandleResponseCreated(root);
@@ -1126,7 +1123,7 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi
                     : _currentResponseId;
                 var modelId = response.TryGetProperty("model", out var modelElement)
                     ? modelElement.GetString()
-                    : _settings?.Model.ToApiString();
+                    : _settings?.GetModelId();
 
                 report = OpenAiRealtimeUsageMapper.CreateUsageReport(
                     usage,

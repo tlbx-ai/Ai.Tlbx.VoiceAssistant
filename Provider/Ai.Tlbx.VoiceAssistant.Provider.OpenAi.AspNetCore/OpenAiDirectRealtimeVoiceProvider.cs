@@ -278,7 +278,7 @@ public sealed class OpenAiDirectRealtimeVoiceProvider : IDirectBrowserVoiceProvi
         using var document = JsonDocument.Parse(usageJson);
         var report = OpenAiRealtimeUsageMapper.CreateUsageReport(
             document.RootElement,
-            modelId ?? _settings?.Model.ToApiString(),
+            modelId ?? _settings?.GetModelId(),
             responseId,
             UsageOperationType.VoiceResponse);
         OnUsageReceived?.Invoke(report);
@@ -291,7 +291,7 @@ public sealed class OpenAiDirectRealtimeVoiceProvider : IDirectBrowserVoiceProvi
         using var document = JsonDocument.Parse(usageJson);
         var report = OpenAiRealtimeUsageMapper.CreateUsageReport(
             document.RootElement,
-            _settings?.InputAudioTranscription.Model.ToApiString(),
+            _settings?.InputAudioTranscription.GetModelId(),
             itemId,
             UsageOperationType.InputTranscription);
         OnUsageReceived?.Invoke(report);

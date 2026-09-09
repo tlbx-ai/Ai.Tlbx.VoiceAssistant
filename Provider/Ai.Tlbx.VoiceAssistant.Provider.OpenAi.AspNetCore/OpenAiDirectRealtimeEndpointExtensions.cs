@@ -1,4 +1,3 @@
-using System.Net.Http.Headers;
 using System.Net;
 using System.Net.WebSockets;
 using System.Text;
@@ -16,8 +15,6 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi.AspNetCore;
 
 public static class OpenAiDirectRealtimeEndpointExtensions
 {
-    private const string ClientSecretsEndpoint = "https://api.openai.com/v1/realtime/client_secrets";
-
     public static IServiceCollection AddOpenAiDirectRealtimeVoice(
         this IServiceCollection services,
         Action<OpenAiDirectRealtimeOptions>? configure = null)
@@ -98,7 +95,8 @@ public static class OpenAiDirectRealtimeEndpointExtensions
             {
                 VoiceSessionId = voiceSessionId,
                 ClientSecret = clientSecret,
-                Model = spec.Settings.Model.ToApiString(),
+                RealtimeCallsEndpoint = new ProviderEndpointOptions(spec.Settings.RealtimeCallsEndpoint).BuildUri().AbsoluteUri,
+                Model = spec.Settings.GetModelId(),
                 Voice = spec.Settings.Voice.ToString().ToLowerInvariant(),
                 ControlUrl = $"{NormalizePrefix(options.RoutePrefix)}/control/{voiceSessionId}",
                 Channel = spec.Channel
@@ -316,15 +314,16 @@ public static class OpenAiDirectRealtimeEndpointExtensions
         };
 
         var requestJson = JsonSerializer.Serialize(request, OpenAiDirectRealtimeJsonContext.Default.DirectClientSecretRequest);
-        using var httpRequest = new HttpRequestMessage(HttpMethod.Post, ClientSecretsEndpoint);
-        httpRequest.Headers.Authorization = new AuthenticationHeaderValue("Bearer", spec.OpenAiApiKey);
+        using var httpRequest = new HttpRequestMessage(HttpMethod.Post, spec.Settings.ClientSecretsConnection.BuildUri(fallbackApiKey: spec.OpenAiApiKey));
         if (!string.IsNullOrWhiteSpace(spec.SafetyIdentifier))
         {
             httpRequest.Headers.TryAddWithoutValidation("OpenAI-Safety-Identifier", spec.SafetyIdentifier);
         }
 
         httpRequest.Content = new StringContent(requestJson, Encoding.UTF8, "application/json");
-        using var httpClient = new HttpClient();
+        using var ownedClient = options.ClientSecretsHttpClient == null ? new HttpClient() : null;
+        var httpClient = options.ClientSecretsHttpClient ?? ownedClient!;
+        spec.Settings.ClientSecretsConnection.Apply(httpRequest, spec.OpenAiApiKey);
         using var response = await httpClient.SendAsync(httpRequest, cancellationToken);
 
         if (!response.IsSuccessStatusCode)

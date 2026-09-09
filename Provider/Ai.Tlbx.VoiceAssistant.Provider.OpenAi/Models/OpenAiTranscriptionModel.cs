@@ -78,7 +78,8 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi.Models
 
         public static bool SupportsRealtimeTurnDetection(this OpenAiTranscriptionModel model)
         {
-            return model != OpenAiTranscriptionModel.GptRealtimeWhisper &&
+            return model != OpenAiTranscriptionModel.GptLiveTranscribe &&
+                model != OpenAiTranscriptionModel.GptRealtimeWhisper &&
                 model != OpenAiTranscriptionModel.Gpt4oTranscribeDiarize;
         }
 

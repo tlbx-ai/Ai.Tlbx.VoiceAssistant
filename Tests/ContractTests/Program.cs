@@ -18,6 +18,12 @@ using Ai.Tlbx.VoiceAssistant.Provider.XAi;
 using Ai.Tlbx.VoiceAssistant.Provider.XAi.Models;
 using Ai.Tlbx.VoiceAssistant.Provider.XAi.Protocol;
 
+if (args.Contains("--live-custom-config-smoke", StringComparer.Ordinal))
+{
+    await LiveCustomConfigurationTests.RunAsync();
+    return;
+}
+
 Assert(Enum.GetValues<AssistantVoice>().Length == 10, "OpenAI voice roster");
 Assert(Enum.GetValues<GoogleVoice>().Length == 30, "Gemini voice roster");
 Assert(Enum.GetValues<XaiVoice>().Length == 28, "xAI voice roster");
@@ -28,6 +34,7 @@ Assert(new OpenAiVoiceSettings().TurnDetection.SilenceDurationMs == 200, "OpenAI
 Assert(new OpenAiVoiceSettings().Eagerness == Eagerness.high, "OpenAI low-latency semantic VAD default");
 Assert(ServiceCollectionExtensions.CreateDefaultOpenAiSettings().TurnDetection.SilenceDurationMs == 200, "OpenAI DI VAD default matches settings default");
 VerifyVadThresholdConvenienceApi();
+await ProxyConfigurationTests.RunAsync();
 Assert(OpenAiRealtimeModel.GptRealtime21.ToApiString() == "gpt-realtime-2.1", "OpenAI 2.1 model id");
 Assert(OpenAiRealtimeModel.GptRealtime21Mini.ToApiString() == "gpt-realtime-2.1-mini", "OpenAI 2.1 mini model id");
 Assert(new OpenAiTranscriptionSettings().TranscriptionModel == OpenAiTranscriptionModel.GptLiveTranscribe, "OpenAI live transcription default");
@@ -313,7 +320,7 @@ static void VerifyXaiStructuredTranscriptionContract()
     var endpointBuilder = typeof(XaiTranscriptionProvider).GetMethod("BuildEndpoint", BindingFlags.Static | BindingFlags.NonPublic)
         ?? throw new MissingMethodException(typeof(XaiTranscriptionProvider).FullName, "BuildEndpoint");
     var endpoint = endpointBuilder.Invoke(null,
-        [new XaiTranscriptionSettings { Language = "de", Keyterms = ["TLBX Voice"], Diarize = true }]) as Uri
+        [new XaiTranscriptionSettings { Language = "de", Keyterms = ["TLBX Voice"], Diarize = true }, null]) as Uri
         ?? throw new InvalidOperationException("xAI transcription endpoint builder returned no URI.");
     Assert(endpoint.Query.Contains("diarize=true", StringComparison.Ordinal), "xAI streaming diarization query");
     Assert(endpoint.Query.Contains("smart_turn=0.7", StringComparison.Ordinal), "xAI Smart Turn query");
@@ -339,7 +346,7 @@ static void VerifyXaiStructuredTranscriptionContract()
           ]
         }
         """);
-    var transcript = parser.Invoke(null, [eventJson.RootElement, false]) as StructuredTranscript
+    var transcript = parser.Invoke(null, [eventJson.RootElement, false, "grok-transcribe"]) as StructuredTranscript
         ?? throw new InvalidOperationException("xAI transcription parser returned no result.");
     Assert(transcript.IsFinal && transcript.IsSpeechFinal, "xAI final turn flags");
     Assert(transcript.Segments.Count == 2, "xAI words grouped into speaker segments");

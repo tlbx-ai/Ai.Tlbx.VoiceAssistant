@@ -10,6 +10,19 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi.Models
     /// </summary>
     public class OpenAiVoiceSettings : IVoiceSettings
     {
+        /// <summary>Routing and authentication, read on each request or reconnect.</summary>
+        public ProviderEndpointOptions Connection { get; set; } = new("wss://api.openai.com/v1/realtime");
+
+        /// <summary>Exact gateway model/deployment ID. Null uses the built-in model; the enum still selects protocol capabilities.</summary>
+        public string? ModelId { get; set; }
+        public string GetModelId() => string.IsNullOrWhiteSpace(ModelId) ? Model.ToApiString() : ModelId;
+
+        public ProviderEndpointOptions ClientSecretsConnection { get; set; } = new("https://api.openai.com/v1/realtime/client_secrets");
+        /// <summary>False connects directly with the API key, for gateways without client_secrets.</summary>
+        public bool UseEphemeralKey { get; set; } = true;
+        /// <summary>Browser-accessible SDP endpoint. Requires CORS and ephemeral bearer authentication.</summary>
+        public string RealtimeCallsEndpoint { get; set; } = "https://api.openai.com/v1/realtime/calls";
+
         /// <summary>
         /// Instructions for the AI assistant's behavior and personality.
         /// </summary>
@@ -186,6 +199,8 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi.Models
     /// </summary>
     public class InputAudioTranscription
     {
+        public string? ModelId { get; set; }
+        public string GetModelId() => string.IsNullOrWhiteSpace(ModelId) ? Model.ToApiString() : ModelId;
         public OpenAiTranscriptionModel Model { get; set; } = OpenAiTranscriptionModel.Gpt4oTranscribe;
 
         /// <summary>

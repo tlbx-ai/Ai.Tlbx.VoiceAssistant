@@ -6,6 +6,13 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi.Models
 {
     public class OpenAiTranscriptionSettings : IVoiceSettings
     {
+        /// <summary>Routing and authentication, read on each request or reconnect.</summary>
+        public ProviderEndpointOptions Connection { get; set; } = new("wss://api.openai.com/v1/realtime");
+
+        /// <summary>Exact gateway model/deployment ID. Null uses the built-in model; the enum still selects protocol capabilities.</summary>
+        public string? ModelId { get; set; }
+        public string GetModelId() => string.IsNullOrWhiteSpace(ModelId) ? TranscriptionModel.ToApiString() : ModelId;
+
         public string Instructions { get; set; } = string.Empty;
         public List<IVoiceTool> Tools { get; set; } = new();
         public double TalkingSpeed { get; set; } = 1.0;

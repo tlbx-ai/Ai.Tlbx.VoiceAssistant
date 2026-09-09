@@ -1,3 +1,4 @@
+using Ai.Tlbx.VoiceAssistant.Models;
 using System;
 using System.Collections.Generic;
 
@@ -9,6 +10,13 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi.Models
     /// </summary>
     public sealed class OpenAiHttpLiveTranscriptionOptions
     {
+        /// <summary>Routing and authentication, read on each request or reconnect.</summary>
+        public ProviderEndpointOptions Connection { get; set; } = new("https://api.openai.com/v1/audio/transcriptions");
+
+        /// <summary>Exact gateway model/deployment ID. Null uses the built-in model; the enum still selects protocol capabilities.</summary>
+        public string? ModelId { get; set; }
+        public string GetModelId() => string.IsNullOrWhiteSpace(ModelId) ? TranscriptionModel.ToApiString() : ModelId;
+
         /// <summary>
         /// The transcription model to use. Defaults to OpenAI's current recommended HTTP transcription model.
         /// </summary>

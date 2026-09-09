@@ -7,6 +7,9 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi.AspNetCore;
 
 public sealed class OpenAiDirectRealtimeOptions
 {
+    /// <summary>Optional caller-owned HTTP client for upstream client-secret requests.</summary>
+    public HttpClient? ClientSecretsHttpClient { get; set; }
+
     public string RoutePrefix { get; set; } = "/api/voice/direct";
 
     public TimeSpan SessionTtl { get; set; } = TimeSpan.FromMinutes(10);
@@ -66,6 +69,8 @@ public sealed class OpenAiDirectRealtimeSessionResponse
     public string VoiceSessionId { get; set; } = "";
 
     public string ClientSecret { get; set; } = "";
+
+    public string RealtimeCallsEndpoint { get; set; } = "https://api.openai.com/v1/realtime/calls";
 
     public string Model { get; set; } = "";
 

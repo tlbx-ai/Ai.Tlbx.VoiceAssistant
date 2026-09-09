@@ -9,6 +9,13 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.Google.Models
     /// </summary>
     public class GoogleVoiceSettings : IVoiceSettings
     {
+        /// <summary>Routing and authentication, read on each request or reconnect.</summary>
+        public ProviderEndpointOptions Connection { get; set; } = new("wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent") { AuthenticationHeaderName = null, ApiKeyQueryParameter = "key" };
+
+        /// <summary>Exact gateway model/deployment ID. Null uses the built-in model; the enum still selects protocol capabilities.</summary>
+        public string? ModelId { get; set; }
+        public string GetModelId() => string.IsNullOrWhiteSpace(ModelId) ? Model.ToApiString() : ModelId;
+
         /// <summary>
         /// Instructions for the AI assistant's behavior and personality.
         /// </summary>

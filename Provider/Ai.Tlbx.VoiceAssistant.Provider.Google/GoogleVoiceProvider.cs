@@ -21,7 +21,6 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.Google
     /// </summary>
     public sealed class GoogleVoiceProvider : IVoiceProvider
     {
-        private const string LIVE_API_ENDPOINT = "wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent";
         private const int CONNECTION_TIMEOUT_MS = 10000;
         private const int SETUP_TIMEOUT_MS = 10000;
         private const int AUDIO_BUFFER_SIZE = 32384;
@@ -129,7 +128,8 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.Google
 
             try
             {
-                if (string.IsNullOrEmpty(_apiKey))
+                if (string.IsNullOrEmpty(_apiKey) && string.IsNullOrEmpty(_settings.Connection.ApiKey) &&
+                    (_settings.Connection.ApiKeyQueryParameter != null || _settings.Connection.AuthenticationHeaderName != null))
                 {
                     throw new InvalidOperationException("Google API key is not set. Please set GOOGLE_API_KEY or GEMINI_API_KEY.");
                 }
@@ -139,8 +139,9 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.Google
                 _webSocket = new ClientWebSocket();
                 _setupCompletionSource = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
 
-                var uri = new Uri($"{LIVE_API_ENDPOINT}?key={_apiKey}");
-                _logAction(LogLevel.Info, $"Connecting to: {LIVE_API_ENDPOINT}");
+                _settings.Connection.Apply(_webSocket.Options, _apiKey ?? "");
+                var uri = _settings.Connection.BuildUri(fallbackApiKey: _apiKey);
+                _logAction(LogLevel.Info, "Connecting to configured Gemini endpoint");
                 _logAction(LogLevel.Info, $"API Key present: {!string.IsNullOrEmpty(_apiKey)}, Length: {_apiKey?.Length ?? 0}");
 
                 using (var connectionCts = new CancellationTokenSource(CONNECTION_TIMEOUT_MS))
@@ -398,7 +399,7 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.Google
             {
                 Setup = new Setup
                 {
-                    Model = _settings.Model.ToApiString(),
+                    Model = _settings.GetModelId(),
                     GenerationConfig = new GenerationConfig
                     {
                         ResponseModalities = new List<string> { _settings.ResponseModality },
@@ -472,7 +473,7 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.Google
         {
             var report = GoogleLiveUsageMapper.CreateUsageReport(
                 usageMetadata,
-                _settings?.Model.ToApiString());
+                _settings?.GetModelId());
 
             if (report.HasUsage)
             {

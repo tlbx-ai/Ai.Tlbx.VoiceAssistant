@@ -20,7 +20,6 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.XAi;
 /// </summary>
 public sealed class XaiTranscriptionProvider : IVoiceProvider, IStructuredTranscriptionProvider
 {
-    private const string ENDPOINT = "wss://api.x.ai/v1/stt";
     private const int RECEIVE_BUFFER_SIZE = 32 * 1024;
     private const int PCM16_BYTES_PER_SECOND = 16000 * 2;
 
@@ -76,12 +75,12 @@ public sealed class XaiTranscriptionProvider : IVoiceProvider, IStructuredTransc
         _ready = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
         _done = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
         _webSocket = new ClientWebSocket();
-        _webSocket.Options.SetRequestHeader("Authorization", $"Bearer {_apiKey}");
+        _settings.Connection.Apply(_webSocket.Options, _apiKey);
 
         OnStatusChanged?.Invoke("Connecting to xAI transcription...");
         using var connectionCts = CancellationTokenSource.CreateLinkedTokenSource(_cts.Token);
         connectionCts.CancelAfter(TimeSpan.FromSeconds(10));
-        await _webSocket.ConnectAsync(BuildEndpoint(transcriptionSettings), connectionCts.Token);
+        await _webSocket.ConnectAsync(BuildEndpoint(transcriptionSettings, _apiKey), connectionCts.Token);
         _receiveTask = ReceiveLoopAsync(_cts.Token);
 
         using var readyCts = CancellationTokenSource.CreateLinkedTokenSource(_cts.Token);
@@ -238,10 +237,10 @@ public sealed class XaiTranscriptionProvider : IVoiceProvider, IStructuredTransc
                 _ready?.TrySetResult(true);
                 break;
             case "transcript.partial":
-                PublishTranscript(ParseTranscript(root));
+                PublishTranscript(ParseTranscript(root, false, _settings?.GetModelId()));
                 break;
             case "transcript.done":
-                PublishTranscript(ParseTranscript(root, forceFinal: true));
+                PublishTranscript(ParseTranscript(root, true, _settings?.GetModelId()));
                 if (Interlocked.Increment(ref _doneChannelCount) >= (_settings?.Multichannel == true ? _settings.Channels : 1))
                 {
                     _done?.TrySetResult(true);
@@ -272,7 +271,7 @@ public sealed class XaiTranscriptionProvider : IVoiceProvider, IStructuredTransc
         }
     }
 
-    private static StructuredTranscript ParseTranscript(JsonElement root, bool forceFinal = false)
+    private static StructuredTranscript ParseTranscript(JsonElement root, bool forceFinal = false, string? modelId = "grok-transcribe")
     {
         var text = root.TryGetProperty("text", out var textElement) ? textElement.GetString() ?? string.Empty : string.Empty;
         var channel = root.TryGetProperty("channel_index", out var channelElement) && channelElement.TryGetInt32(out var channelIndex)
@@ -284,7 +283,7 @@ public sealed class XaiTranscriptionProvider : IVoiceProvider, IStructuredTransc
         return new StructuredTranscript
         {
             ProviderId = "xai",
-            ModelId = "grok-transcribe",
+            ModelId = modelId,
             Text = text,
             Language = root.TryGetProperty("language", out var languageElement) ? languageElement.GetString() : null,
             Duration = GetSeconds(root, "duration"),
@@ -382,7 +381,7 @@ public sealed class XaiTranscriptionProvider : IVoiceProvider, IStructuredTransc
             ? TimeSpan.FromSeconds(seconds)
             : null;
 
-    private static Uri BuildEndpoint(XaiTranscriptionSettings settings)
+    private static Uri BuildEndpoint(XaiTranscriptionSettings settings, string? apiKey = null)
     {
         var query = new List<string>
         {
@@ -412,7 +411,7 @@ public sealed class XaiTranscriptionProvider : IVoiceProvider, IStructuredTransc
             }
         }
 
-        return new Uri($"{ENDPOINT}?{string.Join("&", query)}");
+        return settings.Connection.BuildUri(string.Join("&", query), apiKey);
     }
 
     private static void AddQuery(List<string> query, string name, string? value)
@@ -468,7 +467,7 @@ public sealed class XaiTranscriptionProvider : IVoiceProvider, IStructuredTransc
         OnUsageReceived?.Invoke(new UsageReport
         {
             ProviderId = "xai",
-            ModelId = "grok-transcribe",
+            ModelId = _settings?.GetModelId(),
             OperationType = UsageOperationType.Transcription,
             MeasurementSource = UsageMeasurementSource.ClientMeasured,
             InputAudioDuration = TimeSpan.FromSeconds(

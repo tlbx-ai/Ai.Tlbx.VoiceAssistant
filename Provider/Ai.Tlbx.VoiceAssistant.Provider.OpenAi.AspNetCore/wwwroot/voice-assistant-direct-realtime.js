@@ -1,4 +1,3 @@
-const REALTIME_CALLS_URL = 'https://api.openai.com/v1/realtime/calls';
 const TOOL_CALL_TIMEOUT_MS = 120000;
 const RESPONSE_WATCHDOG_MS = 120000;
 
@@ -318,7 +317,7 @@ export class OpenAiDirectRealtimeClient
         await this.peerConnection.setLocalDescription(offer);
 
         this.emitConnectionPhase('openai.connecting', 'Connecting browser audio to OpenAI...');
-        const sdpResponse = await fetch(REALTIME_CALLS_URL, {
+        const sdpResponse = await fetch(this.session.realtimeCallsEndpoint, {
             method: 'POST',
             body: offer.sdp,
             headers: {

@@ -9,6 +9,13 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.XAi.Models;
 /// </summary>
 public sealed class XaiTranscriptionSettings : IVoiceSettings
 {
+        /// <summary>Routing and authentication, read on each request or reconnect.</summary>
+        public ProviderEndpointOptions Connection { get; set; } = new("wss://api.x.ai/v1/stt");
+
+        /// <summary>Model ID for transcript and usage metadata. The native STT API has no model selector; gateway routing parameters belong in Connection.Endpoint.</summary>
+        public string? ModelId { get; set; }
+        public string GetModelId() => string.IsNullOrWhiteSpace(ModelId) ? "grok-transcribe" : ModelId;
+
     public bool InterimResults { get; set; } = true;
     public int EndpointingMs { get; set; } = 10;
     public string? Language { get; set; }

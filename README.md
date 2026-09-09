@@ -681,3 +681,9 @@ MIT — do whatever you want.
   <a href="https://github.com/AiTlbx/Ai.Tlbx.VoiceAssistant/issues">Issues</a> •
   <a href="https://github.com/AiTlbx/Ai.Tlbx.VoiceAssistant">GitHub</a>
 </p>
+
+## Custom gateways and model aliases
+
+Configure endpoints, authentication, headers and model IDs at runtime for company
+gateways such as LiteLLM. See [gateway configuration](tools/gateway-configuration.md)
+for reconnect, HTTP transcription and direct-browser examples.

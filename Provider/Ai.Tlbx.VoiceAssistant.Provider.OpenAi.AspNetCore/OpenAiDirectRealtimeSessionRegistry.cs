@@ -75,7 +75,7 @@ internal sealed class OpenAiDirectRealtimeSessionRegistry : IOpenAiDirectRealtim
         return new SessionConfig
         {
             Type = "realtime",
-            Model = settings.Model.ToApiString(),
+            Model = settings.GetModelId(),
             OutputModalities = ["audio"],
             Instructions = BuildInstructions(settings),
             MaxOutputTokens = settings.MaxTokens?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "inf",
@@ -99,7 +99,7 @@ internal sealed class OpenAiDirectRealtimeSessionRegistry : IOpenAiDirectRealtim
                     Transcription = settings.InputAudioTranscription.Enabled
                         ? new TranscriptionConfig
                         {
-                            Model = settings.InputAudioTranscription.Model.ToApiString(),
+                            Model = settings.InputAudioTranscription.GetModelId(),
                             Prompt = settings.InputAudioTranscription.Model.SupportsTranscriptionPrompt()
                                 ? settings.InputAudioTranscription.Prompt ?? settings.TranscriptionHint
                                 : null,
