@@ -129,9 +129,18 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi.Models
         public SessionReasoningEffort? ReasoningEffort { get; set; } = SessionReasoningEffort.Low;
 
         /// <summary>
-        /// Spoken bridge policy for tool calls. Applied through OpenAI Realtime instructions.
+        /// Spoken bridge policy for tool calls. Applied through OpenAI Realtime instructions
+        /// when AppendToolCallPreambleInstructions is true.
         /// </summary>
         public ToolCallPreambleMode ToolCallPreambleMode { get; set; } = ToolCallPreambleMode.ProviderDefault;
+
+        /// <summary>
+        /// Append the library's instructions for ToolCallPreambleMode. Defaults to true.
+        /// Set to false to send Instructions unchanged and manage tool-call speech rules
+        /// in the application prompt. Applies to session creation and settings updates;
+        /// does not change the selected mode or audio/event delivery.
+        /// </summary>
+        public bool AppendToolCallPreambleInstructions { get; set; } = true;
 
         /// <summary>
         /// OpenAI Realtime currently ignores the shared thinking configuration.

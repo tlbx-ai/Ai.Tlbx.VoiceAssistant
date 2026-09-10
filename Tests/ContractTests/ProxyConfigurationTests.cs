@@ -56,7 +56,9 @@ static class ProxyConfigurationTests
             UseEphemeralKey = false,
             MostLikelySpokenLanguage = "de",
             TranscriptionHint = "Deutsche Fachbegriffe",
-            Instructions = "Antworte auf Deutsch mit natürlicher deutscher Aussprache."
+            Instructions = "  Antworte auf Deutsch mit natürlicher deutscher Aussprache.\r\n\t",
+            ToolCallPreambleMode = ToolCallPreambleMode.BeforeEveryToolCall,
+            AppendToolCallPreambleInstructions = false
         };
         await using (var provider = new OpenAiVoiceProvider("unused"))
             await VerifyReconnect(listener, provider, open, open.Connection, wsRoot, "openai", id => open.ModelId = id);
@@ -128,6 +130,16 @@ static class ProxyConfigurationTests
                     await provider.UpdateSettingsAsync(settings).WaitAsync(timeout.Token);
                     message = await server.ReceiveAsync(buffer.AsMemory(), timeout.Token);
                     VerifyOpenAiLanguage(Encoding.UTF8.GetString(buffer, 0, message.Count), voiceSettings);
+                    foreach (var mode in Enum.GetValues<ToolCallPreambleMode>())
+                    foreach (var append in new[] { true, false })
+                    {
+                        voiceSettings.ToolCallPreambleMode = mode;
+                        voiceSettings.AppendToolCallPreambleInstructions = append;
+                        await provider.UpdateSettingsAsync(settings).WaitAsync(timeout.Token);
+                        message = await server.ReceiveAsync(buffer.AsMemory(), timeout.Token);
+                        VerifyOpenAiLanguage(Encoding.UTF8.GetString(buffer, 0, message.Count), voiceSettings);
+                        Check(voiceSettings.ToolCallPreambleMode == mode, "Prompt switch preserves selected mode");
+                    }
                 }
             }
             if (kind == "xai")
@@ -168,19 +180,34 @@ static class ProxyConfigurationTests
         Check(transcription.GetProperty("prompt").GetString() ==
             (settings.InputAudioTranscription.Prompt ?? settings.TranscriptionHint),
             "OpenAI WebSocket uses explicit transcription prompt before fallback hint");
-        Check(session.GetProperty("instructions").GetString() == settings.Instructions,
-            "OpenAI WebSocket preserves response language and accent instructions separately");
+        VerifyInstructions(session, settings);
+    }
+
+    private static void VerifyInstructions(JsonElement session, OpenAiVoiceSettings settings)
+    {
+        var instructions = session.GetProperty("instructions").GetString()!;
+        if (!settings.AppendToolCallPreambleInstructions || settings.ToolCallPreambleMode == ToolCallPreambleMode.ProviderDefault)
+            Check(instructions == settings.Instructions, "OpenAI sends the exact application prompt when augmentation is disabled");
+        else
+            Check(instructions.StartsWith(settings.Instructions + Environment.NewLine + Environment.NewLine, StringComparison.Ordinal) &&
+                instructions.Contains("# Tool call preambles", StringComparison.Ordinal), "OpenAI retains opt-in/default preamble augmentation");
     }
 
     private static async Task VerifyHttpAsync()
     {
         var capture = new CaptureHttpMessageHandler();
         using var client = new HttpClient(capture);
-        var settings = new OpenAiVoiceSettings { ModelId = "team/realtime" };
+        var settings = new OpenAiVoiceSettings
+        {
+            ModelId = "team/realtime",
+            Instructions = "  Antworte ausschließlich auf Deutsch.\r\n\t",
+            ToolCallPreambleMode = ToolCallPreambleMode.BeforeEveryToolCall
+        };
         await using var provider = new OpenAiVoiceProvider("fallback", httpClient: client) { Settings = settings };
         var create = typeof(OpenAiVoiceProvider).GetMethod("CreateSessionAsync", BindingFlags.NonPublic | BindingFlags.Instance)!;
         for (var n = 1; n <= 2; n++)
         {
+            settings.AppendToolCallPreambleInstructions = n == 2;
             settings.ClientSecretsConnection.Endpoint = $"https://gateway.invalid/{n}/client_secrets?api-version=test";
             settings.ClientSecretsConnection.ApiKey = $"rotated-{n}";
             settings.ModelId = $"team/model-{n}";
@@ -188,6 +215,8 @@ static class ProxyConfigurationTests
             Check(capture.RequestUri!.AbsolutePath == $"/{n}/client_secrets" &&
                 capture.Authorization == $"Bearer rotated-{n}" && capture.RequestBody!.Contains($"team/model-{n}"),
                 "Client secrets use runtime endpoint, auth and alias");
+            using var payload = JsonDocument.Parse(capture.RequestBody!);
+            VerifyInstructions(payload.RootElement.GetProperty("session"), settings);
         }
 
         var directOptions = new OpenAiDirectRealtimeOptions { ClientSecretsHttpClient = client };
@@ -198,6 +227,7 @@ static class ProxyConfigurationTests
             "CreateSessionAsync", BindingFlags.Static | BindingFlags.NonPublic)!;
         for (var n = 1; n <= 2; n++)
         {
+            settings.AppendToolCallPreambleInstructions = n == 2;
             settings.ModelId = $"browser/model-{n}";
             settings.ClientSecretsConnection.Endpoint = $"https://gateway.invalid/browser/{n}/client_secrets";
             settings.RealtimeCallsEndpoint = $"https://gateway.invalid/browser/{n}/calls?api-version=test";
@@ -214,6 +244,8 @@ static class ProxyConfigurationTests
                 session.ClientSecret == "ephemeral-contract-key", "Direct browser receives configured SDP URL, model and ephemeral key");
             Check(capture.RequestUri!.AbsolutePath == $"/browser/{n}/client_secrets" &&
                 capture.RequestBody!.Contains(settings.ModelId), "Direct browser server uses configured secret endpoint and model");
+            using var payload = JsonDocument.Parse(capture.RequestBody!);
+            VerifyInstructions(payload.RootElement.GetProperty("session"), settings);
         }
 
         var handler = new TranscriptionHandler();

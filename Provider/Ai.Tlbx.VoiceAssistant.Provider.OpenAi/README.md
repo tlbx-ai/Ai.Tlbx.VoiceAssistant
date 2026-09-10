@@ -73,8 +73,25 @@ voice once audio has been generated.
 
 ## Tool-call speech policy
 
+`AppendToolCallPreambleInstructions` defaults to `true`, preserving the library's
+prompt rules for the selected `ToolCallPreambleMode`. Applications that provide
+their own rules and response language can disable this augmentation independently:
+
+```csharp
+settings.ToolCallPreambleMode = selectedMode;
+settings.AppendToolCallPreambleInstructions = false;
+settings.Instructions = finalizedAuraPrompt;
+```
+
+With `false`, the transmitted `instructions` text is exactly `settings.Instructions`,
+including whitespace, with no replacement rules. This applies to session creation,
+WebSocket `UpdateSettingsAsync`, and Direct WebRTC session creation. The selected
+mode and audio/event delivery remain unchanged. The application prompt is then
+responsible for describing the desired tool-call speech behavior.
+
 `ToolCallPreambleMode.Disabled` adds a strong Realtime instruction asking the
-model to remain silent until its final answer. It is intentionally not an audio
+model to remain silent until its final answer when augmentation is enabled.
+It is intentionally not an audio
 gate: received audio is forwarded immediately, so the setting improves model
 behavior without adding response-completion latency. Applications that require
 deterministic phase filtering should filter transcripts at the application layer.

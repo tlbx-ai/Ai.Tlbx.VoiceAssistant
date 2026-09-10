@@ -224,6 +224,11 @@ internal sealed class OpenAiDirectRealtimeSessionRegistry : IOpenAiDirectRealtim
 
     private static string BuildInstructions(OpenAiVoiceSettings settings)
     {
+        if (!settings.AppendToolCallPreambleInstructions)
+        {
+            return settings.Instructions;
+        }
+
         var preambleInstructions = BuildToolCallPreambleInstructions(settings.ToolCallPreambleMode);
         return string.IsNullOrWhiteSpace(preambleInstructions)
             ? settings.Instructions

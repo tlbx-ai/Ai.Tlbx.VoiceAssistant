@@ -548,40 +548,66 @@ static void Assert(bool condition, string contract)
 
 static async Task VerifyOpenAiPreambleOutputPolicyAsync()
 {
-    await using var provider = new OpenAiVoiceProvider("contract-test-key")
+    foreach (var append in new[] { true, false })
     {
-        Settings = new OpenAiVoiceSettings
+        await using var provider = new OpenAiVoiceProvider("contract-test-key")
         {
-            ToolCallPreambleMode = ToolCallPreambleMode.Disabled
-        }
-    };
+            Settings = new OpenAiVoiceSettings
+            {
+                ToolCallPreambleMode = ToolCallPreambleMode.Disabled,
+                AppendToolCallPreambleInstructions = append
+            }
+        };
 
-    var audio = new List<string>();
-    var messages = new List<ChatMessage>();
-    provider.OnAudioReceived = audio.Add;
-    provider.OnMessageReceived = messages.Add;
+        var audio = new List<string>();
+        var messages = new List<ChatMessage>();
+        provider.OnAudioReceived = audio.Add;
+        provider.OnMessageReceived = messages.Add;
 
-    await DeliverOpenAiEventAsync(provider,
-        """{"type":"response.output_audio.delta","item_id":"commentary_1","delta":"immediate-audio"}""");
-    await DeliverOpenAiEventAsync(provider,
-        """{"type":"response.output_audio_transcript.done","item_id":"commentary_1","transcript":"Einen Moment, ich schaue nach."}""");
-    Assert(audio.SequenceEqual(["immediate-audio"]), "OpenAI streams received audio immediately even when preambles are disabled");
-    Assert(messages.Count == 1 && messages[0].Content == "Einen Moment, ich schaue nach.", "OpenAI streams the accompanying transcript immediately");
+        await DeliverOpenAiEventAsync(provider,
+            """{"type":"response.output_audio.delta","item_id":"commentary_1","delta":"immediate-audio"}""");
+        await DeliverOpenAiEventAsync(provider,
+            """{"type":"response.output_audio_transcript.done","item_id":"commentary_1","transcript":"Einen Moment, ich schaue nach."}""");
+        Assert(audio.SequenceEqual(["immediate-audio"]), "OpenAI streams received audio immediately even when preambles are disabled");
+        Assert(messages.Count == 1 && messages[0].Content == "Einen Moment, ich schaue nach.", "OpenAI streams the accompanying transcript immediately");
 
-    audio.Clear();
-    messages.Clear();
-    await DeliverOpenAiEventAsync(provider,
-        """{"type":"response.output_text.delta","item_id":"text_1","delta":"Voll"}""");
-    await DeliverOpenAiEventAsync(provider,
-        """{"type":"response.output_text.delta","item_id":"text_1","delta":"ständig."}""");
-    await DeliverOpenAiEventAsync(provider,
-        """{"type":"response.output_text.done","item_id":"text_1","text":"Vollständig."}""");
+        audio.Clear();
+        messages.Clear();
+        await DeliverOpenAiEventAsync(provider,
+            """{"type":"response.output_text.delta","item_id":"text_1","delta":"Voll"}""");
+        await DeliverOpenAiEventAsync(provider,
+            """{"type":"response.output_text.delta","item_id":"text_1","delta":"ständig."}""");
+        await DeliverOpenAiEventAsync(provider,
+            """{"type":"response.output_text.done","item_id":"text_1","text":"Vollständig."}""");
 
-    Assert(messages.Count == 1 && messages[0].Content == "Vollständig.", "OpenAI text output remains available with disabled preambles");
+        Assert(messages.Count == 1 && messages[0].Content == "Vollständig.", "OpenAI text output remains available with disabled preambles");
+    }
 }
 
 static void VerifyOpenAiPreambleInstructionPolicy()
 {
+    Assert(new OpenAiVoiceSettings().AppendToolCallPreambleInstructions, "OpenAI preamble augmentation defaults to true");
+    var directType = typeof(OpenAiDirectRealtimeOptions).Assembly.GetType(
+        "Ai.Tlbx.VoiceAssistant.Provider.OpenAi.AspNetCore.OpenAiDirectRealtimeSessionRegistry")!;
+    foreach (var type in new[] { typeof(OpenAiVoiceProvider), directType })
+    foreach (var mode in Enum.GetValues<ToolCallPreambleMode>())
+    foreach (var prompt in new[] { "", " \r\n\t", "  Sprich Deutsch: Grüße 👋\r\nKeine englischen Ansagen.\n " })
+    {
+        var build = type.GetMethod("BuildInstructions", BindingFlags.Static | BindingFlags.NonPublic)!;
+        var settings = new OpenAiVoiceSettings
+        {
+            Instructions = prompt,
+            ToolCallPreambleMode = mode,
+            AppendToolCallPreambleInstructions = false
+        };
+        Assert((string?)build.Invoke(null, [settings]) == prompt, type.Name + " preserves exact prompt for " + mode);
+        Assert(settings.ToolCallPreambleMode == mode, type.Name + " preserves selected preamble mode");
+        settings.AppendToolCallPreambleInstructions = true;
+        var augmented = (string)build.Invoke(null, [settings])!;
+        Assert(mode == ToolCallPreambleMode.ProviderDefault ? augmented == prompt :
+            augmented.StartsWith(prompt + Environment.NewLine + Environment.NewLine, StringComparison.Ordinal) &&
+            augmented.Contains("# Tool call preambles", StringComparison.Ordinal), type.Name + " restores augmentation for " + mode);
+    }
     var method = typeof(OpenAiVoiceProvider).GetMethod("BuildInstructions", BindingFlags.Static | BindingFlags.NonPublic)
         ?? throw new MissingMethodException(typeof(OpenAiVoiceProvider).FullName, "BuildInstructions");
 

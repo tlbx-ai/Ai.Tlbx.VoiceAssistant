@@ -536,6 +536,11 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi
 
         private static string BuildInstructions(OpenAiVoiceSettings settings)
         {
+            if (!settings.AppendToolCallPreambleInstructions)
+            {
+                return settings.Instructions;
+            }
+
             var preambleInstructions = BuildToolCallPreambleInstructions(settings.ToolCallPreambleMode);
             if (string.IsNullOrWhiteSpace(preambleInstructions))
             {

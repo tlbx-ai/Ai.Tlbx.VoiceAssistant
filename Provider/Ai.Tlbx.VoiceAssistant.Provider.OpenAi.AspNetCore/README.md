@@ -32,9 +32,11 @@ For OpenAI voice sessions in Blazor Server this keeps the public `VoiceAssistant
 
 ## Tool preamble modes
 
-Direct WebRTC applies non-default `ToolCallPreambleMode` values through Realtime instructions. Those modes guide when the model emits a spoken tool bridge while preserving the low-latency remote media stream.
+Direct WebRTC applies non-default `ToolCallPreambleMode` values through Realtime instructions when `AppendToolCallPreambleInstructions` is `true` (the default). Those modes guide when the model emits a spoken tool bridge while preserving the low-latency remote media stream.
 
-`ToolCallPreambleMode.Disabled` is accepted as a strong model instruction, but it is not a deterministic audio gate. Both Direct WebRTC and the WebSocket provider forward received audio immediately to preserve low latency; applications that require strict phase filtering must enforce it outside the remote media stream.
+Set `OpenAiVoiceSettings.AppendToolCallPreambleInstructions = false` in the session factory to send `Instructions` exactly as supplied, including whitespace. The application then owns tool-call speech rules and response language; the selected `ToolCallPreambleMode` and audio/event delivery remain unchanged. Reconnect to apply new server-side settings to a Direct WebRTC session.
+
+With augmentation enabled, `ToolCallPreambleMode.Disabled` is accepted as a strong model instruction, but it is not a deterministic audio gate. Both Direct WebRTC and the WebSocket provider forward received audio immediately to preserve low latency; applications that require strict phase filtering must enforce it outside the remote media stream.
 
 ## Connection status
 
