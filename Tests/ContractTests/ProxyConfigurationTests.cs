@@ -5,6 +5,7 @@ using System.Reflection;
 using Ai.Tlbx.VoiceAssistant.Provider.OpenAi.AspNetCore;
 using Microsoft.AspNetCore.Http;
 using System.Text;
+using System.Text.Json;
 using Ai.Tlbx.VoiceAssistant.Interfaces;
 using Ai.Tlbx.VoiceAssistant.Models;
 using Ai.Tlbx.VoiceAssistant.Provider.OpenAi;
@@ -50,7 +51,13 @@ static class ProxyConfigurationTests
         listener.Start();
         var wsRoot = $"ws://localhost:{port}";
 
-        var open = new OpenAiVoiceSettings { UseEphemeralKey = false };
+        var open = new OpenAiVoiceSettings
+        {
+            UseEphemeralKey = false,
+            MostLikelySpokenLanguage = "de",
+            TranscriptionHint = "Deutsche Fachbegriffe",
+            Instructions = "Antworte auf Deutsch mit natürlicher deutscher Aussprache."
+        };
         await using (var provider = new OpenAiVoiceProvider("unused"))
             await VerifyReconnect(listener, provider, open, open.Connection, wsRoot, "openai", id => open.ModelId = id);
         var transcription = new OpenAiTranscriptionSettings();
@@ -110,6 +117,18 @@ static class ProxyConfigurationTests
                     Check(!json.Contains("turn_detection"), "Live transcription omits unsupported turn detection");
                 if (kind is "google" or "openai-stt")
                     Check(json.Contains(alias), kind + " custom model in session payload");
+                if (kind == "openai")
+                {
+                    var voiceSettings = (OpenAiVoiceSettings)settings;
+                    VerifyOpenAiLanguage(json, voiceSettings);
+                    await connectTask.WaitAsync(timeout.Token);
+                    voiceSettings.MostLikelySpokenLanguage = revision == 1 ? "fr" : "de";
+                    voiceSettings.InputAudioTranscription.Prompt = "Explicit transcription hint " + revision;
+                    voiceSettings.Instructions = "Updated response language and accent instructions " + revision;
+                    await provider.UpdateSettingsAsync(settings).WaitAsync(timeout.Token);
+                    message = await server.ReceiveAsync(buffer.AsMemory(), timeout.Token);
+                    VerifyOpenAiLanguage(Encoding.UTF8.GetString(buffer, 0, message.Count), voiceSettings);
+                }
             }
             if (kind == "xai")
                 await server.SendAsync(Encoding.UTF8.GetBytes("{\"type\":\"session.updated\",\"session\":{}}").AsMemory(), WebSocketMessageType.Text, true, timeout.Token);
@@ -137,6 +156,20 @@ static class ProxyConfigurationTests
             server.Abort();
             await drain.WaitAsync(timeout.Token);
         }
+    }
+
+    private static void VerifyOpenAiLanguage(string json, OpenAiVoiceSettings settings)
+    {
+        using var document = JsonDocument.Parse(json);
+        var session = document.RootElement.GetProperty("session");
+        var transcription = session.GetProperty("audio").GetProperty("input").GetProperty("transcription");
+        Check(transcription.GetProperty("language").GetString() == settings.MostLikelySpokenLanguage,
+            "OpenAI WebSocket sends input language on connect, update and reconnect");
+        Check(transcription.GetProperty("prompt").GetString() ==
+            (settings.InputAudioTranscription.Prompt ?? settings.TranscriptionHint),
+            "OpenAI WebSocket uses explicit transcription prompt before fallback hint");
+        Check(session.GetProperty("instructions").GetString() == settings.Instructions,
+            "OpenAI WebSocket preserves response language and accent instructions separately");
     }
 
     private static async Task VerifyHttpAsync()

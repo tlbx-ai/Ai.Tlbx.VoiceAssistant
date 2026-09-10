@@ -37,6 +37,40 @@ settings.VadThreshold = 0.8;
 await assistant.UpdateSettingsAsync(settings);
 ```
 
+## Response language and accent
+
+`MostLikelySpokenLanguage` and `TranscriptionHint` guide **input transcription**.
+They do not select the assistant's output language or accent. Set both explicitly
+in `Instructions`, alongside the assistant's task instructions. For example:
+
+```csharp
+settings.MostLikelySpokenLanguage = "de";
+settings.Instructions = """
+    Du bist ein hilfreicher Sprachassistent.
+
+    # Sprache
+    Antworte auf Deutsch. Wechsle die Sprache nur auf ausdrücklichen Wunsch.
+    Einzelne englische Fachbegriffe, Namen und kurze Bestätigungen ändern die Antwortsprache nicht.
+    Das gilt auch für Rückfragen und kurze Ansagen vor oder nach Werkzeugaufrufen.
+
+    # Aussprache
+    Sprich natürliches Standarddeutsch mit deutscher Lautbildung, Wortbetonung und Satzmelodie.
+    Halte diese Aussprache vom ersten bis zum letzten Wort und über alle Gesprächsrunden stabil.
+    Sprich in natürlichem Tempo. Übernimm den Akzent deines Gegenübers nicht.
+    """;
+```
+
+OpenAI recommends controlling language and accent separately; prompting remains
+guidance rather than an accent guarantee. See the
+[Realtime prompting guide](https://developers.openai.com/api/docs/guides/realtime-models-prompting#control-language-and-accent-separately).
+`marin` (the toolkit default) and `cedar` are OpenAI's recommended standard voices
+for quality, not guarantees of a particular German accent.
+
+WebSocket settings changes are sent with `UpdateSettingsAsync`. The direct WebRTC
+provider requires a new browser session; update the server-side session factory's
+settings before reconnecting. OpenAI also requires a new session to change the
+voice once audio has been generated.
+
 ## Tool-call speech policy
 
 `ToolCallPreambleMode.Disabled` adds a strong Realtime instruction asking the

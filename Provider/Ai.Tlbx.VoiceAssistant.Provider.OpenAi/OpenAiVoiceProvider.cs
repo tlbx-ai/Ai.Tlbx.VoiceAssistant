@@ -478,8 +478,9 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi
                                 {
                                     Model = _settings.InputAudioTranscription.GetModelId(),
                                     Prompt = _settings.InputAudioTranscription.Model.SupportsTranscriptionPrompt()
-                                        ? _settings.InputAudioTranscription.Prompt
-                                        : null
+                                        ? _settings.InputAudioTranscription.Prompt ?? _settings.TranscriptionHint
+                                        : null,
+                                    Language = _settings.MostLikelySpokenLanguage
                                 }
                                 : null,
                             TurnDetection = BuildTurnDetectionConfig(_settings)

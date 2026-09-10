@@ -102,6 +102,10 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi.Models
             set => TurnDetection.Threshold = value;
         }
 
+        /// <summary>
+        /// ISO-639-1 input language hint for transcription only (for example "de").
+        /// Does not control the assistant's response language or accent; set those in Instructions.
+        /// </summary>
         public string MostLikelySpokenLanguage { get; set; } = "de";
 
         public string TranscriptionHint { get; set; } = "expect german business/IT/Contstruction and Tender law terms";
