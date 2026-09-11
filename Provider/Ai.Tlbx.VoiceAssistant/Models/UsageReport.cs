@@ -23,7 +23,11 @@ namespace Ai.Tlbx.VoiceAssistant.Models
         /// <summary>
         /// A dedicated streaming or HTTP transcription operation.
         /// </summary>
-        Transcription
+        Transcription,
+        /// <summary>A duration-billed continuous voice session.</summary>
+        VoiceSession,
+        /// <summary>Backend reasoning and tools delegated by a voice session.</summary>
+        DelegatedResponse
     }
 
     /// <summary>
@@ -225,11 +229,19 @@ namespace Ai.Tlbx.VoiceAssistant.Models
         /// </summary>
         public string? RawProviderUsageJson { get; init; }
 
+        /// <summary>Billable session duration, independent of input/output audio duration.</summary>
+        public TimeSpan? SessionDuration { get; init; }
+        /// <summary>True for cumulative snapshots: replace earlier usage for this operation; do not sum.</summary>
+        public bool IsCumulative { get; init; }
+        /// <summary>True only when a terminal provider event confirms final usage.</summary>
+        public bool IsFinal { get; init; }
+
         /// <summary>
         /// Whether this report contains any token, duration, or event usage.
         /// </summary>
         public bool HasUsage =>
             TotalTokens > 0 ||
+            SessionDuration > TimeSpan.Zero ||
             InputAudioDuration > TimeSpan.Zero ||
             OutputAudioDuration > TimeSpan.Zero ||
             BillableTextInputEvents > 0;

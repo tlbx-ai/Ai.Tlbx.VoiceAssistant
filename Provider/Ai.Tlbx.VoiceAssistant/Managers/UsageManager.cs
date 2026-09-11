@@ -18,7 +18,7 @@ namespace Ai.Tlbx.VoiceAssistant.Managers
         {
             lock (_lock)
             {
-                return _reports.AsReadOnly();
+                return _reports.ToArray();
             }
         }
 
@@ -34,8 +34,26 @@ namespace Ai.Tlbx.VoiceAssistant.Managers
 
             lock (_lock)
             {
+                if (report.IsCumulative && !string.IsNullOrEmpty(report.OperationId))
+                {
+                    var index = _reports.FindIndex(r => r.IsCumulative && r.OperationId == report.OperationId &&
+                        r.ProviderId == report.ProviderId && r.ModelId == report.ModelId && r.OperationType == report.OperationType);
+                    if (index >= 0)
+                    {
+                        var previous = _reports[index];
+                        if (previous.IsFinal || (!report.IsFinal && report.SessionDuration < previous.SessionDuration)) return;
+                        _reports[index] = report;
+                        return;
+                    }
+                }
                 _reports.Add(report);
             }
+        }
+
+        /// <summary>Total provider-billed session duration, with cumulative snapshots replaced by operation ID.</summary>
+        public TimeSpan TotalSessionDuration
+        {
+            get { lock (_lock) return TimeSpan.FromTicks(_reports.Sum(r => r.SessionDuration?.Ticks ?? 0)); }
         }
 
         /// <summary>

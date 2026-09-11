@@ -18,6 +18,20 @@ using Ai.Tlbx.VoiceAssistant.Provider.XAi;
 using Ai.Tlbx.VoiceAssistant.Provider.XAi.Models;
 using Ai.Tlbx.VoiceAssistant.Provider.XAi.Protocol;
 
+if (args.Contains("--live-gpt-live-tools-smoke", StringComparer.Ordinal))
+{
+    await OpenAiLiveTests.RunLiveToolsAsync();
+    return;
+}
+
+if (args.Contains("--live-gpt-live-smoke", StringComparer.Ordinal))
+{
+    await OpenAiLiveTests.RunLiveAsync();
+    return;
+}
+
+await OpenAiLiveTests.RunAsync();
+
 if (args.Contains("--live-custom-config-smoke", StringComparer.Ordinal))
 {
     await LiveCustomConfigurationTests.RunAsync();

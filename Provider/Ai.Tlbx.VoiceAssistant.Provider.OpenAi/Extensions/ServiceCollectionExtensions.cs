@@ -14,6 +14,15 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi.Extensions
     /// </summary>
     public static class ServiceCollectionExtensions
     {
+        /// <summary>Adds the separate GPT-Live provider. Pass OpenAiLiveSettings when starting the assistant.</summary>
+        public static VoiceAssistantBuilder WithOpenAiLive(this VoiceAssistantBuilder builder, string? apiKey = null)
+        {
+            builder.Services.AddScoped<OpenAiLiveProvider>(provider =>
+                new OpenAiLiveProvider(apiKey, provider.GetService<Action<LogLevel, string>>()));
+            builder.Services.AddScoped<IVoiceProvider>(provider => provider.GetRequiredService<OpenAiLiveProvider>());
+            return builder;
+        }
+
         /// <summary>
         /// Adds the OpenAI voice provider to the voice assistant configuration.
         /// </summary>

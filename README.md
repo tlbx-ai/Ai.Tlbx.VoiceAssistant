@@ -8,6 +8,17 @@
 
 ---
 
+## GPT-Live (11.0)
+
+`gpt-live-1` is supported by `OpenAiLiveProvider` in the existing OpenAI package.
+It uses continuous full-duplex audio and a separate backend for reasoning/tools.
+Use `WithOpenAiLive()` with `OpenAiLiveSettings`, or construct the provider directly.
+The existing `WithOpenAi()` and direct Realtime WebRTC provider keep their Realtime behavior.
+
+See the [GPT-Live integration and API analysis](docs/openai-gpt-live.md) for client/Responses delegation,
+timed transcripts, startup history, usage accounting, examples, and migration constraints.
+
+
 ## Quick Start (Blazor Server)
 
 **1. Install packages:**

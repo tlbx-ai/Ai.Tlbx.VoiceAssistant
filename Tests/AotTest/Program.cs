@@ -22,6 +22,16 @@ builder.Services.ConfigureHttpJsonOptions(options =>
 
 var app = builder.Build();
 
+// Opt-in live connection smoke; roots the GPT-Live transport and JSON paths in the native binary.
+app.MapGet("/live-smoke", async () =>
+{
+    await using var provider = new OpenAiLiveProvider();
+    await provider.ConnectAsync(new OpenAiLiveSettings());
+    await provider.ProcessAudioAsync(Convert.ToBase64String(new byte[960]));
+    await provider.DisconnectAsync();
+    return new TestResults { Success = provider.FinalUsageConfirmed, Results = new List<string> { $"GPT-Live final usage confirmed: {provider.FinalUsageConfirmed}" } };
+});
+
 // Endpoint that exercises all the voice assistant types
 app.MapGet("/test", () =>
 {

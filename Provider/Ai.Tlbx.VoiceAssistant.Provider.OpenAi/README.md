@@ -1,6 +1,29 @@
 # Ai.Tlbx.VoiceAssistant.Provider.OpenAi
 
-OpenAI Realtime API provider for the AI Voice Assistant Toolkit.
+OpenAI Realtime and GPT-Live providers for the AI Voice Assistant Toolkit.
+
+## GPT-Live (11.0)
+
+Use `OpenAiLiveProvider` with `OpenAiLiveSettings` for `gpt-live-1`.
+This separate server-side WebSocket provider supports continuous PCM16 audio, client delegation,
+managed Responses delegation with registered `IVoiceTool` execution, timed transcript fragments,
+and final duration usage. Register it using `WithOpenAiLive()`.
+
+Set `OpenAiLiveSettings.Responses` to a `System.Text.Json.Nodes.JsonObject` containing a backend
+`model` and supported Responses options. Null selects client delegation; handle
+`OnDelegationCreated`, retain transcript/application context, and return verified results through
+`AppendCommentaryAsync(content, delegationId)`. Keep each append within the API's 500-token limit.
+
+Live does not use Realtime VAD, `response.cancel`, or audio commit events. Startup model, voice,
+history and delegation mode are immutable. `OnTranscriptDelta` and the provider-neutral structured
+transcription callback preserve fragments; they do not claim complete turns. `OnTranscriptionCompleted`
+is not synthesized. Track playback separately. Duration reports are cumulative; replace them by
+session ID, and check `FinalUsageConfirmed` after `DisconnectAsync`.
+
+The existing direct browser WebRTC integration is for Realtime. GPT-Live currently uses the library's
+server-side WebSocket/audio hardware path. Keep project keys on the server.
+
+Full examples and API analysis: https://github.com/AiTlbx/Ai.Tlbx.VoiceAssistant/blob/master/docs/openai-gpt-live.md
 
 [![NuGet](https://img.shields.io/nuget/v/Ai.Tlbx.VoiceAssistant.Provider.OpenAi.svg)](https://www.nuget.org/packages/Ai.Tlbx.VoiceAssistant.Provider.OpenAi/)
 

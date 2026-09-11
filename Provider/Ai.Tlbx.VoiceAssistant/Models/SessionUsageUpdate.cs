@@ -40,6 +40,9 @@ namespace Ai.Tlbx.VoiceAssistant.Models
         /// </summary>
         public TimeSpan LocalSessionDuration { get; init; }
 
+        /// <summary>Provider-billed voice session duration; cumulative provider snapshots are not summed.</summary>
+        public TimeSpan TotalProviderSessionDuration { get; init; }
+
         /// <summary>
         /// Cumulative text input tokens.
         /// </summary>

@@ -129,6 +129,9 @@ namespace Ai.Tlbx.VoiceAssistant
         /// </summary>
         public int TotalTokensUsed => _usageManager.TotalTokens;
 
+        /// <summary>Total provider-billed voice session duration, separate from local elapsed time.</summary>
+        public TimeSpan TotalProviderSessionDuration => _usageManager.TotalSessionDuration;
+
         /// <summary>
         /// Gets the total audio input tokens used in the current session.
         /// </summary>
@@ -245,6 +248,8 @@ namespace Ai.Tlbx.VoiceAssistant
 
                     _isConnecting = true;
                     ReportStatus("Connecting to AI provider...");
+                    if (_provider is IStartupHistoryVoiceProvider startupHistory)
+                        startupHistory.SetStartupHistory(_chatHistory.GetMessages());
                     await _provider.ConnectAsync(settings);
                     _isInitialized = true;
                     _isConnecting = false;
@@ -252,7 +257,7 @@ namespace Ai.Tlbx.VoiceAssistant
                     // Inject initial history before any buffered realtime input. Gemini 3.1
                     // only accepts clientContent as the first session context operation.
                     var history = _chatHistory.GetMessages();
-                    if (history.Any())
+                    if (history.Any() && _provider is not IStartupHistoryVoiceProvider)
                     {
                         var messagesToInject = new List<ChatMessage>();
                         for (int i = 0; i < history.Count; i++)
@@ -507,6 +512,8 @@ namespace Ai.Tlbx.VoiceAssistant
                 {
                     _isConnecting = true;
                     ReportStatus("Connecting...");
+                    if (_provider is IStartupHistoryVoiceProvider startupHistory)
+                        startupHistory.SetStartupHistory(_chatHistory.GetMessages());
                     await _provider.ConnectAsync(settings);
                     _isInitialized = true;
                     _isConnecting = false;
@@ -811,6 +818,7 @@ namespace Ai.Tlbx.VoiceAssistant
             {
                 Trigger = trigger,
                 LocalSessionDuration = DateTime.UtcNow - _sessionStartTime.Value,
+                TotalProviderSessionDuration = _usageManager.TotalSessionDuration,
                 TextInputTokens = _usageManager.TextInputTokens,
                 TextOutputTokens = _usageManager.TextOutputTokens,
                 TotalInputTokens = _usageManager.TotalInputTokens,
