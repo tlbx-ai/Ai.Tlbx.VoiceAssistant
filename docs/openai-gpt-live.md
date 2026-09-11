@@ -114,8 +114,8 @@ not stop inference, playback, billing, or tools.
 
 Voice usage is duration based: `session.usage.updated.usage.seconds` is cumulative.
 `UsageReport.OperationType = VoiceSession` reports `SessionDuration`, `IsCumulative = true`,
-session ID and raw usage. Replace earlier snapshots for that session; never sum them or add input
-and output audio duration as a substitute. `UsageManager` performs this replacement automatically;
+session ID and raw usage. Replace earlier snapshots for that session; never sum them.
+`UsageManager` performs this replacement automatically;
 `VoiceAssistant.TotalProviderSessionDuration` and session updates expose the aggregate separately
 from local elapsed time. A late nonfinal snapshot cannot replace confirmed final usage. Do not add input
 and output audio duration as a substitute. Backend token usage is separate `DelegatedResponse`
@@ -174,6 +174,9 @@ for local managed tools, add your `IVoiceTool` instances to `settings.Tools`.
 11.0.0 introduces a separate full-duplex provider and session-duration usage semantics. Existing
 Realtime provider defaults remain unchanged; switching requires explicit settings and fragment-aware
 caption/usage consumption. All toolkit packages retain a coordinated version.
+
+11.0.1 corrects startup readiness: `IsConnected` remains false until the audio sender exists,
+so microphone callbacks that run during session startup continue using the pre-connect buffer.
 
 Local WebSocket tests verify startup/history/authentication, audio, overlapping transcripts,
 acknowledgment/error correlation, empty-output function batches, backend/voice usage separation,

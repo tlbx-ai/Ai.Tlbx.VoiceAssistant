@@ -23,7 +23,7 @@ session ID, and check `FinalUsageConfirmed` after `DisconnectAsync`.
 The existing direct browser WebRTC integration is for Realtime. GPT-Live currently uses the library's
 server-side WebSocket/audio hardware path. Keep project keys on the server.
 
-Full examples and API analysis: https://github.com/AiTlbx/Ai.Tlbx.VoiceAssistant/blob/master/docs/openai-gpt-live.md
+Full examples and API analysis: https://github.com/tlbx-ai/Ai.Tlbx.VoiceAssistant/blob/master/docs/openai-gpt-live.md
 
 [![NuGet](https://img.shields.io/nuget/v/Ai.Tlbx.VoiceAssistant.Provider.OpenAi.svg)](https://www.nuget.org/packages/Ai.Tlbx.VoiceAssistant.Provider.OpenAi/)
 

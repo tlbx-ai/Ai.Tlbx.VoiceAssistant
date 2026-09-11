@@ -43,7 +43,7 @@ public sealed class OpenAiLiveProvider : IVoiceProvider, IStartupHistoryVoicePro
     private JsonObject? _startup;
     private bool _closing;
     private bool _disposed;
-    public bool IsConnected => _started.Task.IsCompletedSuccessfully && !_closing && !_closed.Task.IsCompleted && _socket?.State == WebSocketState.Open;
+    public bool IsConnected => _audioSender != null && _started.Task.IsCompletedSuccessfully && !_closing && !_closed.Task.IsCompleted && _socket?.State == WebSocketState.Open;
     public AudioSampleRate RequiredInputSampleRate => AudioSampleRate.Rate24000;
     public string? SessionId { get; private set; }
     public bool FinalUsageConfirmed { get; private set; }
