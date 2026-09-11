@@ -1,6 +1,8 @@
 @page "/"
 @using Ai.Tlbx.VoiceAssistant
 @using Ai.Tlbx.VoiceAssistant.Provider.OpenAi
+@using Ai.Tlbx.VoiceAssistant.Provider.OpenAi.AspNetCore
+@using System.Text.Json.Nodes
 @using Ai.Tlbx.VoiceAssistant.Provider.OpenAi.Models
 @using Ai.Tlbx.VoiceAssistant.Provider.Google
 @using Ai.Tlbx.VoiceAssistant.Provider.Google.Models
@@ -80,7 +82,7 @@
                                     <!-- Model Selection -->
                                     <div>
                                         <label class="block text-xs font-medium text-gray-600 mb-1">Model</label>
-                                        <select class="w-full p-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-sm"
+                                        <select id="voice-model" class="w-full p-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-sm"
                                                 value="@_currentModelString"
                                                 @onchange="OnModelChanged"
                                                 disabled="@((voiceAssistant?.IsConnecting ?? false) || (voiceAssistant?.IsRecording ?? false))">
@@ -165,7 +167,10 @@
                                     }
 
                                     <!-- Voice Speed -->
-                                    <VoiceSpeedSlider SelectedSpeed="@currentVoiceSpeed" SelectedSpeedChanged="OnVoiceSpeedChanged" Disabled="@((voiceAssistant?.IsConnecting ?? false) || (voiceAssistant?.IsRecording ?? false))" />
+                                    @if (!IsLiveModel)
+                                    {
+                                        <VoiceSpeedSlider SelectedSpeed="@currentVoiceSpeed" SelectedSpeedChanged="OnVoiceSpeedChanged" Disabled="@((voiceAssistant?.IsConnecting ?? false) || (voiceAssistant?.IsRecording ?? false))" />
+                                    }
 
                                     <!-- Tool Selection -->
                                     <div>
@@ -174,6 +179,8 @@
                                                      Disabled="@((voiceAssistant?.IsConnecting ?? false) || (voiceAssistant?.IsRecording ?? false))" />
                                     </div>
 
+                                    @if (!IsLiveModel)
+                                    {
                                     <div class="rounded-md border border-gray-200 bg-gray-50 p-3 space-y-3">
                                         <div>
                                             <div class="text-xs font-medium text-gray-700">Tool behavior</div>
@@ -196,6 +203,7 @@
                                     </div>
 
                                     <!-- Microphone Selection -->
+                                    }
                                     <div>
                                         <label class="block text-xs font-medium text-gray-600 mb-1">Microphone</label>
                                         <MicrophoneSelect AvailableMicrophones="availableMicrophones"
@@ -222,7 +230,7 @@
 
                                     <!-- Status -->
                                     <div>
-                                        <StatusWidget ConnectionStatus="@(voiceAssistant?.ConnectionStatus ?? "")" Error="@(voiceAssistant?.LastErrorMessage ?? "")" IsMicrophoneTesting="@(voiceAssistant?.IsMicrophoneTesting ?? false)" />
+                                        <StatusWidget ConnectionStatus="@(voiceAssistant?.ConnectionStatus ?? "")" Error="@(_sessionError ?? voiceAssistant?.LastErrorMessage ?? "")" IsMicrophoneTesting="@(voiceAssistant?.IsMicrophoneTesting ?? false)" />
                                     </div>
 
                                     <!-- Connection Events -->
@@ -248,10 +256,14 @@
                                 </div>
 
                                 <div class="flex-1 p-3 overflow-y-auto bg-gray-50" id="chat-messages" @ref="chatContainer">
-                                    <ChatWidget ShowDebugToolCalls="@showDebugMode" ShowToolCalls="true" />
+                                    <ChatWidget ShowDebugToolCalls="@showDebugMode" ShowToolCalls="true" Messages="@(IsLiveModel ? _liveMessages : null)" />
                                 </div>
 
                                 <div class="px-3 py-2 border-t border-gray-200 bg-white">
+                                    @if (IsLiveModel)
+                                    {
+                                        <p id="live-session-usage" class="text-xs text-gray-500 mb-1">Live transcript · Voice: @voiceAssistant?.TotalProviderSessionDuration.TotalSeconds s · Backend: @voiceAssistant?.TotalTokensUsed tokens · Final usage: @_liveProvider?.FinalUsageConfirmed</p>
+                                    }
                                     @if (voiceAssistant?.IsRecording ?? false)
                                     {
                                         <div class="flex items-center text-red-600 text-sm">
@@ -526,7 +538,15 @@
 
     // Model management (provider-specific)
     private string _currentModelString = nameof(OpenAiRealtimeModel.GptRealtime21);
-    private List<ModelOption> availableModels = GetEnumOptions<OpenAiRealtimeModel>(includeObsolete: true);
+    private List<ModelOption> availableModels = GetOpenAiModelOptions();
+    private static List<ModelOption> GetOpenAiModelOptions() => [new("gpt-live-1", "GPT-Live 1 (gpt-live-1)"), .. GetEnumOptions<OpenAiRealtimeModel>(includeObsolete: true)];
+    private bool IsLiveModel => _selectedProviderString == "OpenAI" && _currentModelString == "gpt-live-1";
+    private OpenAiDirectLiveVoiceProvider? _liveProvider;
+    private readonly List<ChatMessage> _liveMessages = new();
+    private readonly HashSet<string> _liveDisplayedCalls = new();
+    private string? _liveTranscriptRole;
+    private bool _stopping;
+    private string? _sessionError;
     private static readonly List<ModelOption> _thinkingLevels = GetEnumOptions<SessionThinkingLevel>();
     private static readonly List<ModelOption> _reasoningEfforts = GetEnumOptions<SessionReasoningEffort>()
         .Where(option =>
@@ -538,7 +558,14 @@
 
     private void OnModelChanged(ChangeEventArgs e)
     {
+        if (_isBusy) return;
+        var wasLive = IsLiveModel;
         _currentModelString = e.Value?.ToString() ?? _currentModelString;
+        availableVoices = IsLiveModel
+            ? new() { "Marin", "Quartz", "Ripple", "Vesper", "Willow", "Stone", "Gleam", "Meridian", "Bossa", "Tempo", "Beacon", "Delta", "Cinder" }
+            : _selectedProviderString == "OpenAI" ? Enum.GetValues<AssistantVoice>().Select(v => v.ToString()).ToList() : availableVoices;
+        if (!availableVoices.Contains(_currentVoiceString)) currentVoiceString = availableVoices[0];
+        if (wasLive != IsLiveModel) RecreateVoiceAssistant();
         Log(LogLevel.Info, $"Model changed to: {_currentModelString}");
     }
 
@@ -546,7 +573,8 @@
     {
         return _selectedProviderString switch
         {
-            "OpenAI" => "Use GPT Realtime 2 for the new reasoning voice model, or 1.5 as the A/B baseline.",
+            "OpenAI" when IsLiveModel => "Continuous GPT-Live conversation over WebRTC. Enabled tools run through the Responses backend (gpt-5.6-luna).",
+            "OpenAI" => "Choose GPT-Live 1 for continuous conversation, or a Realtime model for turn-based voice.",
             "xAI" => "Latest currently uses Think Fast 2.0; pin GrokVoiceThinkFast20 for deterministic production rollout.",
             _ => "Obsolete models stay selectable here for manual compatibility checks."
         };
@@ -567,7 +595,7 @@
     private string ReasoningEffortValue => sessionSettings.ReasoningEffort?.ToString() ?? string.Empty;
     private string ToolCallPreambleModeValue => sessionSettings.ToolCallPreambleMode.ToString();
     private string GoogleThinkingBudgetValue => sessionSettings.Thinking.Budget?.ToString() ?? string.Empty;
-    private bool SelectedOpenAiModelSupportsReasoningEffort => GetSelectedOpenAiModelOrDefault().SupportsReasoningEffort();
+    private bool SelectedOpenAiModelSupportsReasoningEffort => !IsLiveModel && GetSelectedOpenAiModelOrDefault().SupportsReasoningEffort();
     private bool SelectedGoogleModelSupportsThinkingLevel => GetSelectedGoogleModelOrDefault().SupportsThinkingLevel();
     private bool SelectedGoogleModelSupportsThinkingBudget => GetSelectedGoogleModelOrDefault().SupportsThinkingBudget();
     private bool SelectedGoogleModelSupportsThoughtSummaries => GetSelectedGoogleModelOrDefault().SupportsThoughtSummaries();
@@ -642,6 +670,9 @@
 
     private void RecreateVoiceAssistant()
     {
+        if (_liveProvider != null) { _liveProvider.OnTranscriptDelta = null; _liveProvider.OnEventReceived = null; }
+        _liveProvider = null;
+        _liveTranscriptRole = null;
         // Dispose old instance if exists
         if (voiceAssistant != null)
         {
@@ -660,6 +691,7 @@
         {
             providerType = _selectedProviderString switch
             {
+                "OpenAI" when IsLiveModel => VoiceProviderType.OpenAiLive,
                 "OpenAI" => VoiceProviderType.OpenAI,
                 "Google" => VoiceProviderType.Google,
                 "xAI" => VoiceProviderType.XAi,
@@ -670,6 +702,35 @@
 
         // Create new VoiceAssistant
         voiceAssistant = new VoiceAssistant(HardwareAccess, provider, LogAction);
+        if (provider is OpenAiDirectLiveVoiceProvider live)
+        {
+            _liveProvider = live;
+            live.OnEventReceived = envelope =>
+            {
+                if (envelope["type"]?.GetValue<string>() != "response.event" || envelope["event"] is not JsonObject inner ||
+                    inner["type"]?.GetValue<string>() != "response.output_item.done" || inner["item"] is not JsonObject item ||
+                    item["type"]?.GetValue<string>() != "function_call") return;
+                _ = InvokeAsync(() =>
+                {
+                    var callId = item["call_id"]!.GetValue<string>();
+                    if (!_liveDisplayedCalls.Add(callId)) return;
+                    var name = item["name"]!.GetValue<string>();
+                    _liveMessages.Add(new ChatMessage($"Calling tool: {name}\nArguments: {item["arguments"]!.GetValue<string>()}", ChatMessage.AssistantRole, callId, name));
+                    _liveTranscriptRole = null;
+                    StateHasChanged();
+                });
+            };
+            live.OnTranscriptDelta = delta => _ = InvokeAsync(() =>
+            {
+                // Group fragments for display only; Live does not signal authoritative turn completion.
+                if (_liveTranscriptRole == delta.Role && _liveMessages.Count > 0 && _liveMessages[^1].Role == delta.Role)
+                    _liveMessages[^1] = new ChatMessage(_liveMessages[^1].Content + delta.Delta, delta.Role);
+                else _liveMessages.Add(new ChatMessage(delta.Delta, delta.Role));
+                _liveTranscriptRole = delta.Role;
+                StateHasChanged();
+                _ = ScrollToBottom();
+            });
+        }
 
         // Wire up callbacks
         voiceAssistant.OnConnectionStatusChanged = OnConnectionStatusChanged;
@@ -694,7 +755,7 @@
         {
             availableVoices = Enum.GetValues<AssistantVoice>().Select(v => v.ToString()).ToList();
             _currentVoiceString = nameof(AssistantVoice.Marin);
-            availableModels = GetEnumOptions<OpenAiRealtimeModel>(includeObsolete: true);
+            availableModels = GetOpenAiModelOptions();
             _currentModelString = nameof(OpenAiRealtimeModel.GptRealtime21);
         }
         else if (_selectedProviderString == "Google")
@@ -1133,7 +1194,7 @@
 
     private void OnMicrophoneDevicesChanged(List<AudioDeviceInfo> devices)
     {
-        InvokeAsync(async () => 
+        InvokeAsync(async () =>
         {
             await ApplyMicrophoneDevicesAsync(devices, preferBestDevice: string.IsNullOrEmpty(selectedMicrophoneId));
             StateHasChanged();
@@ -1142,19 +1203,22 @@
 
     private void OnConnectionStatusChanged(string status)
     {
-        InvokeAsync(() => 
+        InvokeAsync(async () =>
         {
             if (!string.IsNullOrEmpty(status))
             {
                 lastConnectionEvent = $"{DateTime.Now:HH:mm:ss} - {status}";
             }
             StateHasChanged();
+            if (_liveProvider != null && voiceAssistant?.IsRecording == true && !_liveProvider.IsConnected && !_stopping)
+                await StopSession();
         });
     }
 
     private void OnMessageAdded(ChatMessage message)
     {
         InvokeAsync(async () => {
+            if (IsLiveModel) { _liveMessages.Add(message); _liveTranscriptRole = null; }
             StateHasChanged();
             await Task.Delay(50); // Give the DOM time to update
             await ScrollToBottom();
@@ -1213,6 +1277,7 @@
 
     private async Task StartSession()
     {
+        _sessionError = null;
         try
         {
             if (voiceAssistant == null)
@@ -1236,7 +1301,27 @@
 
             var instructions = "Du bist ein freundlicher hilfreicher sprachagent. (Antworte in der Anfragesprache, im Zweifel bitte in Deutsch), Nimm an dein Gegenüber ist ein Experte in der Materie über die ihr gerade redet, also neige eher zu sehr fachlichen Antworten und mach die antworten nur auf Nachfrage leichter verständlich. Sprich schnell mit möglichst kurzen pausen, bring emotion in deine Stimme, lache wenn es passt.";
 
-            if (_selectedProviderString == "OpenAI")
+            if (IsLiveModel)
+            {
+                _liveTranscriptRole = null;
+                _liveDisplayedCalls.Clear();
+                settings = new OpenAiLiveSettings
+                {
+                    ModelId = "gpt-live-1",
+                    Voice = _currentVoiceString.ToLowerInvariant(),
+                    Instructions = instructions + " Delegiere Aufgaben, die die aktivierten Werkzeuge benötigen, an dein Backend. Bestätige Aktionen erst nach dem geprüften Ergebnis.",
+                    InitialHistory = _liveMessages.Where(m => m.ToolCallId == null && m.Role is ChatMessage.UserRole or ChatMessage.AssistantRole).TakeLast(128).ToList(),
+                    Responses = new JsonObject
+                    {
+                        ["model"] = "gpt-5.6-luna",
+                        ["instructions"] = "Bearbeite die Anfrage mit den verfügbaren Werkzeugen. Beachte deren Parameter und Berechtigungen. Gib geprüfte Ergebnisse kurz in der Sprache des Nutzers zurück; erfinde keine ausgeführten Aktionen.",
+                        ["parallel_tool_calls"] = false,
+                        ["max_output_tokens"] = 2048
+                    },
+                    Tools = enabledTools.ToList()
+                };
+            }
+            else if (_selectedProviderString == "OpenAI")
             {
                 if (!Enum.TryParse<AssistantVoice>(_currentVoiceString, out var openAiVoice))
                 {
@@ -1337,6 +1422,8 @@
 
             // Start the session with the configured settings
             await voiceAssistant.StartAsync(settings);
+            if (_liveProvider != null && _liveMessages.Count == 0)
+                await _liveProvider.AppendInstructionsAsync("Begrüße den Nutzer kurz als KI-Sprachassistent und höre dann zu.");
 
             // Even if permission state is lost in the process, we still know we have a valid device
             if (!micPermissionGranted && availableMicrophones.Count > 0)
@@ -1349,12 +1436,15 @@
         catch (Exception ex)
         {
             Log(LogLevel.Error, $"Error starting session: {ex.Message}");
+            _sessionError = ex.Message;
             Log(LogLevel.Error, $"Stack trace: {ex.StackTrace}");
         }
     }
 
     private async Task StopSession()
     {
+        if (_stopping) return;
+        _stopping = true;
         try
         {
             if (voiceAssistant == null) return;
@@ -1374,10 +1464,14 @@
             Log(LogLevel.Error, $"Error stopping session: {ex.Message}");
             Log(LogLevel.Error, $"Stack trace: {ex.StackTrace}");
         }
+        finally { _stopping = false; }
     }    
 
     private void ClearChat()
     {
+        _liveMessages.Clear();
+        _liveDisplayedCalls.Clear();
+        _liveTranscriptRole = null;
         voiceAssistant?.ClearChatHistory();
         InvokeAsync(StateHasChanged);
     }
@@ -1676,6 +1770,7 @@
 
     public async ValueTask DisposeAsync()
     {
+        if (_liveProvider != null) { _liveProvider.OnTranscriptDelta = null; _liveProvider.OnEventReceived = null; }
         await StopPttLiveTranscriptionAsync();
 
         if (voiceAssistant != null)
@@ -1739,4 +1834,3 @@
         return text.Substring(0, maxLength) + "...";
     }
 }
-

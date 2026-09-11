@@ -9,7 +9,7 @@ using Ai.Tlbx.VoiceAssistant.Models;
 using Ai.Tlbx.VoiceAssistant.Provider.OpenAi;
 using Ai.Tlbx.VoiceAssistant.Provider.OpenAi.Models;
 
-internal static class OpenAiLiveTests
+internal static partial class OpenAiLiveTests
 {
     private static void Check(bool condition, string message)
     {
@@ -136,6 +136,7 @@ internal static class OpenAiLiveTests
         Check(received.Any(x => x["type"]?.GetValue<string>() == "response.item.create"), "tool output submitted");
         await VerifyFailedLifecycleAsync(false);
         await VerifyFailedLifecycleAsync(true);
+        await VerifyBackendFailuresAsync();
         Console.WriteLine("GPT-Live protocol contracts passed.");
     }
 

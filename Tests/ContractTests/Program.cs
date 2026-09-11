@@ -18,6 +18,12 @@ using Ai.Tlbx.VoiceAssistant.Provider.XAi;
 using Ai.Tlbx.VoiceAssistant.Provider.XAi.Models;
 using Ai.Tlbx.VoiceAssistant.Provider.XAi.Protocol;
 
+if (args.Contains("--live-gpt-live-budget-smoke", StringComparer.Ordinal))
+{
+    await OpenAiLiveTests.RunLiveBudgetAsync();
+    return;
+}
+
 if (args.Contains("--live-gpt-live-tools-smoke", StringComparer.Ordinal))
 {
     await OpenAiLiveTests.RunLiveToolsAsync();

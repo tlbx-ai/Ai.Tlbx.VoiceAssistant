@@ -12,6 +12,7 @@ namespace Ai.Tlbx.VoiceAssistant.Demo.Web.Services
     public enum VoiceProviderType
     {
         OpenAI,
+        OpenAiLive,
         Google,
         XAi,
         OpenAiTranscription
@@ -38,6 +39,7 @@ namespace Ai.Tlbx.VoiceAssistant.Demo.Web.Services
             return providerType switch
             {
                 VoiceProviderType.OpenAI => _serviceProvider.GetRequiredService<OpenAiDirectRealtimeVoiceProvider>(),
+                VoiceProviderType.OpenAiLive => _serviceProvider.GetRequiredService<OpenAiDirectLiveVoiceProvider>(),
                 VoiceProviderType.Google => new GoogleVoiceProvider(
                     Environment.GetEnvironmentVariable("GOOGLE_API_KEY"), logAction),
                 VoiceProviderType.XAi => new XaiVoiceProvider(

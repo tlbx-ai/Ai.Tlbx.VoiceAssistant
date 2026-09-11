@@ -6,7 +6,7 @@
 <div class="w-full px-2">
     @if (VoiceAssistant != null)
     {
-        @foreach (var message in VoiceAssistant.ChatHistory)
+        @foreach (var message in Messages ?? VoiceAssistant.ChatHistory)
         {
             <div class="mb-3">
                 <div class="@(GetMessageAlignment(message))">
@@ -91,6 +91,8 @@
     public bool ShowDebugToolCalls { get; set; }
     
     [Parameter] public bool ShowToolCalls { get; set; } = true;
+    /// <summary>Optional application-owned transcript display, including continuous Live fragments.</summary>
+    [Parameter] public IReadOnlyList<ChatMessage>? Messages { get; set; }
     
     private string GetMessageAlignment(ChatMessage message)
     {

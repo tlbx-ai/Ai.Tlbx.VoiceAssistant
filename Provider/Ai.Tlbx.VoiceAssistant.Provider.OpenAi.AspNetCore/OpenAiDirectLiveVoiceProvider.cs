@@ -22,6 +22,8 @@ public sealed class OpenAiDirectLiveVoiceProvider : IDirectBrowserVoiceProvider,
     public bool IsConnected => _browserReady && _live.IsConnected;
     public bool FinalUsageConfirmed => _live.FinalUsageConfirmed;
     public string? SessionId => _live.SessionId;
+    public string? BackendContinuationError => _live.BackendContinuationError;
+    public IReadOnlyList<OpenAiLiveToolResult> ToolResults => _live.ToolResults;
     public AudioSampleRate RequiredInputSampleRate => AudioSampleRate.Rate24000;
     public Action<ChatMessage>? OnMessageReceived { get; set; }
     public Action<string>? OnAudioReceived { get; set; }
@@ -47,7 +49,7 @@ public sealed class OpenAiDirectLiveVoiceProvider : IDirectBrowserVoiceProvider,
         _live = new OpenAiLiveProvider(apiKey, options.Log);
         _live.OnMessageReceived = m => OnMessageReceived?.Invoke(m);
         _live.OnStatusChanged = s => OnStatusChanged?.Invoke(s);
-        _live.OnError = e => { OnError?.Invoke(e); if (!_live.IsConnected) _ = CleanupAfterFailureAsync(); };
+        _live.OnError = e => { OnError?.Invoke(e); if (!_live.IsConnected || _live.BackendContinuationError != null) _ = CleanupAfterFailureAsync(); };
         _live.OnUsageReceived = u => OnUsageReceived?.Invoke(u);
         _live.OnTranscriptionDelta = d => OnTranscriptionDelta?.Invoke(d);
         _live.OnStructuredTranscriptionReceived = t => OnStructuredTranscriptionReceived?.Invoke(t);

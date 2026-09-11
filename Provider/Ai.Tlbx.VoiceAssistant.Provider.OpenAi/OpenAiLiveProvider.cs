@@ -37,7 +37,15 @@ public sealed class OpenAiLiveProvider : IVoiceProvider, IStartupHistoryVoicePro
     private readonly Dictionary<string, TaskCompletionSource<JsonObject>> _pending = new();
     private readonly Dictionary<string, List<JsonObject>> _calls = new();
     private readonly Dictionary<string, string> _responseIds = new();
-    private readonly HashSet<string> _executedCalls = new();
+    private readonly object _backendLock = new();
+    private readonly SemaphoreSlim _toolLock = new(1, 1);
+    private readonly SemaphoreSlim _disconnectLock = new(1, 1);
+    private readonly Dictionary<string, OpenAiLiveToolResult> _toolResults = new();
+    private readonly Dictionary<string, string?> _backendEvents = new();
+    private int _backendInputItems;
+    private int _backendInputBytes;
+    private string? _backendFailure;
+    private Task? _failureCleanup;
     private readonly List<Task> _backendTasks = new();
     private List<ChatMessage> _history = new();
     private OpenAiLiveSettings? _settings;
@@ -50,6 +58,11 @@ public sealed class OpenAiLiveProvider : IVoiceProvider, IStartupHistoryVoicePro
     public string? SessionId { get; private set; }
     public bool FinalUsageConfirmed { get; private set; }
     public string? CloseReason { get; private set; }
+    /// <summary>First terminal backend continuation failure. No automatic retry or tool replay is performed.</summary>
+    public string? BackendContinuationError { get { lock (_backendLock) return _backendFailure; } }
+    /// <summary>Immutable snapshots retained until the next connection. SentUnconfirmed is not an API acknowledgment.
+    /// Preserve results in application storage before reconnecting if recovery is needed.</summary>
+    public IReadOnlyList<OpenAiLiveToolResult> ToolResults { get { lock (_backendLock) return _toolResults.Values.ToArray(); } }
     public Action<ChatMessage>? OnMessageReceived { get; set; }
     public Action<string>? OnAudioReceived { get; set; }
     public Func<TimeSpan?, Task<bool>>? WaitForPlaybackDrainAsync { get; set; }
@@ -105,6 +118,7 @@ public sealed class OpenAiLiveProvider : IVoiceProvider, IStartupHistoryVoicePro
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
         if (_socket != null) throw new InvalidOperationException("Disconnect the existing session first.");
+        if (_failureCleanup is { IsCompleted: false }) throw new InvalidOperationException("Previous backend failure cleanup is still running.");
         lock (_backendTasks)
         {
             _backendTasks.RemoveAll(t => t.IsCompleted);
@@ -122,7 +136,13 @@ public sealed class OpenAiLiveProvider : IVoiceProvider, IStartupHistoryVoicePro
         SessionId = null;
         _calls.Clear();
         _responseIds.Clear();
-        _executedCalls.Clear();
+        lock (_backendLock)
+        {
+            _toolResults.Clear();
+            _backendEvents.Clear();
+            _backendInputItems = _backendInputBytes = 0;
+            _backendFailure = null;
+        }
         _lifetime = new CancellationTokenSource();
         _socket = new ClientWebSocket();
         _settings.Connection.Apply(_socket.Options, _apiKey);
@@ -335,7 +355,46 @@ public sealed class OpenAiLiveProvider : IVoiceProvider, IStartupHistoryVoicePro
             if (_closing && command["type"]?.GetValue<string>() != "session.close")
                 throw new InvalidOperationException("Live session is closing.");
             var bytes = Encoding.UTF8.GetBytes(command.ToJsonString());
+            var type = command["type"]?.GetValue<string>();
+            if (type is "response.item.create" or "response.create")
+            {
+                var eventId = command["event_id"]?.GetValue<string>() ?? Guid.NewGuid().ToString("N");
+                command["event_id"] = eventId;
+                bytes = Encoding.UTF8.GetBytes(command.ToJsonString());
+                lock (_backendLock)
+                {
+                    if (_backendFailure != null) throw new InvalidOperationException(_backendFailure);
+                    if (_backendEvents.ContainsKey(eventId)) throw new ArgumentException("Backend event_id must be unique within the session.");
+                    var callId = command["item"]?["call_id"]?.GetValue<string>();
+                    _backendEvents.Add(eventId, callId);
+                    if (callId != null && _toolResults.TryGetValue(callId, out var result))
+                        _toolResults[callId] = result with { EventId = eventId };
+                    // Count the entire serialized event, including escaped Unicode and envelope overhead.
+                    // This deliberately exceeds the observed server item cost. Never refund or reset on continuation:
+                    // there is no item ACK, and the input history limit is per session.
+                    if (type == "response.item.create")
+                    {
+                        if (_backendInputItems >= 128 || bytes.Length > 32768 - _backendInputBytes)
+                        {
+                            if (callId != null && _toolResults.TryGetValue(callId, out var blocked))
+                                _toolResults[callId] = blocked with { SubmissionState = OpenAiLiveToolSubmissionState.BudgetExceeded };
+                            throw new InvalidOperationException($"Live backend input budget exhausted before sending event {eventId} (call {callId}): reserved {_backendInputItems} items / {_backendInputBytes} UTF-8 bytes, next event {bytes.Length} bytes; limits 128 / 32768. Result retained without truncation; start a new session only after reconciling executed actions.");
+                        }
+                        _backendInputItems++;
+                        _backendInputBytes += bytes.Length;
+                    }
+                }
+            }
             await (_socket ?? throw new InvalidOperationException("Live transport is closed.")).SendAsync(new ArraySegment<byte>(bytes), WebSocketMessageType.Text, true, cancellationToken).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (command["type"]?.GetValue<string>() is "response.item.create" or "response.create")
+        {
+            lock (_backendLock)
+                if (command["item"]?["call_id"]?.GetValue<string>() is string callId && _toolResults.TryGetValue(callId, out var result)
+                    && result.SubmissionState == OpenAiLiveToolSubmissionState.NotSent)
+                    _toolResults[callId] = result with { SubmissionState = OpenAiLiveToolSubmissionState.TransportUncertain, Error = ex.Message };
+            FailBackend($"Live backend submission failed: {ex.Message}");
+            throw;
         }
         finally { _sendLock.Release(); }
     }
@@ -432,7 +491,17 @@ public sealed class OpenAiLiveProvider : IVoiceProvider, IStartupHistoryVoicePro
             case "error":
                 var error = message["error"]?.ToJsonString() ?? "Live API error";
                 _started.TrySetException(new InvalidOperationException(error));
-                OnError?.Invoke(error);
+                var code = message["error"]?["code"]?.GetValue<string>();
+                bool backendError;
+                lock (_backendLock)
+                {
+                    backendError = clientId != null && _backendEvents.ContainsKey(clientId);
+                    if (backendError && _backendEvents[clientId!] is string failedCall && _toolResults.TryGetValue(failedCall, out var failedResult))
+                        _toolResults[failedCall] = failedResult with { SubmissionState = OpenAiLiveToolSubmissionState.Rejected, Error = error };
+                }
+                if (backendError || code is "response_input_buffer_full" or "function_call_outputs_required")
+                    FailBackend($"Live backend rejected event {clientId ?? "(uncorrelated)"}: {error}");
+                else OnError?.Invoke(error);
                 break;
         }
         OnEventReceived?.Invoke((JsonObject)message.DeepClone());
@@ -478,7 +547,7 @@ public sealed class OpenAiLiveProvider : IVoiceProvider, IStartupHistoryVoicePro
                     ?? inner["response"]?["incomplete_details"]?.ToJsonString() ?? "No failure details provided";
                 OnError?.Invoke($"Live backend {type} (response {completedId}, delegation {delegation}): {details}");
             }
-            if (completedId != null && _calls.Remove(completedId, out var calls) && type == "response.completed" && _settings?.Tools.Count > 0)
+            if (completedId != null && _calls.Remove(completedId, out var calls) && type == "response.completed" && _settings?.Tools.Count > 0 && BackendContinuationError == null)
             {
                 // Tool execution must not block microphone/audio/transcript reception.
                 var task = Task.Run(() => ExecuteToolsAsync(calls));
@@ -489,31 +558,67 @@ public sealed class OpenAiLiveProvider : IVoiceProvider, IStartupHistoryVoicePro
 
     private async Task ExecuteToolsAsync(List<JsonObject> calls)
     {
+        await _toolLock.WaitAsync().ConfigureAwait(false);
         try
         {
             var submitted = false;
             foreach (var call in calls)
             {
-                if (!IsConnected) return;
+                if (!IsConnected || BackendContinuationError != null) return;
                 var id = call["call_id"]!.GetValue<string>();
-                lock (_executedCalls) if (!_executedCalls.Add(id)) continue;
                 var name = call["name"]!.GetValue<string>();
+                lock (_backendLock)
+                {
+                    if (_toolResults.ContainsKey(id)) continue;
+                    _toolResults.Add(id, new OpenAiLiveToolResult(id, name, null, null, OpenAiLiveToolSubmissionState.NotSent, null));
+                }
                 var tool = _settings!.Tools.SingleOrDefault(t => t.Name == name);
                 string output;
                 try { output = tool == null ? "{\"error\":\"Tool is not registered for execution\"}" : await tool.ExecuteAsync(call["arguments"]!.GetValue<string>()).ConfigureAwait(false); }
                 catch (Exception ex) { _log(LogLevel.Error, $"Live tool {name} failed: {ex.Message}"); output = "{\"error\":\"Tool execution failed\"}"; }
-                if (!IsConnected) return;
+                lock (_backendLock)
+                    _toolResults[id] = _toolResults[id] with { Output = output };
+                // Execution is an application fact even when the subsequent submission fails.
+                OnMessageReceived?.Invoke(ChatMessage.CreateToolMessage(name, output, id));
+                if (!IsConnected || BackendContinuationError != null) return;
                 await SendEventAsync(new JsonObject { ["type"] = "response.item.create", ["item"] = new JsonObject {
                     ["type"] = "function_call_output", ["call_id"] = id, ["output"] = output } }, _lifetime!.Token).ConfigureAwait(false);
+                lock (_backendLock)
+                    if (_toolResults[id].SubmissionState == OpenAiLiveToolSubmissionState.NotSent)
+                        _toolResults[id] = _toolResults[id] with { SubmissionState = OpenAiLiveToolSubmissionState.SentUnconfirmed };
                 submitted = true;
-                OnMessageReceived?.Invoke(ChatMessage.CreateToolMessage(name, output, id));
             }
-            if (submitted && IsConnected) await SendEventAsync(new JsonObject { ["type"] = "response.create" }, _lifetime!.Token).ConfigureAwait(false);
+            if (submitted && IsConnected && BackendContinuationError == null) await SendEventAsync(new JsonObject { ["type"] = "response.create" }, _lifetime!.Token).ConfigureAwait(false);
         }
-        catch (Exception ex) { OnError?.Invoke($"Live backend continuation failed: {ex.Message}"); }
+        catch (Exception ex) { FailBackend($"Live backend continuation failed: {ex.Message}"); }
+        finally { _toolLock.Release(); }
+    }
+
+    private void FailBackend(string error)
+    {
+        lock (_backendLock)
+        {
+            if (_backendFailure != null) return;
+            _backendFailure = error;
+            // Closing from the receive loop would await the receiver itself. Schedule bounded graceful
+            // finalization independently; DisconnectAsync serializes against application cleanup.
+            _failureCleanup = Task.Run(async () =>
+            {
+                try { await DisconnectAsync().ConfigureAwait(false); }
+                catch (Exception ex) { _log(LogLevel.Error, $"Live backend failure cleanup: {ex.Message}"); }
+            });
+        }
+        OnError?.Invoke(error);
     }
 
     public async Task DisconnectAsync()
+    {
+        await _disconnectLock.WaitAsync().ConfigureAwait(false);
+        try { await DisconnectCoreAsync().ConfigureAwait(false); }
+        finally { _disconnectLock.Release(); }
+    }
+
+    private async Task DisconnectCoreAsync()
     {
         if (_socket == null) return;
         try

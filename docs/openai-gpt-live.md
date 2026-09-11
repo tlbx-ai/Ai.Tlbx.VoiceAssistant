@@ -96,6 +96,57 @@ register the same tools. A Live `response.create` starts backend work; it does n
 
 Source: [Delegation and tool protocol](https://developers.openai.com/api/docs/guides/live-delegation).
 
+### Backend input capacity and terminal continuation failure
+
+The main Web Demo at `/` includes `gpt-live-1` in the OpenAI model selector. It uses the existing
+voice/microphone selectors, enabled tools and conversation/debug panel with direct WebRTC transport.
+Live transcript fragments are grouped for display and retained as text context for restart; tool
+request/result rows are excluded from startup text history. Realtime-only speed, reasoning and
+preamble controls are hidden for Live. `Tests/Browser/main-demo-live-smoke.js` exercises the main
+page using a spoken WAV request, tool selection, request/result display, model switching and cleanup.
+
+The API currently rejects backend input history above 128 items or 32768 UTF-8 bytes per session
+with `response_input_buffer_full`. This is separate from the backend model's context window.
+It is cumulative across `response.create` calls. A failed item followed by continuation can then
+produce `function_call_outputs_required`. Neither successful WebSocket transmission nor silence
+from the server establishes that the item was accepted; there is no standalone item success ACK.
+
+On 2026-09-11, direct endpoint boundary probes established that a user-message item's compact JSON
+size counts, including its structure: 32692 ASCII text bytes plus 76 structural bytes were accepted;
+one additional byte was rejected. The same boundary accepted text containing umlauts and emoji
+when measured as UTF-8, not characters. Two items exactly filling 32768 bytes blocked a third;
+129 one-character messages rejected item 129. These observations are not a guarantee about every
+input type or hidden server context. The provider conservatively reserves the entire serialized
+outgoing `response.item.create` event, including its envelope and Unicode escaping, and never
+refunds that reservation or resets it on continuation. Advanced `SendEventAsync` inputs use the
+same budget and error correlation as automatic tool results. Keep backend input ownership on this
+connection; sends from another connection cannot be included in the local estimate.
+
+The provider serializes local tool batches and retains each execution result verbatim in
+`ToolResults`, independently of submission state and `EventId`. `SentUnconfirmed` means transport
+completion only. A correlated API rejection marks the original result `Rejected`, even if it
+arrives after a continuation was already sent. Budget overflow, backend-command transport failure,
+or a correlated backend API rejection latches `BackendContinuationError`, stops further automatic
+execution/submission/continuation, and schedules a bounded graceful session close. Final usage is
+still collected; timeout or transport loss leaves `FinalUsageConfirmed` false. A continuation
+already in flight before the rejection cannot be recalled. There are no timed ACK guesses or retries.
+
+Results survive disconnect until the next connection. Persist them in application storage before
+reconnecting when recovery is required. An in-flight tool may still finish after close: speech and
+transport shutdown do not undo the action. Reconnection is blocked while local tool work or failure
+cleanup is still running. Never blindly replay prior actions; reconcile application operation IDs,
+permissions and confirmations first. Oversized output is not truncated or automatically replaced
+with a summary. The current recovery policy is terminal close, not automatic resume.
+
+For AURA-style document/search workflows, use client delegation with an application-owned backend
+history and tool chain. Return separately composed, verified speech results via thinking/commentary
+appends, each within its own 500-token limit. That requires application context, authorization,
+confirmation and metering integration; this library fix does not implement that architecture or
+increase the API's capacity.
+
+Regression coverage includes oversized output, cumulative bytes within and across responses,
+Unicode, the item count, delayed rejection, mixed batches, duplicate calls and concurrent cleanup.
+
 ### Realtime-to-Live tool migration audit
 
 `gpt-realtime-2.1` chooses functions directly; `gpt-live-1` decides when to ask its
@@ -289,14 +340,17 @@ startup rejection, and missing finalization. Opt-in real API checks:
 ```powershell
 dotnet run --project Tests/ContractTests -- --live-gpt-live-smoke
 dotnet run --project Tests/ContractTests -- --live-gpt-live-tools-smoke
+dotnet run --project Tests/ContractTests -- --live-gpt-live-budget-smoke
 ```
 
 The first checks generated audio and final voice usage. Set `GPT_LIVE_SMOKE_INPUT_WAV` to a mono,
 24-kHz PCM16 WAV containing an English order-status request to additionally verify spoken input,
 client delegation, result acknowledgment and the returned shipping-status transcript.
-The second checks a real backend function
-call, result submission and continuation. These synthetic tests do not establish physical microphone,
-speaker, echo cancellation or conversational interruption quality.
+The second checks a real backend function call, result submission and continuation.
+The budget smoke executes one real backend tool with an oversized synthetic result, verifies local
+rejection without an API error cascade, retains the complete result and confirms final session usage.
+These synthetic tests do not establish physical microphone, speaker, echo cancellation or conversational
+interruption quality.
 The Native AOT test app exposes `/live-smoke` for an opt-in compiled transport check.
 
 `Tests/Browser/direct-live-smoke.js` is an async browser action script for the `/gpt-live` demo.
