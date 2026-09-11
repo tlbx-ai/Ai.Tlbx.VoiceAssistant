@@ -96,6 +96,45 @@ register the same tools. A Live `response.create` starts backend work; it does n
 
 Source: [Delegation and tool protocol](https://developers.openai.com/api/docs/guides/live-delegation).
 
+### Realtime-to-Live tool migration audit
+
+`gpt-realtime-2.1` chooses functions directly; `gpt-live-1` decides when to ask its
+separate Responses backend, which then chooses functions. Sharing the flat function
+definition schema does not make the two execution protocols interchangeable:
+
+| Step | Realtime 2.1 | Live 1 |
+| --- | --- | --- |
+| Tool definitions | `session.tools` | `session.delegation.responses.tools` |
+| Completed calls | `response.output_item.done` / `response.done.output` | `response.output_item.done` inside a `response.event` envelope; terminal output is empty |
+| Function result | `conversation.item.create` | `response.item.create` |
+| Continue | `response.create` requests a model response | Bodyless `response.create` continues backend work; speech has its own lifecycle |
+
+The Live provider uses `OpenAiToolTranslator` for the shared flat function definition
+only. It deliberately does **not** use that translator's Realtime `FormatToolResponse`.
+It preserves function `call_id`, JSON arguments and string results in the Live loop.
+Nested `response.failed` and `response.incomplete` are reported through `OnError`,
+including response/delegation IDs and backend error or token-limit details. They are
+not automatically retried; an earlier tool may already have changed application state.
+
+Use separate prompts. `Instructions` describes conversation style, available backend
+capabilities and concrete delegation triggers. `Responses["instructions"]` holds tool
+procedures, business rules and how to return verified facts/status to the voice model.
+Tell the voice model to wait for verified results before confirming an action. Copying
+the old Realtime prompt into both fields leaves the division of responsibilities unclear.
+For an initial migration set `Responses["parallel_tool_calls"] = false`; enable parallel
+calls only for independent work. This setting controls the backend, not delegation.
+
+Contract tests cover multiple results before continuation, duplicate call and terminal
+events, dependent response batches, and observable backend failures. The real API tool
+smoke uses a generated token which must pass from the first tool result to a second call.
+Set `GPT_LIVE_TOOL_SMOKE_INPUT_PCM` to a raw 24-kHz mono PCM16 spoken token-verification
+request to test voice-triggered delegation as well; otherwise the smoke explicitly
+starts backend work and does not validate the voice model's delegation decision.
+
+Sources: [Realtime function calling](https://developers.openai.com/api/docs/guides/realtime-conversations#function-calling),
+[Live migration](https://developers.openai.com/api/docs/guides/live-migration),
+[Live prompting](https://developers.openai.com/api/docs/guides/live-prompting).
+
 ## Transcripts, interruptions and usage
 
 Input/output transcript deltas contain text and `start_ms`/`end_ms` on the session timeline.

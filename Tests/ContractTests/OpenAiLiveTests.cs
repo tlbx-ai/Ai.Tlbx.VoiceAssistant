@@ -47,12 +47,33 @@ internal static class OpenAiLiveTests
             await WriteAsync(socket, """{"type":"session.usage.updated","usage":{"seconds":2}}""", timeout.Token);
             await WriteAsync(socket, """{"type":"response.event","delegation_id":"item_d","event":{"type":"response.created","response":{"id":"resp_1"}}}""", timeout.Token);
             await WriteAsync(socket, """{"type":"response.event","delegation_id":"item_d","event":{"type":"response.output_item.done","item":{"type":"function_call","call_id":"call_1","name":"lookup","arguments":"{}"}}}""", timeout.Token);
+            // A repeated item must not repeat an operation. All distinct results precede continuation.
+            await WriteAsync(socket, """{"type":"response.event","delegation_id":"item_d","event":{"type":"response.output_item.done","item":{"type":"function_call","call_id":"call_1","name":"lookup","arguments":"{}"}}}""", timeout.Token);
+            await WriteAsync(socket, """{"type":"response.event","delegation_id":"item_d","event":{"type":"response.output_item.done","item":{"type":"function_call","call_id":"call_2","name":"lookup","arguments":"{}"}}}""", timeout.Token);
             await WriteAsync(socket, """{"type":"response.event","delegation_id":"item_d","event":{"type":"response.completed","response":{"id":"resp_1","output":[],"model":"backend","usage":{"input_tokens":10,"output_tokens":5,"total_tokens":15}}}}""", timeout.Token);
             while (true)
             {
                 var command = await ReadAsync(socket, timeout.Token);
                 received.Enqueue(command);
                 var type = command["type"]!.GetValue<string>();
+                if (type == "response.create")
+                {
+                    Check(!command.ContainsKey("delegation_id") && !command.ContainsKey("response"), "bodyless Live continuation");
+                    var step = received.Count(x => x["type"]?.GetValue<string>() == "response.create");
+                    Check(received.Count(x => x["type"]?.GetValue<string>() == "response.item.create") == (step == 1 ? 2 : 3), "all function outputs precede continuation");
+                    if (step == 1)
+                    {
+                        await WriteAsync(socket, """{"type":"response.event","delegation_id":"item_d","event":{"type":"response.created","response":{"id":"resp_2"}}}""", timeout.Token);
+                        await WriteAsync(socket, """{"type":"response.event","delegation_id":"item_d","event":{"type":"response.output_item.done","item":{"type":"function_call","call_id":"call_3","name":"lookup","arguments":"{}"}}}""", timeout.Token);
+                        await WriteAsync(socket, """{"type":"response.event","delegation_id":"item_d","event":{"type":"response.completed","response":{"id":"resp_2","output":[]}}}""", timeout.Token);
+                        await WriteAsync(socket, """{"type":"response.event","delegation_id":"item_d","event":{"type":"response.completed","response":{"id":"resp_2","output":[]}}}""", timeout.Token);
+                    }
+                    else
+                    {
+                        await WriteAsync(socket, """{"type":"response.event","delegation_id":"item_d","event":{"type":"response.incomplete","response":{"id":"resp_limit","output":[],"incomplete_details":{"reason":"max_output_tokens"}}}}""", timeout.Token);
+                        await WriteAsync(socket, """{"type":"response.event","delegation_id":"item_d","event":{"type":"response.failed","response":{"id":"resp_failed","output":[],"error":{"code":"server_error","message":"backend failed"}}}}""", timeout.Token);
+                    }
+                }
                 if (type == "session.close")
                 {
                     await WriteAsync(socket, """{"type":"session.closed","reason":"close_requested","usage":{"seconds":3},"session":{"id":"sess_test"}}""", timeout.Token);
@@ -79,6 +100,8 @@ internal static class OpenAiLiveTests
         var audio = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var continuation = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var completedTranscripts = 0;
+        var errors = new ConcurrentQueue<string>();
+        provider.OnError = errors.Enqueue;
         provider.OnTranscriptDelta = fragments.Enqueue;
         provider.OnUsageReceived = usage.Enqueue;
         provider.OnAudioReceived = _ => audio.TrySetResult();
@@ -92,7 +115,7 @@ internal static class OpenAiLiveTests
         try { await provider.SetInputMutedAsync(true); throw new Exception("Expected rejection"); }
         catch (InvalidOperationException ex) when (ex.Message.Contains("test rejection")) { }
         await continuation.Task.WaitAsync(timeout.Token);
-        while (!received.Any(x => x["type"]?.GetValue<string>() == "response.create")) await Task.Delay(10, timeout.Token);
+        while (!errors.Any(x => x.Contains("resp_failed"))) await Task.Delay(10, timeout.Token);
         await provider.DisconnectAsync();
         await server;
         Check(provider.FinalUsageConfirmed && !provider.IsConnected, "graceful finalization");
@@ -106,7 +129,10 @@ internal static class OpenAiLiveTests
         meter.AddReport(usage.First()); // late nonfinal snapshot cannot overwrite final usage
         Check(meter.TotalSessionDuration == TimeSpan.FromSeconds(3) && meter.TotalTokens == 15 && meter.ReportCount == 2,
             "orchestrator metering replaces cumulative snapshots and retains final usage");
-        Check(tool.Calls == 1, "registered tool executed once despite empty terminal output");
+        Check(tool.Calls == 3, "each distinct tool call executes once across batches and duplicate events");
+        Check(received.Count(x => x["type"]?.GetValue<string>() == "response.create") == 2, "one continuation per completed tool batch");
+        Check(errors.Any(x => x.Contains("resp_limit") && x.Contains("max_output_tokens") && x.Contains("item_d")), "nested token limit is observable with response and delegation IDs");
+        Check(errors.Any(x => x.Contains("resp_failed") && x.Contains("server_error")), "nested backend failure is observable");
         Check(received.Any(x => x["type"]?.GetValue<string>() == "response.item.create"), "tool output submitted");
         await VerifyFailedLifecycleAsync(false);
         await VerifyFailedLifecycleAsync(true);
@@ -160,34 +186,48 @@ internal static class OpenAiLiveTests
 
     public static async Task RunLiveToolsAsync()
     {
-        var tool = new LookupTool();
+        var tool = new ChainedLookupTool();
         await using var provider = new OpenAiLiveProvider();
         var complete = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var responses = 0;
         provider.OnError = e => Console.Error.WriteLine("Live API: " + e);
+        provider.OnTranscriptDelta = d => Console.Write(d.Delta);
+        provider.OnDelegationCreated = d => Console.WriteLine($"Delegation target={d.Target}");
         provider.OnEventReceived = e =>
         {
             if (e["type"]?.GetValue<string>() == "response.event" && e["event"]?["type"]?.GetValue<string>() == "response.completed")
             {
                 Interlocked.Increment(ref responses);
-                if (Volatile.Read(ref tool.Calls) > 0 && responses >= 2) complete.TrySetResult();
+                if (tool.Verified && responses >= 3) complete.TrySetResult();
             }
         };
         provider.OnUsageReceived = u => Console.WriteLine($"Usage {u.OperationType}: seconds={u.SessionDuration?.TotalSeconds}, tokens={u.TotalTokens}, final={u.IsFinal}");
         await provider.ConnectAsync(new OpenAiLiveSettings {
-            Instructions = "Be concise. The backend will look up a test value.", Tools = [tool],
-            Responses = new JsonObject { ["model"] = "gpt-5.6-luna", ["instructions"] = "Call lookup once to get the test value. When you have the result, return that value without further tool calls.", ["max_output_tokens"] = 128 }
+            Instructions = "Be concise. Backend tools: lookup_chain obtains and verifies a test token. Delegate token verification to the backend. Wait for its confirmed result; do not invent tokens or repeat completed work.", Tools = [tool],
+            Responses = new JsonObject { ["model"] = "gpt-5.6-luna", ["instructions"] = "Verify the test token: first call lookup_chain with step=get and seed=null. Then call lookup_chain with step=verify and the exact seed returned by the first call. After verified=true, return a concise success result without further tools.", ["parallel_tool_calls"] = false, ["max_output_tokens"] = 1024 }
         });
         using var stop = new CancellationTokenSource();
+        // Optional real spoken request: raw mono PCM16, 24 kHz.
+        var inputPath = Environment.GetEnvironmentVariable("GPT_LIVE_TOOL_SMOKE_INPUT_PCM");
+        var pcm = string.IsNullOrWhiteSpace(inputPath) ? Array.Empty<byte>() : File.ReadAllBytes(inputPath);
         var pump = Task.Run(async () =>
         {
             var silence = Convert.ToBase64String(new byte[960]);
-            while (!stop.IsCancellationRequested) { await provider.ProcessAudioAsync(silence); await Task.Delay(20, stop.Token); }
+            var offset = -24000; // half a second of silence before the spoken request
+            while (!stop.IsCancellationRequested)
+            {
+                await provider.ProcessAudioAsync(offset >= 0 && offset < pcm.Length
+                    ? Convert.ToBase64String(pcm, offset, Math.Min(960, pcm.Length - offset)) : silence);
+                offset += 960;
+                await Task.Delay(20, stop.Token);
+            }
         });
         try
         {
-            await provider.SendEventAsync(new JsonObject { ["type"] = "response.create" });
-            await complete.Task.WaitAsync(TimeSpan.FromSeconds(30));
+            // Start backend work explicitly: this test verifies the tool protocol, independently
+            // of the voice model's probabilistic decision to delegate a spoken request.
+            if (pcm.Length == 0) await provider.SendEventAsync(new JsonObject { ["type"] = "response.create" });
+            await complete.Task.WaitAsync(TimeSpan.FromSeconds(60));
         }
         finally
         {
@@ -195,8 +235,8 @@ internal static class OpenAiLiveTests
             try { await pump; } catch (OperationCanceledException) { }
             await provider.DisconnectAsync();
         }
-        Check(tool.Calls == 1 && provider.FinalUsageConfirmed, "real backend tool and continuation");
-        Console.WriteLine($"GPT-Live Responses smoke passed: {tool.Calls} tool call, {responses} completed responses, final voice usage confirmed.");
+        Check(tool.Calls == 2 && tool.Verified && provider.FinalUsageConfirmed, "real delegation and dependent tool chain without repeats");
+        Console.WriteLine($"GPT-Live Responses smoke passed: {tool.Calls} dependent tool calls, {responses} completed responses, final voice usage confirmed.");
     }
 
     public static async Task RunLiveAsync()
@@ -295,5 +335,27 @@ internal static class OpenAiLiveTests
         public async Task<string> ExecuteAsync(string argumentsJson) { Interlocked.Increment(ref Calls); await Task.Delay(50); return "{\"value\":42}"; }
     }
     public sealed record LookupArgs();
+    private sealed class ChainedLookupTool : IVoiceTool
+    {
+        private readonly string _seed = Guid.NewGuid().ToString("N");
+        public int Calls;
+        public bool Verified;
+        public string Name => "lookup_chain";
+        public string Description => "Get a test token, then verify that exact token in a second call.";
+        [System.Diagnostics.CodeAnalysis.DynamicallyAccessedMembers(System.Diagnostics.CodeAnalysis.DynamicallyAccessedMemberTypes.PublicConstructors | System.Diagnostics.CodeAnalysis.DynamicallyAccessedMemberTypes.PublicProperties)]
+        public Type ArgsType => typeof(ChainedLookupArgs);
+        public Task<string> ExecuteAsync(string argumentsJson)
+        {
+            var args = JsonNode.Parse(argumentsJson)!;
+            var count = Interlocked.Increment(ref Calls);
+            if (count == 1 && args["step"]?.GetValue<string>() == "get" && args["seed"] == null)
+                return Task.FromResult(new JsonObject { ["seed"] = _seed }.ToJsonString());
+            Verified = count == 2 && args["step"]?.GetValue<string>() == "verify" && args["seed"]?.GetValue<string>() == _seed;
+            return Task.FromResult(new JsonObject { ["verified"] = Verified }.ToJsonString());
+        }
+    }
+    public sealed record ChainedLookupArgs(
+        [Ai.Tlbx.VoiceAssistant.Attributes.ToolEnumValues("get", "verify")] string Step,
+        string? Seed = null);
 }
 

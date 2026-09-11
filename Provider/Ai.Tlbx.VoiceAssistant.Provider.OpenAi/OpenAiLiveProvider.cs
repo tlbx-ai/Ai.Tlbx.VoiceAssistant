@@ -468,6 +468,16 @@ public sealed class OpenAiLiveProvider : IVoiceProvider, IStartupHistoryVoicePro
                     ReportedTotalTokens = usage["total_tokens"]?.GetValue<int>(), CacheReadInputTokens = usage["input_tokens_details"]?["cached_tokens"]?.GetValue<int>(),
                     ReasoningOutputTokens = usage["output_tokens_details"]?["reasoning_tokens"]?.GetValue<int>(), IsFinal = true, RawProviderUsageJson = usage.ToJsonString() });
             var completedId = inner["response"]?["id"]?.GetValue<string>();
+            if (completedId != null && _responseIds.TryGetValue(delegation, out var activeId) && activeId == completedId)
+                _responseIds.Remove(delegation);
+            if (type is "response.failed" or "response.incomplete")
+            {
+                // These are nested Responses failures, not top-level Live error events.
+                // Surface them without retrying operations which may already have run.
+                var details = inner["response"]?["error"]?.ToJsonString()
+                    ?? inner["response"]?["incomplete_details"]?.ToJsonString() ?? "No failure details provided";
+                OnError?.Invoke($"Live backend {type} (response {completedId}, delegation {delegation}): {details}");
+            }
             if (completedId != null && _calls.Remove(completedId, out var calls) && type == "response.completed" && _settings?.Tools.Count > 0)
             {
                 // Tool execution must not block microphone/audio/transcript reception.
