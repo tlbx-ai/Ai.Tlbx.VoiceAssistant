@@ -1,0 +1,72 @@
+@page "/gpt-live"
+@rendermode InteractiveServer
+@implements IAsyncDisposable
+@using System.Text.Json.Nodes
+@using Ai.Tlbx.VoiceAssistant.Provider.OpenAi.AspNetCore
+@using Ai.Tlbx.VoiceAssistant.Provider.OpenAi.Models
+@using Ai.Tlbx.VoiceAssistant.Models
+@using Ai.Tlbx.VoiceAssistant.BuiltInTools
+@inject OpenAiDirectLiveVoiceProvider Live
+
+<PageTitle>GPT-Live WebRTC</PageTitle>
+<h1>GPT-Live WebRTC</h1>
+<p>Speak directly with OpenAI. This demo can ask its backend for the current time.</p>
+<button id="live-start" @onclick="Start" disabled="@busy">Start conversation</button>
+<button id="live-stop" @onclick="Stop" disabled="@(!connected)">Stop</button>
+<button id="live-mute" @onclick="Mute" disabled="@(!connected)">@(muted ? "Unmute microphone" : "Mute microphone")</button>
+<button id="live-tool" @onclick="RunBackend" disabled="@(!connected)">Ask backend for the time</button>
+<p id="live-status" role="status">@status</p>
+<p id="live-usage">Voice seconds: @seconds; backend tokens: @tokens; final usage: @Live.FinalUsageConfirmed</p>
+<p id="live-tools">Completed tool calls: @toolCalls</p>
+<h2>Live captions</h2>
+<p id="live-user">@userText</p>
+<p id="live-assistant">@assistantText</p>
+
+@code {
+    private bool busy, connected, muted;
+    private string status = "Ready", userText = "", assistantText = "";
+    private double seconds;
+    private int tokens, toolCalls;
+    protected override void OnInitialized()
+    {
+        Live.OnStatusChanged = s => { status = s; _ = InvokeAsync(StateHasChanged); };
+        Live.OnError = e => { status = "Error: " + e; _ = InvokeAsync(StateHasChanged); };
+        Live.OnTranscriptDelta = d => { if (d.Role == "user") userText += d.Delta; else assistantText += d.Delta; _ = InvokeAsync(StateHasChanged); };
+        Live.OnUsageReceived = u => { if (u.SessionDuration.HasValue) seconds = u.SessionDuration.Value.TotalSeconds; else tokens += u.TotalTokens; _ = InvokeAsync(StateHasChanged); };
+        Live.OnMessageReceived = m => { if (m.Role == ChatMessage.ToolRole) toolCalls++; _ = InvokeAsync(StateHasChanged); };
+    }
+    private async Task Start()
+    {
+        busy = true;
+        status = "Starting";
+        userText = assistantText = "";
+        seconds = tokens = toolCalls = 0;
+        try
+        {
+            await Live.StartBrowserSessionAsync(new OpenAiLiveSettings {
+                Instructions = "Speak briefly in English. Delegate requests for the current time to the backend.",
+                Responses = new JsonObject { ["model"] = "gpt-5.6-luna", ["instructions"] = "Use get_current_time to retrieve the current time when asked. Return the result briefly.", ["max_output_tokens"] = 128 },
+                Tools = new() { new TimeTool() }
+            });
+            connected = true;
+            await Live.AppendInstructionsAsync("Immediately greet the user and identify yourself as an AI assistant, then listen.");
+        }
+        catch (Exception ex) { status = "Error: " + ex.Message; busy = false; }
+    }
+    private async Task Stop()
+    {
+        try { await Live.DisconnectAsync(); status = "Stopped"; }
+        catch (Exception ex) { status = "Error: " + ex.Message; }
+        finally { connected = false; busy = false; muted = false; }
+    }
+    private async Task Mute() { try { await Live.SetMicrophoneEnabledAsync(muted); muted = !muted; } catch (Exception ex) { status = "Error: " + ex.Message; } }
+    private async Task RunBackend()
+    {
+        try {
+            await Live.SendEventAsync(new JsonObject { ["type"] = "response.item.create", ["item"] = new JsonObject {
+                ["type"] = "message", ["role"] = "user", ["content"] = new JsonArray(JsonNode.Parse("{\"type\":\"input_text\",\"text\":\"What is the current time? Use your time tool.\"}")) } });
+            await Live.SendEventAsync(new JsonObject { ["type"] = "response.create" });
+        } catch (Exception ex) { status = "Error: " + ex.Message; }
+    }
+    public async ValueTask DisposeAsync() { await Live.DisposeAsync(); }
+}

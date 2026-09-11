@@ -31,6 +31,7 @@ if (args.Contains("--live-gpt-live-smoke", StringComparer.Ordinal))
 }
 
 await OpenAiLiveTests.RunAsync();
+await OpenAiDirectLiveTests.RunAsync();
 
 if (args.Contains("--live-custom-config-smoke", StringComparer.Ordinal))
 {

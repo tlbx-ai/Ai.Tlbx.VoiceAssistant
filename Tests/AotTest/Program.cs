@@ -5,6 +5,7 @@ using Ai.Tlbx.VoiceAssistant.BuiltInTools;
 using Ai.Tlbx.VoiceAssistant.Interfaces;
 using Ai.Tlbx.VoiceAssistant.Models;
 using Ai.Tlbx.VoiceAssistant.Provider.OpenAi;
+using Ai.Tlbx.VoiceAssistant.Provider.OpenAi.AspNetCore;
 using Ai.Tlbx.VoiceAssistant.Provider.OpenAi.Models;
 using Ai.Tlbx.VoiceAssistant.Provider.Google;
 using Ai.Tlbx.VoiceAssistant.Provider.Google.Models;
@@ -13,6 +14,7 @@ using Ai.Tlbx.VoiceAssistant.Provider.XAi.Models;
 using Ai.Tlbx.VoiceAssistant.Hardware.Web;
 
 var builder = WebApplication.CreateSlimBuilder(args);
+builder.Services.AddOpenAiDirectLiveVoice();
 
 // Configure JSON for minimal API
 builder.Services.ConfigureHttpJsonOptions(options =>
@@ -21,6 +23,7 @@ builder.Services.ConfigureHttpJsonOptions(options =>
 });
 
 var app = builder.Build();
+app.MapOpenAiDirectLiveVoice();
 
 // Opt-in live connection smoke; roots the GPT-Live transport and JSON paths in the native binary.
 app.MapGet("/live-smoke", async () =>

@@ -30,6 +30,7 @@
 
   <ItemGroup>
     <!-- Reference all packages under test -->
+    <ProjectReference Include="..\..\Provider\Ai.Tlbx.VoiceAssistant.Provider.OpenAi.AspNetCore\Ai.Tlbx.VoiceAssistant.Provider.OpenAi.AspNetCore.csproj" />
     <ProjectReference Include="..\..\Provider\Ai.Tlbx.VoiceAssistant\Ai.Tlbx.VoiceAssistant.csproj" />
     <ProjectReference Include="..\..\Provider\Ai.Tlbx.VoiceAssistant.Provider.OpenAi\Ai.Tlbx.VoiceAssistant.Provider.OpenAi.csproj" />
     <ProjectReference Include="..\..\Provider\Ai.Tlbx.VoiceAssistant.Provider.Google\Ai.Tlbx.VoiceAssistant.Provider.Google.csproj" />

@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Net.WebSockets;
+using System.Net.Http;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
@@ -43,7 +44,8 @@ public sealed class OpenAiLiveProvider : IVoiceProvider, IStartupHistoryVoicePro
     private JsonObject? _startup;
     private bool _closing;
     private bool _disposed;
-    public bool IsConnected => _audioSender != null && _started.Task.IsCompletedSuccessfully && !_closing && !_closed.Task.IsCompleted && _socket?.State == WebSocketState.Open;
+    private bool _sideband;
+    public bool IsConnected => (_sideband || _audioSender != null) && _started.Task.IsCompletedSuccessfully && !_closing && !_closed.Task.IsCompleted && _socket?.State == WebSocketState.Open;
     public AudioSampleRate RequiredInputSampleRate => AudioSampleRate.Rate24000;
     public string? SessionId { get; private set; }
     public bool FinalUsageConfirmed { get; private set; }
@@ -79,6 +81,28 @@ public sealed class OpenAiLiveProvider : IVoiceProvider, IStartupHistoryVoicePro
 
     public async Task ConnectAsync(IVoiceSettings settings)
     {
+        Initialize(settings, false);
+        try
+        {
+            using var timeout = new CancellationTokenSource(_settings!.ConnectionTimeout);
+            await _socket!.ConnectAsync(_settings.Connection.BuildUri(fallbackApiKey: _apiKey), timeout.Token).ConfigureAwait(false);
+            _receiver = ReceiveAsync(_socket, _lifetime!.Token);
+            await SendCoreAsync(new JsonObject { ["type"] = "session.start", ["session"] = _startup!.DeepClone() }, timeout.Token).ConfigureAwait(false);
+            await _started.Task.WaitAsync(timeout.Token).ConfigureAwait(false);
+            _audio = Channel.CreateBounded<string>(new BoundedChannelOptions(100) { SingleReader = true, FullMode = BoundedChannelFullMode.Wait });
+            _audioLifetime = CancellationTokenSource.CreateLinkedTokenSource(_lifetime.Token);
+            _audioSender = SendAudioAsync(_audio.Reader, _audioLifetime.Token);
+            OnStatusChanged?.Invoke("Connected to GPT-Live");
+        }
+        catch
+        {
+            await ReleaseTransportAsync().ConfigureAwait(false);
+            throw;
+        }
+    }
+
+    private void Initialize(IVoiceSettings settings, bool sideband)
+    {
         ObjectDisposedException.ThrowIf(_disposed, this);
         if (_socket != null) throw new InvalidOperationException("Disconnect the existing session first.");
         lock (_backendTasks)
@@ -88,6 +112,8 @@ public sealed class OpenAiLiveProvider : IVoiceProvider, IStartupHistoryVoicePro
         }
         _settings = settings as OpenAiLiveSettings ?? throw new ArgumentException("GPT-Live requires OpenAiLiveSettings.", nameof(settings));
         _startup = BuildSession(_settings, _history);
+        _sideband = sideband;
+        if (sideband) _startup["audio"]!.AsObject().Remove("format");
         _started = NewCompletion();
         _closed = NewCompletion();
         _closing = false;
@@ -100,23 +126,62 @@ public sealed class OpenAiLiveProvider : IVoiceProvider, IStartupHistoryVoicePro
         _lifetime = new CancellationTokenSource();
         _socket = new ClientWebSocket();
         _settings.Connection.Apply(_socket.Options, _apiKey);
+    }
+
+    /// <summary>Exchanges a browser SDP offer for a Live WebRTC session and attaches server-side controls.
+    /// Apply the returned SDP in the browser and wait for session.started on its data channel.
+    /// Audio travels over WebRTC; the attached socket owns tools, transcripts, commands, and usage.</summary>
+    public async Task<OpenAiLiveWebRtcSession> ConnectWebRtcAsync(OpenAiLiveSettings settings, string sdpOffer,
+        HttpClient? httpClient = null, CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(sdpOffer);
+        Initialize(settings, true);
+        using var ownedClient = httpClient == null ? new HttpClient() : null;
+        var client = httpClient ?? ownedClient!;
         try
         {
-            using var timeout = new CancellationTokenSource(_settings.ConnectionTimeout);
-            await _socket.ConnectAsync(_settings.Connection.BuildUri(fallbackApiKey: _apiKey), timeout.Token).ConfigureAwait(false);
-            _receiver = ReceiveAsync(_socket, _lifetime.Token);
-            await SendCoreAsync(new JsonObject { ["type"] = "session.start", ["session"] = _startup.DeepClone() }, timeout.Token).ConfigureAwait(false);
-            await _started.Task.WaitAsync(timeout.Token).ConfigureAwait(false);
-            _audio = Channel.CreateBounded<string>(new BoundedChannelOptions(100) { SingleReader = true, FullMode = BoundedChannelFullMode.Wait });
-            _audioLifetime = CancellationTokenSource.CreateLinkedTokenSource(_lifetime.Token);
-            _audioSender = SendAudioAsync(_audio.Reader, _audioLifetime.Token);
-            OnStatusChanged?.Invoke("Connected to GPT-Live");
+            using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            timeout.CancelAfter(settings.ConnectionTimeout);
+            using var request = new HttpRequestMessage(HttpMethod.Post, LiveUri(settings, "", false));
+            request.Content = new StringContent(new JsonObject { ["session"] = _startup!.DeepClone(),
+                ["transport"] = new JsonObject { ["type"] = "webrtc", ["sdp"] = sdpOffer } }.ToJsonString(), Encoding.UTF8, "application/json");
+            settings.Connection.Apply(request, _apiKey);
+            using var response = await client.SendAsync(request, timeout.Token).ConfigureAwait(false);
+            response.EnsureSuccessStatusCode();
+            var result = JsonNode.Parse(await response.Content.ReadAsStringAsync(timeout.Token).ConfigureAwait(false))!;
+            SessionId = result["session"]?["id"]?.GetValue<string>() ?? throw new IOException("Live creation response omitted session.id.");
+            var answer = result["transport"]?["sdp"]?.GetValue<string>() ?? throw new IOException("Live creation response omitted transport.sdp.");
+            await _socket!.ConnectAsync(LiveUri(settings, $"/{Uri.EscapeDataString(SessionId)}/attach", true), timeout.Token).ConfigureAwait(false);
+            _receiver = ReceiveAsync(_socket, _lifetime!.Token);
+            // Attaching neither replays session.started nor requires a first command.
+            _started.TrySetResult();
+            return new OpenAiLiveWebRtcSession(SessionId, answer);
         }
         catch
         {
+            if (SessionId != null)
+            {
+                try
+                {
+                    using var cleanupTimeout = new CancellationTokenSource(settings.CloseTimeout);
+                    using var hangup = new HttpRequestMessage(HttpMethod.Post, LiveUri(settings, $"/{Uri.EscapeDataString(SessionId)}/hangup", false));
+                    settings.Connection.Apply(hangup, _apiKey);
+                    using var response = await client.SendAsync(hangup, cleanupTimeout.Token).ConfigureAwait(false);
+                    response.EnsureSuccessStatusCode();
+                }
+                catch (Exception ex) { _log(LogLevel.Error, $"Failed to hang up an incomplete Live WebRTC session: {ex.Message}"); }
+            }
             await ReleaseTransportAsync().ConfigureAwait(false);
             throw;
         }
+    }
+
+    private Uri LiveUri(OpenAiLiveSettings settings, string suffix, bool websocket)
+    {
+        var uri = new UriBuilder(settings.Connection.BuildUri(fallbackApiKey: _apiKey));
+        uri.Scheme = websocket ? (uri.Scheme is "https" or "wss" ? "wss" : "ws") : (uri.Scheme is "https" or "wss" ? "https" : "http");
+        uri.Path = uri.Path.TrimEnd('/') + suffix;
+        return uri.Uri;
     }
 
     internal static JsonObject BuildSession(OpenAiLiveSettings settings, IEnumerable<ChatMessage> history)
@@ -168,6 +233,7 @@ public sealed class OpenAiLiveProvider : IVoiceProvider, IStartupHistoryVoicePro
         RequireConnected();
         var live = settings as OpenAiLiveSettings ?? throw new ArgumentException("GPT-Live requires OpenAiLiveSettings.");
         var updated = BuildSession(live, _history);
+        if (_sideband) updated["audio"]!.AsObject().Remove("format");
         foreach (var field in new[] { "model", "instructions", "audio", "store", "input" })
             if (!JsonNode.DeepEquals(updated[field], _startup![field])) throw new InvalidOperationException($"Live {field} is immutable; start a new session or append context.");
         if (updated["delegation"]!["type"]!.GetValue<string>() != _startup!["delegation"]!["type"]!.GetValue<string>())
@@ -180,6 +246,7 @@ public sealed class OpenAiLiveProvider : IVoiceProvider, IStartupHistoryVoicePro
     public Task ProcessAudioAsync(string base64Audio)
     {
         RequireConnected();
+        if (_sideband) throw new NotSupportedException("Send microphone audio on the primary WebRTC media track, not the sideband.");
         var bytes = Convert.FromBase64String(base64Audio);
         if (bytes.Length % 2 != 0) throw new ArgumentException("PCM16 audio must contain complete two-byte samples.", nameof(base64Audio));
         if (_audio?.Writer.TryWrite(base64Audio) != true)
@@ -250,6 +317,7 @@ public sealed class OpenAiLiveProvider : IVoiceProvider, IStartupHistoryVoicePro
         RequireConnected();
         ArgumentNullException.ThrowIfNull(command);
         var type = command["type"]?.GetValue<string>();
+        if (_sideband && type == "session.input_audio.append") throw new ArgumentException("Sideband connections do not accept microphone audio.");
         if (type is "session.start" or "session.close") throw new ArgumentException("Use ConnectAsync/DisconnectAsync for lifecycle commands.");
         return SendCoreAsync((JsonObject)command.DeepClone(), cancellationToken);
     }
@@ -313,6 +381,8 @@ public sealed class OpenAiLiveProvider : IVoiceProvider, IStartupHistoryVoicePro
     internal void HandleEvent(JsonObject message)
     {
         var type = message["type"]?.GetValue<string>();
+        // Reflected sideband audio is not played or forwarded through the application/Blazor circuit.
+        if (_sideband && type is "session.input_audio.append" or "session.output_audio.delta") return;
         var clientId = message["client_event_id"]?.GetValue<string>() ?? message["error"]?["client_event_id"]?.GetValue<string>();
         if (clientId != null)
         {

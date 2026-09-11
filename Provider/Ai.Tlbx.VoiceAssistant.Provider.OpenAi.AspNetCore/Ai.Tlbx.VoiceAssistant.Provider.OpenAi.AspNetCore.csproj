@@ -9,7 +9,7 @@
     <StaticWebAssetBasePath>_content/Ai.Tlbx.VoiceAssistant.Provider.OpenAi.AspNetCore</StaticWebAssetBasePath>
 
     <PackageId>Ai.Tlbx.VoiceAssistant.Provider.OpenAi.AspNetCore</PackageId>
-    <Description>ASP.NET Core and browser static assets for direct OpenAI Realtime WebRTC sessions with server-side tools.</Description>
+    <Description>ASP.NET Core and browser static assets for direct OpenAI Realtime and GPT-Live WebRTC sessions with server-side tools.</Description>
     <PackageTags>AI;OpenAI;VoiceAssistant;Realtime;WebRTC;ASP.NET Core</PackageTags>
     <GeneratePackageOnBuild Condition="'$(Configuration)' == 'Release'">true</GeneratePackageOnBuild>
     <PackageOutputPath>..\..\nupkg</PackageOutputPath>

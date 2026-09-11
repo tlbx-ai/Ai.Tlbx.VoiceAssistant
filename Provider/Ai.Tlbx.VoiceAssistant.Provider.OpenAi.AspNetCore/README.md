@@ -1,8 +1,31 @@
 # Ai.Tlbx.VoiceAssistant.Provider.OpenAi.AspNetCore
 
-ASP.NET Core integration and static browser assets for direct OpenAI Realtime WebRTC sessions.
+ASP.NET Core integration and static browser assets for direct OpenAI Realtime and GPT-Live WebRTC sessions.
 
-The package lets a host application keep OpenAI API keys and voice tools on the server while sending microphone and playback audio directly between the browser and OpenAI Realtime.
+The package keeps OpenAI API keys and voice tools on the server while sending microphone and playback audio directly between the browser and OpenAI.
+
+## GPT-Live setup (11.0.2+)
+
+```csharp
+builder.Services.AddOpenAiDirectLiveVoice(options =>
+{
+    options.AuthorizeRequest = context => context.User.Identity?.IsAuthenticated == true;
+});
+app.MapOpenAiDirectLiveVoice();
+```
+
+Inject `OpenAiDirectLiveVoiceProvider` in an interactive Blazor component and call
+`StartBrowserSessionAsync(new OpenAiLiveSettings { Instructions = "Help the caller." })`
+from a user gesture. Subscribe to `OnTranscriptDelta` and `OnUsageReceived` before starting.
+Call `DisconnectAsync` to confirm final usage and release browser media.
+
+Live uses a server-side JSON SDP exchange and an authenticated sideband. Tool execution and usage
+come from that trusted sideband; reflected audio is discarded. Settings and registered tools are
+prepared server-side, with a short-lived one-use handshake capability. Authorize session preparation
+as well as the endpoint. The existing Realtime setup below uses its own protocol and provider.
+
+See the [GPT-Live guide](../../docs/openai-gpt-live.md) for managed/client delegation, microphone and
+playback controls, history, lifecycle behavior and the `/gpt-live` demo.
 
 ## Blazor Server setup
 

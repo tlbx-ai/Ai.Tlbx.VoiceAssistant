@@ -15,9 +15,9 @@ integration: use the dedicated `OpenAiLiveProvider` and `OpenAiLiveSettings`.
 | Startup | First command `session.start`, configuration in `session`; wait for `session.started` | `ConnectAsync` waits for readiness and releases failed transports |
 | Audio | `session.input_audio.append.audio` and `session.output_audio.delta.delta`, base64 raw audio | Mono PCM16 little endian at 24 kHz, ordered serialized sends; caller paces capture |
 | Other wire formats | Shared input/output format: PCM16 16/24 kHz or G.711 8 kHz | This hardware integration selects 24 kHz PCM16; it does not expose G.711 passthrough |
-| Browser WebRTC | Server `POST /v1/live/sessions` with JSON `session` and `transport: {type:"webrtc",sdp:...}` | Separate future transport; existing direct Realtime browser provider is unchanged |
+| Browser WebRTC | Server `POST /v1/live/sessions` with JSON `session` and `transport: {type:"webrtc",sdp:...}` | `OpenAiDirectLiveVoiceProvider` in the ASP.NET Core package, added in 11.0.2 |
 | WebRTC events | Negotiated audio tracks, JSON data channel, no `session.start` on channel | Do not reuse the Realtime multipart SDP/client-secret protocol |
-| Sideband | Backend event/control connection to an existing primary session | Not needed when this provider owns the primary socket; no sideband helper in this release |
+| Sideband | Backend event/control connection to an existing primary session | `OpenAiLiveProvider.ConnectWebRtcAsync` creates the session and attaches server controls; no replayed startup event is required |
 
 The primary WebSocket does not need a Realtime ephemeral key or a preliminary HTTP session call.
 Microphone sends use a single consumer and a 100-chunk queue. Congestion aborts the session with
@@ -169,6 +169,66 @@ builder and start `VoiceAssistant` with `OpenAiLiveSettings`. Subscribe to
 to attach client delegation handlers and send backend results. For client mode, omit `Responses`;
 for local managed tools, add your `IVoiceTool` instances to `settings.Tools`.
 
+## Direct browser WebRTC (11.0.2)
+
+Install `Ai.Tlbx.VoiceAssistant.Provider.OpenAi.AspNetCore`. Register and map the Live integration
+in a Blazor Server application, keeping `OPENAI_API_KEY` on the server:
+
+```csharp
+using Ai.Tlbx.VoiceAssistant.Provider.OpenAi.AspNetCore;
+
+builder.Services.AddOpenAiDirectLiveVoice(options =>
+{
+    options.AuthorizeRequest = context => context.User.Identity?.IsAuthenticated == true;
+});
+// After builder.Build(), alongside the application's existing Blazor/static asset routes:
+app.MapOpenAiDirectLiveVoice();
+```
+
+Inject the scoped `OpenAiDirectLiveVoiceProvider` into an interactive component and start it
+from a user gesture after rendering:
+
+```csharp
+await live.StartBrowserSessionAsync(new OpenAiLiveSettings
+{
+    Instructions = "Help the caller concisely.",
+    Responses = new JsonObject { ["model"] = "gpt-5.6-luna" }
+});
+// Subscribe to live.OnTranscriptDelta / OnUsageReceived before starting.
+await live.SetMicrophoneEnabledAsync(false);
+await live.SetMicrophoneEnabledAsync(true);
+await live.DisconnectAsync(); // waits for final usage before releasing media
+```
+
+The provider also implements `IDirectBrowserVoiceProvider` for the existing `VoiceAssistant`
+orchestrator. Pass conversation history to `StartBrowserSessionAsync`; post-start history injection
+is unsupported. The demo's `/gpt-live` page shows captions, managed tools, mute and final usage.
+Its anonymous authorization callback is for the local demo; production applications must authorize
+both session preparation and the handshake endpoint. The endpoint defaults to authenticated users,
+accepts a single-use prepared capability, and rejects cross-origin requests. Behind a reverse proxy,
+configure forwarded headers so the request scheme and host match the browser origin.
+
+Microphone and playback media use browser-to-OpenAI WebRTC tracks. The server exchanges the SDP and
+attaches an authenticated Live sideband for commands, transcripts, tool execution and usage. OpenAI
+also reflects audio onto that sideband; the provider discards these copies instead of forwarding
+them through the Blazor circuit. API credentials, settings and tool definitions stay on the server.
+Only trusted sideband events drive tool execution. Browser data-channel events handle readiness
+and connection lifecycle; the browser sends neither `session.start` nor JSON microphone chunks.
+
+`AppendInstructionsAsync`, `AppendThinkingAsync`, `AppendCommentaryAsync`, managed tools and client
+delegation use the same Live semantics described above. Microphone mute controls both Live input
+and the local media track. `SetPlaybackMutedAsync` separately controls local playback.
+`SendInterruptAsync` mutes playback and appends stop guidance; explicitly unmute playback afterward.
+It does not provide deterministic remote speech cancellation. If browser startup fails after session
+creation, the provider closes the session; a failed sideband attachment triggers a server hangup.
+
+For a custom browser host, use `OpenAiLiveProvider.ConnectWebRtcAsync(settings, sdpOffer)` directly,
+apply its returned SDP answer in your browser, and await `session.started` on the data channel.
+Keep the provider alive for sideband events and call `DisconnectAsync` before closing browser media.
+
+Sources: [Live WebRTC](https://developers.openai.com/api/docs/guides/voice-webrtc?api=live),
+[Server controls](https://developers.openai.com/api/docs/guides/voice-server-controls?api=live).
+
 ## Validation and release notes
 
 11.0.0 introduces a separate full-duplex provider and session-duration usage semantics. Existing
@@ -177,6 +237,11 @@ caption/usage consumption. All toolkit packages retain a coordinated version.
 
 11.0.1 corrects startup readiness: `IsConnected` remains false until the audio sender exists,
 so microphone callbacks that run during session startup continue using the pre-connect buffer.
+
+11.0.2 adds direct Live WebRTC, server-owned sideband controls and tools, the authenticated SDP
+endpoint, browser media cleanup and the `/gpt-live` demo. Contract tests cover handshake shape,
+sideband readiness, reflected-audio filtering, final usage, failed-attach hangup, authorization,
+origin checks, request bounds and one-use capabilities. Native AOT verification includes the endpoint.
 
 Local WebSocket tests verify startup/history/authentication, audio, overlapping transcripts,
 acknowledgment/error correlation, empty-output function batches, backend/voice usage separation,
@@ -192,9 +257,15 @@ The first checks generated audio and final voice usage. Set `GPT_LIVE_SMOKE_INPU
 client delegation, result acknowledgment and the returned shipping-status transcript.
 The second checks a real backend function
 call, result submission and continuation. These synthetic tests do not establish physical microphone,
-speaker, echo cancellation, conversational interruption quality, or direct browser WebRTC behavior.
+speaker, echo cancellation or conversational interruption quality.
 The Native AOT test app exposes `/live-smoke` for an opt-in compiled transport check.
 
-Remaining transport options (direct Live WebRTC, sideband, telephony codecs and stored-session forking)
+`Tests/Browser/direct-live-smoke.js` is an async browser action script for the `/gpt-live` demo.
+Run it in Chrome with user-gesture execution (for example with the chrome-perf scenario runner).
+It uses synthetic microphone media against the real API and verifies bidirectional RTP, generated
+speech captions, mute/unmute, one server tool execution, final usage and released media resources.
+This validates the browser transport, not physical microphone/speaker acoustics.
+
+Remaining transport options (telephony codecs and stored-session forking)
 are documented API extension points, not implemented or tested by this release. Stored sessions may
 be requested with `Store`; callers should allow a longer close timeout when recordings take time.

@@ -20,8 +20,10 @@ transcription callback preserve fragments; they do not claim complete turns. `On
 is not synthesized. Track playback separately. Duration reports are cumulative; replace them by
 session ID, and check `FinalUsageConfirmed` after `DisconnectAsync`.
 
-The existing direct browser WebRTC integration is for Realtime. GPT-Live currently uses the library's
-server-side WebSocket/audio hardware path. Keep project keys on the server.
+GPT-Live supports both server-side WebSocket/audio hardware and direct browser WebRTC.
+For Blazor Server, use `OpenAiDirectLiveVoiceProvider` from the ASP.NET Core package (11.0.2+).
+`OpenAiLiveProvider.ConnectWebRtcAsync` also exposes SDP creation and sideband attachment for custom
+browser hosts. Keep project keys on the server. See the [Live integration guide](../../docs/openai-gpt-live.md).
 
 Full examples and API analysis: https://github.com/tlbx-ai/Ai.Tlbx.VoiceAssistant/blob/master/docs/openai-gpt-live.md
 

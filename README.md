@@ -14,6 +14,8 @@
 It uses continuous full-duplex audio and a separate backend for reasoning/tools.
 Use `WithOpenAiLive()` with `OpenAiLiveSettings`, or construct the provider directly.
 The existing `WithOpenAi()` and direct Realtime WebRTC provider keep their Realtime behavior.
+Since 11.0.2, `OpenAiDirectLiveVoiceProvider` adds direct browser GPT-Live WebRTC with server-side
+tools and usage over an authenticated sideband. See [setup and lifecycle](docs/openai-gpt-live.md#direct-browser-webrtc-1102).
 
 See the [GPT-Live integration and API analysis](docs/openai-gpt-live.md) for client/Responses delegation,
 timed transcripts, startup history, usage accounting, examples, and migration constraints.

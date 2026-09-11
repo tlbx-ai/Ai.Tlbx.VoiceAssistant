@@ -37,3 +37,6 @@ public sealed record OpenAiLiveTranscriptDelta(string Role, string Delta, double
 
 /// <summary>Delegation metadata. Task text must be assembled from transcripts and application state.</summary>
 public sealed record OpenAiLiveDelegation(string Id, string Target, double OffsetMs, string? ResponseId);
+
+/// <summary>Public WebRTC handshake result. Contains no API key or server configuration.</summary>
+public sealed record OpenAiLiveWebRtcSession(string SessionId, string Sdp);

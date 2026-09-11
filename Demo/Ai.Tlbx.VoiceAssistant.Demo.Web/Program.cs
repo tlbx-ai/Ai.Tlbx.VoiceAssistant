@@ -35,6 +35,12 @@ public class Program
         // since we create it manually in Home.razor with the factory pattern
         builder.Services.AddScoped<IAudioHardwareAccess, WebAudioAccess>();
         builder.Services.AddScoped<OpenAiDirectRealtimeVoiceProvider>();
+        builder.Services.AddOpenAiDirectLiveVoice(options =>
+        {
+            // Local demo; production applications must authorize their users.
+            options.AuthorizeRequest = _ => true;
+            options.Log = (level, message) => Debug.WriteLine($"[DirectLive:{level}] {message}");
+        });
         builder.Services.AddSingleton<Action<LogLevel, string>>(sp => (level, message) => Debug.WriteLine($"[{level}] {message}"));
         builder.Services.AddOpenAiDirectRealtimeVoice(options =>
         {
@@ -71,6 +77,7 @@ public class Program
 
         app.MapStaticAssets();
         app.MapOpenAiDirectRealtimeVoice();
+        app.MapOpenAiDirectLiveVoice();
         app.MapRazorComponents<App>()
             .AddInteractiveServerRenderMode();
 
