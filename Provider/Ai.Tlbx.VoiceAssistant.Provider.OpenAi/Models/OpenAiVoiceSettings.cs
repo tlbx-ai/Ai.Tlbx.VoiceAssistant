@@ -40,6 +40,9 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi.Models
         /// </summary>
         public bool ParallelToolCalls { get; set; } = false;
 
+        /// <summary>Ein gemeinsamer Client-Ablauf steuert Antworten und Unterbrechungen; VAD liefert weiterhin Spracheingabe-Ereignisse.</summary>
+        public bool ClientResponseControl { get; set; }
+
         /// <summary>
         /// The OpenAI model to use for the conversation.
         /// </summary>

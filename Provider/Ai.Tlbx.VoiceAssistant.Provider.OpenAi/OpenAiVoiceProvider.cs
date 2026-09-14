@@ -46,6 +46,9 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi
         
         // State tracking
         private bool _hasActiveResponse = false;
+        private bool _responseRequested;
+        private bool _userSpeaking;
+        private bool _cancelRequested;
         private readonly StringBuilder _currentAiMessage = new();
         private string _currentResponseId = string.Empty;
         private OpenAiRealtimeResponseTrace? _currentResponseTrace;
@@ -221,6 +224,10 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi
                        
 
             _settings = openAiSettings;
+            _hasActiveResponse = false;
+            _responseRequested = false;
+            _userSpeaking = false;
+            _cancelRequested = false;
             _logAction(LogLevel.Info, $"Settings configured - Voice: {_settings.Voice}, Speed: {_settings.TalkingSpeed}, Model: {_settings.Model}");
 
             try
@@ -370,6 +377,11 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi
         /// <returns>A task representing the interrupt operation.</returns>
         public async Task SendInterruptAsync()
         {
+            if (_settings?.ClientResponseControl == true)
+            {
+                if (!_hasActiveResponse || _cancelRequested) return;
+                _cancelRequested = true;
+            }
             if (!IsConnected)
             {
                 return;
@@ -522,9 +534,9 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi
                 Threshold = semanticVad ? null : settings.TurnDetection.Threshold,
                 PrefixPaddingMs = semanticVad ? null : settings.TurnDetection.PrefixPaddingMs,
                 SilenceDurationMs = semanticVad ? null : settings.TurnDetection.SilenceDurationMs,
-                IdleTimeoutMs = semanticVad ? null : settings.TurnDetection.IdleTimeoutMs,
-                CreateResponse = settings.TurnDetection.CreateResponse,
-                InterruptResponse = settings.TurnDetection.InterruptResponse
+                IdleTimeoutMs = semanticVad || settings.ClientResponseControl ? null : settings.TurnDetection.IdleTimeoutMs,
+                CreateResponse = !settings.ClientResponseControl && settings.TurnDetection.CreateResponse,
+                InterruptResponse = !settings.ClientResponseControl && settings.TurnDetection.InterruptResponse
             };
         }
 
@@ -814,10 +826,20 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi
                         break;
                     case "input_audio_buffer.speech_started":
                         _logAction(LogLevel.Info, "User started speaking - server detected interruption");
-                        HandleInterruption();
+                        _userSpeaking = true;
+                        await HandleInterruptionSafeAsync();
                         break;
                     case "input_audio_buffer.speech_stopped":
+                        _userSpeaking = false;
                         _logAction(LogLevel.Info, "User stopped speaking");
+                        break;
+                    case "input_audio_buffer.committed":
+                        if (_settings?.ClientResponseControl == true)
+                        {
+                            _userSpeaking = false;
+                            _responseRequested = true;
+                            await TryStartRequestedResponseAsync();
+                        }
                         break;
                     case "conversation.item.input_audio_transcription.completed":
                         HandleInputAudioTranscriptionCompleted(root);
@@ -826,7 +848,6 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi
                         HandleError(root);
                         break;
                     // Known message types we don't need to process
-                    case "input_audio_buffer.committed":
                     case "response.output_item.added":
                     case "response.content_part.added":
                     case "response.content_part.done":
@@ -1061,6 +1082,7 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi
         private async Task HandleResponseDone(JsonElement root)
         {
             _hasActiveResponse = false;
+            _cancelRequested = false;
             _logAction(LogLevel.Info, "Response completed");
 
             UsageReport? report = null;
@@ -1100,9 +1122,7 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi
                 }
                 if (hasToolResults)
                 {
-                    var json = JsonSerializer.Serialize(new ResponseCreateMessage(), OpenAiJsonContext.Default.ResponseCreateMessage);
-                    _logAction(LogLevel.Info, $"[Tool] Sending response.create: {json}");
-                    await SendMessageAsync(json);
+                    _responseRequested = true;
                 }
             }
             if (trace != null)
@@ -1115,7 +1135,20 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi
             _currentResponseOutputText.Clear();
             _currentResponseAudioTranscript = null;
 
-            await Task.CompletedTask;
+            await TryStartRequestedResponseAsync();
+        }
+
+        private async Task TryStartRequestedResponseAsync()
+        {
+            if (!_responseRequested || _hasActiveResponse ||
+                (_settings?.ClientResponseControl == true && _userSpeaking)) return;
+
+            // Bereits beim Senden reservieren: response.created ist nur die spätere Serverbestätigung.
+            _responseRequested = false;
+            _hasActiveResponse = true;
+            var json = JsonSerializer.Serialize(new ResponseCreateMessage(), OpenAiJsonContext.Default.ResponseCreateMessage);
+            _logAction(LogLevel.Info, $"[Tool] Sending response.create: {json}");
+            await SendMessageAsync(json);
         }
 
         private void PopulateResponseTrace(JsonElement root, OpenAiRealtimeResponseTrace trace, UsageReport? usage)
@@ -1249,11 +1282,6 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi
             await Task.CompletedTask;
         }
         
-        private void HandleInterruption()
-        {
-            _ = HandleInterruptionSafeAsync();
-        }
-
         private async Task HandleInterruptionSafeAsync()
         {
             try
@@ -1268,7 +1296,8 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi
                 {
                     _logAction(LogLevel.Info, "Interrupting active AI response");
                     await SendInterruptAsync();
-                    _hasActiveResponse = false;
+                    // Der Slot wird erst durch response.done frei, auch nach response.cancel.
+                    if (_settings?.ClientResponseControl != true) _hasActiveResponse = false;
                 }
             }
             catch (Exception ex)
