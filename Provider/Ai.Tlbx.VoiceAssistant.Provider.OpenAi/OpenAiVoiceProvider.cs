@@ -48,9 +48,6 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi
         private bool _hasActiveResponse = false;
         private readonly StringBuilder _currentAiMessage = new();
         private string _currentResponseId = string.Empty;
-        private readonly StringBuilder _currentFunctionArgs = new();
-        private string _currentFunctionName = string.Empty;
-        private string _currentCallId = string.Empty;
         private OpenAiRealtimeResponseTrace? _currentResponseTrace;
         private readonly StringBuilder _currentResponseOutputText = new();
         private string? _currentResponseAudioTranscript;
@@ -812,10 +809,8 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi
                         await HandleTextDone();
                         break;
                     case "response.function_call_arguments.delta":
-                        HandleFunctionCallDelta(root);
-                        break;
                     case "response.function_call_arguments.done":
-                        await HandleFunctionCallDone(root);
+                        // Erst response.done beendet die Antwort und enthält sämtliche finalen Toolargumente.
                         break;
                     case "input_audio_buffer.speech_started":
                         _logAction(LogLevel.Info, "User started speaking - server detected interruption");
@@ -878,44 +873,11 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi
             await Task.CompletedTask;
         }
 
-        private void HandleFunctionCallDelta(JsonElement root)
-        {
-            if (root.TryGetProperty("delta", out var delta))
-            {
-                var argsDelta = delta.GetString() ?? "";
-                _currentFunctionArgs.Append(argsDelta);
-            }
-
-            if (root.TryGetProperty("name", out var nameElement))
-            {
-                var name = nameElement.GetString() ?? "";
-                if (!string.IsNullOrEmpty(name))
-                {
-                    _currentFunctionName = name;
-                    _logAction(LogLevel.Info, $"[Tool] Function call started: {_currentFunctionName}");
-                }
-            }
-
-            if (root.TryGetProperty("call_id", out var callIdElement))
-            {
-                var callId = callIdElement.GetString() ?? "";
-                if (!string.IsNullOrEmpty(callId))
-                {
-                    _currentCallId = callId;
-                }
-            }
-        }
-        
         private async Task HandleFunctionCallDone(JsonElement root)
         {
-            // Try to get from event first, fall back to accumulated values
-            var functionName = root.TryGetProperty("name", out var nameElement)
-                ? (nameElement.GetString() ?? _currentFunctionName)
-                : _currentFunctionName;
-            var callId = root.TryGetProperty("call_id", out var callIdElement)
-                ? (callIdElement.GetString() ?? _currentCallId)
-                : _currentCallId;
-            var argumentsJson = _currentFunctionArgs.ToString();
+            var functionName = root.GetProperty("name").GetString() ?? "";
+            var callId = root.GetProperty("call_id").GetString() ?? "";
+            var argumentsJson = root.GetProperty("arguments").GetString() ?? "{}";
             var toolTrace = new OpenAiRealtimeToolCallTrace
             {
                 Name = functionName,
@@ -932,9 +894,6 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi
             {
                 _logAction(LogLevel.Error, "[Tool] ERROR: Function name is empty");
                 toolTrace.Error = "Function name is empty";
-                _currentFunctionArgs.Clear();
-                _currentFunctionName = "";
-                _currentCallId = "";
                 return;
             }
 
@@ -942,9 +901,6 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi
             {
                 _logAction(LogLevel.Error, "[Tool] ERROR: Call ID is empty");
                 toolTrace.Error = "Call ID is empty";
-                _currentFunctionArgs.Clear();
-                _currentFunctionName = "";
-                _currentCallId = "";
                 return;
             }
 
@@ -990,10 +946,6 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi
                 await SendToolResultAsync(callId, functionName, error);
             }
 
-            // Clear the buffers
-            _currentFunctionArgs.Clear();
-            _currentFunctionName = "";
-            _currentCallId = "";
         }
         
         private async Task SendToolResultAsync(string callId, string functionName, string result)
@@ -1014,13 +966,6 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi
             await SendMessageAsync(toolResponseJson);
             _logAction(LogLevel.Info, $"[Tool] Tool result sent for {functionName} (call_id: {callId})");
 
-            // Request a new response from the AI
-            var responseCreate = new ResponseCreateMessage();
-            var responseCreateJson = JsonSerializer.Serialize(responseCreate, OpenAiJsonContext.Default.ResponseCreateMessage);
-            _logAction(LogLevel.Info, $"[Tool] Sending response.create: {responseCreateJson}");
-
-            await SendMessageAsync(responseCreateJson);
-            _logAction(LogLevel.Info, "[Tool] Requested AI response after tool execution");
         }
 
         private void HandleError(JsonElement root)
@@ -1141,6 +1086,25 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi
                 OnUsageReceived?.Invoke(report);
             }
 
+            // Toolergebnisse erst nach dem nativen Antwortabschluss senden, dann genau einmal fortsetzen.
+            if (root.TryGetProperty("response", out var completedResponse) &&
+                completedResponse.TryGetProperty("status", out var status) && status.GetString() == "completed" &&
+                completedResponse.TryGetProperty("output", out var output))
+            {
+                var hasToolResults = false;
+                foreach (var item in output.EnumerateArray())
+                {
+                    if (!item.TryGetProperty("type", out var itemType) || itemType.GetString() != "function_call") continue;
+                    await HandleFunctionCallDone(item);
+                    hasToolResults = true;
+                }
+                if (hasToolResults)
+                {
+                    var json = JsonSerializer.Serialize(new ResponseCreateMessage(), OpenAiJsonContext.Default.ResponseCreateMessage);
+                    _logAction(LogLevel.Info, $"[Tool] Sending response.create: {json}");
+                    await SendMessageAsync(json);
+                }
+            }
             if (trace != null)
             {
                 PopulateResponseTrace(root, trace, report);

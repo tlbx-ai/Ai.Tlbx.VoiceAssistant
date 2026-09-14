@@ -9,6 +9,7 @@
     
     <!-- NuGet Package Metadata -->
     <PackageId>Ai.Tlbx.VoiceAssistant.Provider.OpenAi</PackageId>
+    <PackageVersion>11.0.5</PackageVersion>
     <Description>OpenAI provider implementation for the Voice Assistant toolkit. Enables real-time conversation with OpenAI's GPT models through WebSocket connections.</Description>
     <PackageTags>AI;OpenAI;VoiceAssistant;RealTime;Audio;GPT</PackageTags>
     <GeneratePackageOnBuild Condition="'$(Configuration)' == 'Release'">true</GeneratePackageOnBuild>
