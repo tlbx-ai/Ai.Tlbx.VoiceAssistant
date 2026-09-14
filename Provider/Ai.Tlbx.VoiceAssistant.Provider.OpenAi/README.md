@@ -54,6 +54,17 @@ var settings = new OpenAiLiveSettings
 await provider.ConnectAsync(settings);
 ```
 
+Since **11.2.0**, when `ClientBackend` is configured, the library automatically appends the names and
+descriptions of `settings.Tools` to the Live instructions, together with generic delegation
+rules. Natural user requests can therefore reach the backend without naming a tool.
+The backend still receives the complete structured tool schemas; the speech model receives
+only capability metadata, never tool results or parameter schemas through this addition.
+The application instructions are preserved and the settings object is not mutated.
+Each new connection uses the currently registered tools. Set
+`AppendClientBackendToolInstructions = false` to supply your own capability/delegation policy.
+No addition occurs with an empty tool list or outside library-owned client mode. Client
+backend configuration remains fixed per connection; reconnect after changing tools.
+
 `ClientBackend.Connection` configures the full HTTP endpoint, gateway headers, and API key
 independently of the Live WebSocket endpoint. A different host or port requires explicit
 backend authentication; the Live constructor key is never forwarded across authorities.

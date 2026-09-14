@@ -21,6 +21,10 @@ public sealed class OpenAiLiveSettings : IVoiceSettings
     /// <summary>Optional library-owned client backend for large tool results. Requires Responses=null.
     /// Null preserves the existing managed Responses or application-owned client mode.</summary>
     public OpenAiLiveClientBackendOptions? ClientBackend { get; set; }
+    /// <summary>In library-owned client mode, append registered tool names and descriptions to the
+    /// Live instructions so speech can route natural requests to the backend. No schemas or results
+    /// are included. Disable when supplying your own complete capability/delegation instructions.</summary>
+    public bool AppendClientBackendToolInstructions { get; set; } = true;
     /// <summary>Prior text messages included in session.start, at most 128 messages / 8192 tokens.</summary>
     public List<ChatMessage> InitialHistory { get; set; } = new();
     /// <summary>Local functions for Responses delegation. They execute only when explicitly registered.</summary>

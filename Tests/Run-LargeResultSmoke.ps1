@@ -26,9 +26,9 @@ if ($Mode -ne 'wire-limit' -and -not $WavPath) {
         $WavPath = Join-Path $artifactPath "$Document-request.wav"
         $synth.SetOutputToWaveFile($WavPath, $format)
         $spokenRequest = switch ($Document) {
-            'catalog' { 'Lies bitte den großen Bauteilkatalog mit deinem Werkzeug. Nenne mir den Freigabecode und die freigegebene Menge aus dem abschließenden Prüfvermerk.' }
-            'dossier' { 'Lies bitte die große Projektakte mit deinem Werkzeug. Nenne mir den Freigabecode und die freigegebene Menge aus dem abschließenden Prüfvermerk.' }
-            'both' { 'Lies den großen Bauteilkatalog und die große Projektakte mit beiden Werkzeugen. Nenne mir aus beiden abschließenden Prüfvermerken jeweils den Freigabecode und die freigegebene Menge.' }
+            'catalog' { 'Kannst du mir aus dem langen Bauteilkatalog den Freigabecode und die freigegebene Menge vorlesen?' }
+            'dossier' { 'Was steht in der umfangreichen Projektakte zum Freigabecode und zur freigegebenen Menge?' }
+            'both' { 'Nenne mir aus dem langen Bauteilkatalog und der umfangreichen Projektakte jeweils den Freigabecode und die freigegebene Menge.' }
         }
         $synth.Speak($spokenRequest)
     } finally { $synth.Dispose() }

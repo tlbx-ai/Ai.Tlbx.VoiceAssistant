@@ -48,7 +48,7 @@ internal static class LargeResultIntegrationTests
         var backendTokens = 0;
         IVoiceProvider provider;
         IVoiceSettings settings;
-        const string instructions = "Antworte kurz auf Deutsch. Delegiere Fragen nach Katalog oder Projektakte zwingend an das Backend und verwende das passende Werkzeug. Nenne den Freigabecode und die freigegebene Menge exakt aus dem abschließenden Prüfvermerk. Erfinde keine Werte.";
+        const string instructions = "Du bist ein hilfreicher Sprachassistent. Antworte kurz auf Deutsch. Erfinde keine Fakten oder ausgeführten Aktionen.";
         if (mode == "realtime")
         {
             provider = new OpenAiVoiceProvider();

@@ -11,10 +11,56 @@ internal static partial class OpenAiLiveTests
 {
     public static async Task RunClientBackendAsync()
     {
+        VerifyClientCapabilityInstructions();
         await VerifyLargeClientBackendAsync();
         await VerifyClientSupersessionAsync();
         await VerifyClientFailureBoundariesAsync();
         Console.WriteLine("GPT-Live client backend contracts passed: complete large Unicode results, followups, duplicate actions/delegations, supersession, endpoint isolation and failures.");
+    }
+
+    private static void VerifyClientCapabilityInstructions()
+    {
+        const string application = "  Sprich Deutsch.\r\nBeachte meine Berechtigungen.  ";
+        var tool = new CapabilityTool("lookup_inventory", "Liest Bestand: \"Größe\"\nund Zubehör.");
+        var settings = new OpenAiLiveSettings { Instructions = application, ClientBackend = new(), Tools = [tool] };
+        var first = BuildClientSession(settings, []);
+        var prompt = first["instructions"]!.GetValue<string>();
+        Check(prompt.StartsWith(application, StringComparison.Ordinal) && settings.Instructions == application,
+            "capability composition preserves application text and does not mutate settings");
+        var start = prompt.IndexOf("[{", StringComparison.Ordinal);
+        var end = prompt.IndexOf("\nDelegation policy", StringComparison.Ordinal);
+        var metadata = JsonNode.Parse(prompt[start..end])!.AsArray();
+        Check(metadata.Count == 1 && metadata[0]!["name"]!.GetValue<string>() == tool.Name
+            && metadata[0]!["description"]!.GetValue<string>() == tool.Description
+            && metadata[0]!.AsObject().Count == 2, "exact escaped name/description metadata only, no schemas or results");
+        Check(first["delegation"]!.AsObject().Count == 1 && first["tools"] == null,
+            "capability instructions do not invent Live client protocol tool fields");
+        Check(BuildClientSession(settings, [new ChatMessage("Hallo", "user")])["instructions"]!.GetValue<string>() == prompt,
+            "repeated session creation does not duplicate capability instructions");
+        settings.Tools = [new CapabilityTool("check_booking", "Prüft eine Reservierung.")];
+        var changed = BuildClientSession(settings, [])["instructions"]!.GetValue<string>();
+        Check(changed.Contains("check_booking") && !changed.Contains("lookup_inventory"), "new sessions include only currently registered tools");
+        settings.AppendClientBackendToolInstructions = false;
+        Check(BuildClientSession(settings, [])["instructions"]!.GetValue<string>() == application, "explicit opt-out preserves exact prompt");
+        settings.AppendClientBackendToolInstructions = true;
+        settings.Tools.Clear();
+        Check(BuildClientSession(settings, [])["instructions"]!.GetValue<string>() == application, "no tools means no capability claim");
+        settings.Tools = [tool];
+        settings.ClientBackend = null;
+        settings.Responses = new JsonObject { ["model"] = "fake" };
+        var managed = BuildClientSession(settings, []);
+        Check(managed["instructions"]!.GetValue<string>() == application
+            && managed["delegation"]!["responses"]!["tools"]!.AsArray().Count == 1,
+            "managed mode preserves its native registration and mutable backend update contract");
+        Console.WriteLine("GPT-Live capability routing contracts passed: metadata, escaping, prompt preservation, reconnect, opt-out and managed isolation.");
+    }
+
+    private sealed class CapabilityTool(string name, string description) : IVoiceTool
+    {
+        public string Name => name;
+        public string Description => description;
+        public Type ArgsType => typeof(ClientLargeArgs);
+        public Task<string> ExecuteAsync(string arguments) => throw new InvalidOperationException("Prompt composition must not execute a tool.");
     }
 
     private static async Task VerifyLargeClientBackendAsync()
@@ -30,6 +76,9 @@ internal static partial class OpenAiLiveTests
             Check(request.Headers.Authorization?.Parameter == "backend-key", "explicit backend auth");
             var body = JsonNode.Parse(await request.Content!.ReadAsStringAsync())!.AsObject();
             requests.Add(body);
+            Check(body["tools"]![0]!["name"]!.GetValue<string>() == tool.Name
+                && body["tools"]![0]!["description"]!.GetValue<string>() == tool.Description
+                && body["tools"]![0]!["parameters"] is JsonObject, "backend still receives native structured tool schemas");
             Check(body["store"]!.GetValue<bool>() == false && !body["stream"]!.GetValue<bool>(), "stateless nonstreaming backend");
             if (requests.Count == 1) return ClientResponse(ClientCall("call-large"));
             Check(body["input"]!.AsArray().OfType<JsonObject>().Any(i => i["type"]?.GetValue<string>() == "function_call_output" && i["output"]?.GetValue<string>() == large), "complete tail and Unicode retained in backend");
