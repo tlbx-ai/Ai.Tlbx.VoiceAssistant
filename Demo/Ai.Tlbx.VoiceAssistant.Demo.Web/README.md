@@ -129,3 +129,38 @@ Try these commands to test the AI tools:
 - Web Audio API requires HTTPS in production or localhost for development
 - OpenAI direct WebRTC requires `app.UseWebSockets()`, `app.MapOpenAiDirectRealtimeVoice()`, and `OPENAI_API_KEY`
 - Check browser console for detailed error messages 
+
+## Large tool results (11.1)
+
+The main voice page includes `get_large_catalog` (68,774 characters) and
+`get_large_project_dossier` (137,503 characters). Both return synthetic nested JSON;
+the final inspection facts appear after character 40,000. They perform no external actions.
+
+Select `gpt-live-1` and **Application Responses backend — full tool results**.
+The explicitly configured normal Responses model receives complete tool outputs;
+GPT-Live receives a short factual answer for speech. **Live-managed Responses**
+remains available to reproduce its separate cumulative input-buffer limit.
+Realtime 2.1 can use the same tools as a comparison.
+
+Example: “Lies den großen Bauteilkatalog und die große Projektakte mit beiden Werkzeugen.
+Nenne aus beiden abschließenden Prüfvermerken den Freigabecode und die freigegebene Menge.”
+Expected: catalog `KUPFER-7319`, 417; dossier `ZEDER-8426`, 863.
+Debug mode displays actual tool requests and full results.
+
+Repeatable audio integration from the repository root (requires `OPENAI_API_KEY`, incurs API cost):
+
+```powershell
+pwsh -File Tests/Run-LargeResultSmoke.ps1 -Mode client -Document both
+pwsh -File Tests/Run-LargeResultSmoke.ps1 -Mode realtime -Document catalog -NoBuild
+pwsh -File Tests/Run-LargeResultSmoke.ps1 -Mode managed -Document catalog -NoBuild
+pwsh -File Tests/Run-LargeResultSmoke.ps1 -Mode wire-limit -NoBuild
+```
+
+`managed` passes only when the oversized result is explicitly rejected locally,
+executed once, and retained completely. `wire-limit` bypasses the library guard
+in a synthetic raw protocol session and expects OpenAI's `response_input_buffer_full`.
+These expected failures are not successful large-result processing.
+Windows can synthesize the input locally using a German SAPI voice; elsewhere
+provide `-WavPath` containing mono PCM16, 24 kHz speech. Logs go to `.logs/large-results`.
+Browser automation is in `Tests/Browser/large-result-smoke.js`; it checks spoken tail facts,
+full result visibility, bidirectional WebRTC traffic, and media cleanup.

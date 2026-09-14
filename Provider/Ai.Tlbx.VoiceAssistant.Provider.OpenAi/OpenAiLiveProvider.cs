@@ -21,7 +21,7 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi;
 
 /// <summary>Continuous GPT-Live audio over a server-side WebSocket with client or Responses delegation.
 /// Callback handlers must return promptly; run application-owned backend work outside the receive loop.</summary>
-public sealed class OpenAiLiveProvider : IVoiceProvider, IStartupHistoryVoiceProvider, IStructuredTranscriptionProvider
+public sealed partial class OpenAiLiveProvider : IVoiceProvider, IStartupHistoryVoiceProvider, IStructuredTranscriptionProvider
 {
     private readonly string _apiKey;
     private readonly Action<LogLevel, string> _log;
@@ -144,6 +144,7 @@ public sealed class OpenAiLiveProvider : IVoiceProvider, IStartupHistoryVoicePro
             _backendFailure = null;
         }
         _lifetime = new CancellationTokenSource();
+        InitializeClientBackend();
         _socket = new ClientWebSocket();
         _settings.Connection.Apply(_socket.Options, _apiKey);
     }
@@ -210,7 +211,8 @@ public sealed class OpenAiLiveProvider : IVoiceProvider, IStartupHistoryVoicePro
             throw new ArgumentException("ModelId and Voice are required.");
         if (settings.TalkingSpeed != 1 || settings.NoiseReduction != default || settings.ReasoningEffort != null || settings.Thinking.IsConfigured || settings.ToolCallPreambleMode != default)
             throw new ArgumentException("Live speech has no speed, reasoning, thinking, or tool-preamble control. Configure the Responses backend separately.");
-        if (settings.Responses == null && settings.Tools.Count != 0)
+        OpenAiLiveClientBackend.Validate(settings);
+        if (settings.Responses == null && settings.ClientBackend == null && settings.Tools.Count != 0)
             throw new ArgumentException("Local tools require Responses delegation. Client delegation runs its own backend.");
         if (settings.ConnectionTimeout <= TimeSpan.Zero || settings.CloseTimeout <= TimeSpan.Zero)
             throw new ArgumentException("Connection and close timeouts must be positive.");
@@ -252,6 +254,8 @@ public sealed class OpenAiLiveProvider : IVoiceProvider, IStartupHistoryVoicePro
     {
         RequireConnected();
         var live = settings as OpenAiLiveSettings ?? throw new ArgumentException("GPT-Live requires OpenAiLiveSettings.");
+        if (_clientBackend != null || live.ClientBackend != null)
+            throw new InvalidOperationException("Client backend settings are fixed for the connection; reconnect to update them.");
         var updated = BuildSession(live, _history);
         if (_sideband) updated["audio"]!.AsObject().Remove("format");
         foreach (var field in new[] { "model", "instructions", "audio", "store", "input" })
@@ -305,10 +309,13 @@ public sealed class OpenAiLiveProvider : IVoiceProvider, IStartupHistoryVoicePro
     public Task<JsonObject> AppendInstructionsAsync(string content, string? delegationId = null, CancellationToken cancellationToken = default) => AppendAsync("instructions", content, delegationId, cancellationToken);
     public Task<JsonObject> AppendThinkingAsync(string content, string? delegationId = null, CancellationToken cancellationToken = default) => AppendAsync("thinking", content, delegationId, cancellationToken);
     public Task<JsonObject> AppendCommentaryAsync(string content, string? delegationId = null, CancellationToken cancellationToken = default) => AppendAsync("commentary", content, delegationId, cancellationToken);
-    private Task<JsonObject> AppendAsync(string kind, string content, string? delegationId, CancellationToken cancellationToken)
+    private async Task<JsonObject> AppendAsync(string kind, string content, string? delegationId, CancellationToken cancellationToken)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(content);
-        return SendCommandAsync(new JsonObject { ["type"] = $"session.{kind}.append", ["content"] = content, ["delegation_id"] = delegationId }, cancellationToken);
+        var acknowledgment = await SendCommandAsync(new JsonObject { ["type"] = $"session.{kind}.append", ["content"] = content, ["delegation_id"] = delegationId }, cancellationToken).ConfigureAwait(false);
+        if (_clientBackend != null && kind != "commentary")
+            lock (_clientLock) _clientTranscript.Add((JsonNode)new JsonObject { ["role"] = "application", ["kind"] = kind, ["text"] = content });
+        return acknowledgment;
     }
     public Task<JsonObject> SetInputMutedAsync(bool muted, CancellationToken cancellationToken = default) =>
         SendCommandAsync(new JsonObject { ["type"] = muted ? "session.input_audio.mute" : "session.input_audio.unmute" }, cancellationToken);
@@ -431,6 +438,7 @@ public sealed class OpenAiLiveProvider : IVoiceProvider, IStartupHistoryVoicePro
         finally
         {
             var error = failure ?? new IOException("Live session ended.");
+            CancelClientBackend();
             _started.TrySetException(error);
             if (!_closed.Task.IsCompleted) _closed.TrySetException(error);
             lock (_pending) foreach (var pending in _pending.Values) pending.TrySetException(error);
@@ -464,6 +472,7 @@ public sealed class OpenAiLiveProvider : IVoiceProvider, IStartupHistoryVoicePro
                 var role = type == "session.input_transcript.delta" ? "user" : "assistant";
                 var delta = message["delta"]!.GetValue<string>();
                 var transcript = new OpenAiLiveTranscriptDelta(role, delta, message["start_ms"]!.GetValue<double>(), message["end_ms"]!.GetValue<double>());
+                CollectClientTranscript(transcript);
                 OnTranscriptDelta?.Invoke(transcript);
                 OnStructuredTranscriptionReceived?.Invoke(new StructuredTranscript {
                     ProviderId = "openai", ModelId = _settings?.ModelId ?? "gpt-live-1", Text = delta,
@@ -476,11 +485,14 @@ public sealed class OpenAiLiveProvider : IVoiceProvider, IStartupHistoryVoicePro
                 break;
             case "session.delegation.created":
                 var delegation = message["delegation"]!;
-                OnDelegationCreated?.Invoke(new OpenAiLiveDelegation(delegation["id"]!.GetValue<string>(), delegation["target"]!.GetValue<string>(),
-                    message["offset_ms"]!.GetValue<double>(), delegation["response_id"]?.GetValue<string>()));
+                var metadata = new OpenAiLiveDelegation(delegation["id"]!.GetValue<string>(), delegation["target"]!.GetValue<string>(),
+                    message["offset_ms"]!.GetValue<double>(), delegation["response_id"]?.GetValue<string>());
+                StartClientDelegation(metadata);
+                OnDelegationCreated?.Invoke(metadata);
                 break;
             case "session.usage.updated": EmitVoiceUsage(message, false); break;
             case "session.closed":
+                CancelClientBackend();
                 CloseReason = message["reason"]?.GetValue<string>();
                 FinalUsageConfirmed = message["usage"]?["seconds"] != null;
                 EmitVoiceUsage(message, true);
@@ -624,6 +636,7 @@ public sealed class OpenAiLiveProvider : IVoiceProvider, IStartupHistoryVoicePro
         try
         {
             _closing = true;
+            CancelClientBackend();
             _audio?.Writer.TryComplete();
             _audioLifetime?.Cancel();
             if (_audioSender != null) await _audioSender.ConfigureAwait(false);
@@ -640,6 +653,7 @@ public sealed class OpenAiLiveProvider : IVoiceProvider, IStartupHistoryVoicePro
 
     private async Task ReleaseTransportAsync()
     {
+        CancelClientBackend();
         _lifetime?.Cancel();
         _audioLifetime?.Cancel();
         _audio?.Writer.TryComplete();
@@ -655,6 +669,14 @@ public sealed class OpenAiLiveProvider : IVoiceProvider, IStartupHistoryVoicePro
         _audioLifetime = null;
         _audioSender = null;
         _audio = null;
+        var backend = _clientBackend;
+        if (backend != null)
+        {
+            Task[] work;
+            lock (_backendTasks) work = _backendTasks.ToArray();
+            _ = Task.WhenAll(work).ContinueWith(_ => backend.Dispose(), CancellationToken.None,
+                TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
+        }
     }
 
     public async ValueTask DisposeAsync()

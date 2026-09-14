@@ -222,45 +222,8 @@ internal sealed class OpenAiDirectRealtimeSessionRegistry : IOpenAiDirectRealtim
         pending.TrySetResult(new ClientActionResult(result, declined));
     }
 
-    private static string BuildInstructions(OpenAiVoiceSettings settings)
-    {
-        if (!settings.AppendToolCallPreambleInstructions)
-        {
-            return settings.Instructions;
-        }
-
-        var preambleInstructions = BuildToolCallPreambleInstructions(settings.ToolCallPreambleMode);
-        return string.IsNullOrWhiteSpace(preambleInstructions)
-            ? settings.Instructions
-            : settings.Instructions + Environment.NewLine + Environment.NewLine + preambleInstructions;
-    }
-
-    private static string? BuildToolCallPreambleInstructions(ToolCallPreambleMode mode)
-    {
-        return mode switch
-        {
-            ToolCallPreambleMode.ProviderDefault => null,
-            ToolCallPreambleMode.Disabled =>
-                "# Tool call preambles" + Environment.NewLine +
-                "- Do not speak a preamble before, between, or during tool calls." + Environment.NewLine +
-                "- Call tools directly when the user's intent is clear and remain silent until the final answer or a required clarification." + Environment.NewLine +
-                "- Never repeat, paraphrase, or acknowledge the user's request as filler while tools are running.",
-            ToolCallPreambleMode.BeforeToolBurst =>
-                "# Tool call preambles" + Environment.NewLine +
-                "- If a user request requires a burst of multiple tool calls, say one short bridge sentence before the burst." + Environment.NewLine +
-                "- Summarize the overall action, not each individual tool call." + Environment.NewLine +
-                "- Do not narrate every tool call in the burst; keep working quietly after the bridge sentence." + Environment.NewLine +
-                "- For a single lightweight tool call, call the tool silently unless the user needs context.",
-            ToolCallPreambleMode.ForLongRunningTools =>
-                "# Tool call preambles" + Environment.NewLine +
-                "- Say one short bridge sentence before a tool call only when it may take noticeable time or change user-visible state." + Environment.NewLine +
-                "- Do not speak preambles for quick lookups or lightweight tool calls.",
-            ToolCallPreambleMode.BeforeEveryToolCall =>
-                "# Tool call preambles" + Environment.NewLine +
-                "- Before any tool call, say one short natural sentence describing what you are about to do.",
-            _ => null
-        };
-    }
+    private static string BuildInstructions(OpenAiVoiceSettings settings) =>
+        OpenAiInstructionsComposer.Compose(settings).FinalText;
 
     private static async Task SendJsonAsync<T>(
         WebSocket webSocket,

@@ -27,6 +27,64 @@ browser hosts. Keep project keys on the server. See the [Live integration guide]
 
 Full examples and API analysis: https://github.com/tlbx-ai/Ai.Tlbx.VoiceAssistant/blob/master/docs/openai-gpt-live.md
 
+### Client backend for large tool results (11.1)
+
+For tools returning large documents or complex JSON, explicitly select the library-owned
+client backend before connecting. It sends the **complete, unmodified tool results** to
+the ordinary Responses HTTP endpoint. GPT-Live receives only the backend's concise factual
+answer. This works with `OpenAiLiveProvider` and `OpenAiDirectLiveVoiceProvider`.
+
+```csharp
+var settings = new OpenAiLiveSettings
+{
+    Instructions = "Answer in German. Delegate data lookups to the backend.",
+    Responses = null,
+    Tools = [myDocumentTool],
+    ClientBackend = new OpenAiLiveClientBackendOptions
+    {
+        Responses = new JsonObject
+        {
+            ["model"] = "gpt-5.6-luna",
+            ["instructions"] = "Use verified tool records. Answer in German.",
+            ["reasoning"] = new JsonObject { ["effort"] = "low" },
+            ["max_output_tokens"] = 2048
+        }
+    }
+};
+await provider.ConnectAsync(settings);
+```
+
+`ClientBackend.Connection` configures the full HTTP endpoint, gateway headers, and API key
+independently of the Live WebSocket endpoint. A different host or port requires explicit
+backend authentication; the Live constructor key is never forwarded across authorities.
+Settings are captured at connection start. An optional application-owned `HttpClient` is
+reused and not disposed by the provider.
+
+The runner retains role-labelled transcript fragments, startup history, acknowledged
+instruction/thinking appends, and complete tool outputs across delegated followups. Later
+speech can correct earlier fragments; they are never presented as finalized user turns.
+Tool request/result callbacks include the call ID. `ToolResults` retains complete outputs
+after failures; `AcceptedByClientBackend` confirms HTTP request acceptance, not speech.
+Normal delegated Responses usage is forwarded through `OnUsageReceived`.
+
+Backend work runs outside the Live receiver. A new delegation supersedes pending HTTP work
+and suppresses stale commentary. `CancelClientBackend()` offers the same explicit cancellation.
+A running `IVoiceTool` cannot be forcibly cancelled: its result is retained and the next
+delegation waits for it. Disconnect remains bounded, but reuse of the provider is blocked
+until any running tool returns. Duplicate call IDs never re-execute an action.
+
+The spoken answer must fit a conservative **500 UTF-8 byte** bound; oversized answers fail
+visibly without truncation. This is deliberately stricter than Live's 500-token append limit.
+Backend HTTP limits and the selected model's context window still apply. Defaults allow
+eight Responses rounds and two minutes of HTTP work per delegation; tools without a
+cancellation contract may outlive that timeout. HTTP/continuation errors are surfaced and
+close Live with bounded finalization. The runner never retries executed tools or changes
+delegation mode automatically.
+
+Managed Responses delegation remains available through `settings.Responses` with
+`ClientBackend = null`. Its existing 128-item / 32768-byte conservative session input budget
+is unchanged; it is unsuitable for the same large raw tool results.
+
 [![NuGet](https://img.shields.io/nuget/v/Ai.Tlbx.VoiceAssistant.Provider.OpenAi.svg)](https://www.nuget.org/packages/Ai.Tlbx.VoiceAssistant.Provider.OpenAi/)
 
 ## Installation
@@ -175,3 +233,60 @@ not support the streamed HTTP responses used by `OpenAiHttpLiveTranscriber`.
 See the main package for complete documentation:
 
 **[Ai.Tlbx.VoiceAssistant on NuGet](https://www.nuget.org/packages/Ai.Tlbx.VoiceAssistant#readme-body-tab)**
+
+## Realtime protocol diagnostics and session snapshots
+
+`OpenAiVoiceProvider` exposes metadata diagnostics separately from the existing completed response trace:
+
+```csharp
+provider.OnProtocolEvent = e => Console.WriteLine(
+    $"{e.Timestamp:O} {e.Direction} {e.EventType} response={e.ResponseId} " +
+    $"call={e.CallId} error={e.ErrorCode} referencedEvent={e.ReferencedEventId}");
+provider.OnSessionSnapshot = snapshot =>
+    Console.WriteLine($"Session {snapshot.Stage}, local observation {snapshot.LocalRevision}");
+```
+
+Protocol entries include direction, timestamp, event/response/item/call IDs when present,
+structured error code and referenced client event, and the library's reason for an observed
+`response.create`. `Origin` is `library` for successfully sent events and `unobserved` for
+received events. The latter does not attribute an event to a gateway, server VAD, or another
+client without protocol evidence. Successful send means the transport accepted the write;
+it does not mean the server accepted the request. Failed writes are not reported as sent.
+
+Content is excluded by default. `OpenAiVoiceSettings.IncludeProtocolContent = true` enables
+`ContentJson` for explicit application inspection, which can contain private prompts,
+transcripts and tool results. Audio data and client-secret fields remain excluded. Observer
+exceptions are isolated from protocol execution. These APIs describe the WebSocket Realtime
+provider; they do not claim visibility into gateway-internal events or GPT Live protocol traffic.
+
+`RequestedSessionSnapshot`, `SentSessionSnapshot`, and `ServerSessionSnapshot` retain the
+latest observation of each stage. Snapshots contain immutable `SessionJson` strings copied
+from the actual serialized request or server-returned session, including final instructions
+and translated tool schemas when those fields exist. They are never automatically logged.
+The client-secret HTTP path also produces snapshots, restricted to its `session` object;
+the returned credential is excluded. A failed request does not advance the sent snapshot.
+An HTTP response, including a rejection, proves request transport and therefore advances sent;
+it does not imply configuration acceptance. A server-returned snapshot exists only if the
+response actually contains a session object.
+
+`LocalRevision` numbers observations; it is not a server revision. Only a local sent snapshot
+has `RequestedRevision` linking its actual request. A `session.updated` event gets no invented
+request correlation, even when several updates are outstanding. Inspect `SessionJson` with
+`JsonDocument.TryGetProperty` to distinguish an omitted field from an explicit JSON `null`.
+An omitted `instructions` or `tools` field is not confirmation of a previous value.
+
+Prompt composition is shared with the browser session registry:
+
+```csharp
+settings.ToolCallPreambleInstructionsOverride =
+    "Sprich vor einer längeren Werkzeugaktion genau einen kurzen Überleitungssatz.";
+var prompt = OpenAiInstructionsComposer.Compose(settings);
+// prompt.ApplicationText, prompt.LibraryPreamble, prompt.FinalText
+```
+
+The override replaces the library's preamble text, allowing application localization.
+`AppendToolCallPreambleInstructions = false` ignores the override and preserves the input
+instructions exactly, including whitespace and line endings. Composition never mutates
+settings, so repeating session updates does not append the preamble twice. Requested/sent
+snapshots retain prompt provenance captured when that payload was built. Server-returned
+snapshots do not invent provenance for server-modified instructions.

@@ -154,8 +154,10 @@ Always use `Action<LogLevel, string>` for logging delegation and forward logs up
 
 ### Testing Strategy
 
-- No automated tests are currently included
-- Testing is performed through the demo applications in `/Demo` folder
+- Automated provider contracts and controlled HTTP/WebSocket event sequences live in `Tests/ContractTests`.
+- Run `pwsh -File verify-release.ps1` before publication; it builds the solution, runs contracts and console smoke, and verifies Native AOT.
+- Large-tool-result work must prove that the configured reasoning backend consumes complete output and returns facts located beyond character 40000. A retained output plus an explicit failure alone does not solve the application use case. Keep GPT-Live managed delegation, client delegation, and Realtime evidence distinct.
+- Real audio and browser tests complement the deterministic contracts; document unavailable gateway coverage explicitly.
 - Each platform has its own demo for validation:
   - Windows: `Demo/Ai.Tlbx.VoiceAssistant.Demo.Windows/`
   - Linux: `Demo/Ai.Tlbx.VoiceAssistant.Demo.Linux/`

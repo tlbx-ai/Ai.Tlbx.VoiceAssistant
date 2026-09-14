@@ -18,6 +18,9 @@ public sealed class OpenAiLiveSettings : IVoiceSettings
     /// <summary>Null selects client delegation. Otherwise this is the Live-supported Responses configuration
     /// (model, instructions, tools, reasoning, text, tool_choice, parallel_tool_calls, max_output_tokens, service_tier).</summary>
     public JsonObject? Responses { get; set; }
+    /// <summary>Optional library-owned client backend for large tool results. Requires Responses=null.
+    /// Null preserves the existing managed Responses or application-owned client mode.</summary>
+    public OpenAiLiveClientBackendOptions? ClientBackend { get; set; }
     /// <summary>Prior text messages included in session.start, at most 128 messages / 8192 tokens.</summary>
     public List<ChatMessage> InitialHistory { get; set; } = new();
     /// <summary>Local functions for Responses delegation. They execute only when explicitly registered.</summary>

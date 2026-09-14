@@ -21,7 +21,7 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi
     /// <summary>
     /// OpenAI voice provider implementation for real-time conversation via WebSocket.
     /// </summary>
-    public sealed class OpenAiVoiceProvider : IVoiceProvider
+    public sealed partial class OpenAiVoiceProvider : IVoiceProvider
     {
         private const int CONNECTION_TIMEOUT_MS = 10000;
         private const int DISCONNECTION_TIMEOUT_MS = 5000;
@@ -47,6 +47,17 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi
         // State tracking
         private bool _hasActiveResponse = false;
         private bool _responseRequested;
+        private string _responseCreateReason = "unspecified";
+        private readonly object _responseGate = new();
+        private readonly HashSet<string> _completedResponses = new(StringComparer.Ordinal);
+        private readonly HashSet<string> _executedCalls = new(StringComparer.Ordinal);
+        private long _sessionGeneration;
+        private long _turnGeneration;
+        private int _pendingToolBatches;
+        private bool _discardResponseTools;
+        private bool _toolExecutionUncertain;
+        private string? _pendingCreateEventId;
+        private string? _pendingCancelEventId;
         private bool _userSpeaking;
         private bool _cancelRequested;
         private readonly StringBuilder _currentAiMessage = new();
@@ -144,6 +155,7 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi
             // Creating client secret for ephemeral key
 
             // Create request with session configuration
+            var instructions = OpenAiInstructionsComposer.Compose(_settings);
             var request = new ClientSecretRequest
             {
                 ExpiresAfter = new ExpiresAfter
@@ -155,7 +167,7 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi
                 {
                     Type = "realtime",
                     Model = _settings.GetModelId(),
-                    Instructions = BuildInstructions(_settings),
+                    Instructions = instructions.FinalText,
                     Reasoning = BuildReasoningConfig(_settings)
                 }
             };
@@ -170,7 +182,9 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi
             httpRequest.Content = new StringContent(json, Encoding.UTF8, "application/json");
 
             _settings.ClientSecretsConnection.Apply(httpRequest, _apiKey);
+            var requested = RecordRequestedSession(json, "client-secret", instructions);
             using var response = await _httpClient.SendAsync(httpRequest);
+            RecordSentSession(requested);
             
             if (!response.IsSuccessStatusCode)
             {
@@ -183,6 +197,7 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi
             // Parsing client secret response
             
             using var document = JsonDocument.Parse(responseJson);
+            RecordServerSession(document.RootElement, "client-secret");
             
             // The ephemeral key is at root level as "value"
             if (document.RootElement.TryGetProperty("value", out var rootValue))
@@ -223,7 +238,24 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi
             }
                        
 
+            if (openAiSettings.ToolExecutionTimeout <= TimeSpan.Zero)
+                throw new ArgumentOutOfRangeException(nameof(openAiSettings.ToolExecutionTimeout), "Tool execution timeout must be positive.");
+            if (_webSocket != null) await DisconnectAsync();
+            ResetSessionDiagnostics();
             _settings = openAiSettings;
+            lock (_responseGate)
+            {
+                _sessionGeneration++;
+                _turnGeneration++;
+                _completedResponses.Clear();
+                _executedCalls.Clear();
+                _pendingToolBatches = 0;
+                _discardResponseTools = false;
+                _toolExecutionUncertain = false;
+                _currentResponseId = "";
+                _pendingCreateEventId = null;
+                _pendingCancelEventId = null;
+            }
             _hasActiveResponse = false;
             _responseRequested = false;
             _userSpeaking = false;
@@ -277,6 +309,7 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi
         {
             try
             {
+                lock (_responseGate) { _sessionGeneration++; _turnGeneration++; _responseRequested = false; }
                 OnStatusChanged?.Invoke("Disconnecting...");
 
                 await StopAudioSenderAsync();
@@ -341,6 +374,8 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi
                 throw new ArgumentException("Settings must be of type OpenAiVoiceSettings for OpenAI provider", nameof(settings));
             }
 
+            if (openAiSettings.ToolExecutionTimeout <= TimeSpan.Zero)
+                throw new ArgumentOutOfRangeException(nameof(openAiSettings.ToolExecutionTimeout), "Tool execution timeout must be positive.");
             _settings = openAiSettings;
             _logAction(LogLevel.Info, $"Settings configured - Voice: {_settings.Voice}, Speed: {_settings.TalkingSpeed}, Model: {_settings.Model}");
             
@@ -377,8 +412,12 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi
         /// <returns>A task representing the interrupt operation.</returns>
         public async Task SendInterruptAsync()
         {
-            if (_settings?.ClientResponseControl == true)
+            lock (_responseGate)
             {
+                _turnGeneration++;
+                _pendingToolBatches = 0;
+                _discardResponseTools = true;
+                _responseRequested = false;
                 if (!_hasActiveResponse || _cancelRequested) return;
                 _cancelRequested = true;
             }
@@ -389,8 +428,8 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi
 
             try
             {
-                var interruptMessage = new ResponseCancelMessage();
-                await SendMessageAsync(JsonSerializer.Serialize(interruptMessage, OpenAiJsonContext.Default.ResponseCancelMessage));
+                _pendingCancelEventId = "cancel_" + Guid.NewGuid().ToString("N");
+                await SendMessageAsync("{\"type\":\"response.cancel\",\"event_id\":\"" + _pendingCancelEventId + "\"}");
                 _logAction(LogLevel.Info, "Interrupt signal sent to OpenAI");
             }
             catch (Exception ex)
@@ -458,13 +497,14 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi
             var voiceString = _settings.Voice.ToString().ToLowerInvariant();
             _logAction(LogLevel.Info, $"Configuring session with voice: {_settings.Voice} -> {voiceString}");
 
+            var instructions = OpenAiInstructionsComposer.Compose(_settings);
             var sessionConfig = new SessionUpdateMessage
             {
                 EventId = $"evt_{Guid.NewGuid()}",
                 Session = new SessionConfig
                 {
                     OutputModalities = new List<string> { "audio" },
-                    Instructions = BuildInstructions(_settings),
+                    Instructions = instructions.FinalText,
                     MaxOutputTokens = _settings.MaxTokens?.ToString() ?? "inf",
                     Truncation = new TruncationConfig
                     {
@@ -504,8 +544,9 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi
             };
 
             var jsonMessage = JsonSerializer.Serialize(sessionConfig, OpenAiJsonContextIndented.Default.SessionUpdateMessage);
-            _logAction(LogLevel.Info, $"Sending explicit session config to OpenAI:\n{jsonMessage}");
+            var requested = RecordRequestedSession(jsonMessage, "websocket", instructions);
             await SendMessageAsync(jsonMessage);
+            RecordSentSession(requested);
             _logAction(LogLevel.Info, "Session configuration sent to OpenAI");
         }
 
@@ -543,54 +584,8 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi
         private static bool IsSemanticVad(string? type) =>
             string.Equals(type, "semantic_vad", StringComparison.OrdinalIgnoreCase);
 
-        private static string BuildInstructions(OpenAiVoiceSettings settings)
-        {
-            if (!settings.AppendToolCallPreambleInstructions)
-            {
-                return settings.Instructions;
-            }
-
-            var preambleInstructions = BuildToolCallPreambleInstructions(settings.ToolCallPreambleMode);
-            if (string.IsNullOrWhiteSpace(preambleInstructions))
-            {
-                return settings.Instructions;
-            }
-
-            return string.Join(
-                Environment.NewLine + Environment.NewLine,
-                settings.Instructions,
-                preambleInstructions);
-        }
-
-        private static string? BuildToolCallPreambleInstructions(ToolCallPreambleMode mode)
-        {
-            return mode switch
-            {
-                ToolCallPreambleMode.ProviderDefault => null,
-                ToolCallPreambleMode.Disabled =>
-                    "# Tool call preambles" + Environment.NewLine +
-                    "- Do not speak a preamble before, between, or during tool calls." + Environment.NewLine +
-                    "- Call tools directly when the user's intent is clear and remain silent until the final answer or a required clarification." + Environment.NewLine +
-                    "- Never repeat, paraphrase, or acknowledge the user's request as filler while tools are running.",
-                ToolCallPreambleMode.BeforeToolBurst =>
-                    "# Tool call preambles" + Environment.NewLine +
-                    "- If a user request requires a burst of multiple tool calls, say one short bridge sentence before the first call." + Environment.NewLine +
-                    "- Summarize the overall action, not each individual tool call." + Environment.NewLine +
-                    "- Do not narrate every tool call in the burst; keep working quietly until you have the final result or need clarification." + Environment.NewLine +
-                    "- For a single lightweight tool call, call the tool silently unless the user would benefit from an update.",
-                ToolCallPreambleMode.ForLongRunningTools =>
-                    "# Tool call preambles" + Environment.NewLine +
-                    "- Say one short bridge sentence before a tool call only when it may take noticeable time or affects visible external state." + Environment.NewLine +
-                    "- Do not speak preambles for quick lookups or lightweight tool calls." + Environment.NewLine +
-                    "- Describe the action, not internal reasoning.",
-                ToolCallPreambleMode.BeforeEveryToolCall =>
-                    "# Tool call preambles" + Environment.NewLine +
-                    "- Before any tool call, say one short natural sentence describing the action, then call the tool immediately." + Environment.NewLine +
-                    "- Vary wording and avoid filler." + Environment.NewLine +
-                    "- Describe the action, not internal reasoning.",
-                _ => null
-            };
-        }
+        private static string BuildInstructions(OpenAiVoiceSettings settings) =>
+            OpenAiInstructionsComposer.Compose(settings).FinalText;
 
         private static Channel<string> CreateAudioSendChannel()
         {
@@ -690,47 +685,21 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi
             senderCts?.Dispose();
         }
 
-        private async Task SendMessageAsync(string message, CancellationToken cancellationToken = default)
+        private async Task SendMessageAsync(string message, CancellationToken cancellationToken = default,
+            long? expectedGeneration = null, string? createReason = null, long? expectedTurn = null)
         {
-            var effectiveCancellationToken = cancellationToken.CanBeCanceled
-                ? cancellationToken
-                : _cts?.Token ?? CancellationToken.None;
-            var lockTaken = false;
-
+            var generation = expectedGeneration ?? _sessionGeneration;
+            var socket = _webSocket;
+            var token = cancellationToken.CanBeCanceled ? cancellationToken : _cts?.Token ?? CancellationToken.None;
+            await _sendLock.WaitAsync(token);
             try
             {
-                await _sendLock.WaitAsync(effectiveCancellationToken);
-                lockTaken = true;
-
-                if (_webSocket?.State != WebSocketState.Open)
-                    return;
-
-                var buffer = Encoding.UTF8.GetBytes(message);
-                await _webSocket.SendAsync(
-                    new ArraySegment<byte>(buffer),
-                    WebSocketMessageType.Text,
-                    true,
-                    effectiveCancellationToken);
+                if (generation != _sessionGeneration || (expectedTurn.HasValue && expectedTurn != _turnGeneration) || socket != _webSocket || socket?.State != WebSocketState.Open)
+                    throw new InvalidOperationException("Realtime transport is unavailable or belongs to an expired session.");
+                await socket.SendAsync(new ArraySegment<byte>(Encoding.UTF8.GetBytes(message)), WebSocketMessageType.Text, true, token);
+                ObserveProtocol(message, OpenAiRealtimeProtocolDirection.Sent, createReason);
             }
-            catch (OperationCanceledException) when (effectiveCancellationToken.IsCancellationRequested)
-            {
-                // Expected while disconnecting or cancelling the audio sender.
-            }
-            catch (ObjectDisposedException)
-            {
-                // WebSocket closed during send - expected during disconnect
-            }
-            catch (WebSocketException ex)
-            {
-                _logAction(LogLevel.Warn, $"WebSocket send failed: {ex.Message}");
-            }
-            finally
-            {
-                if (lockTaken)
-                {
-                    _sendLock.Release();
-                }
-            }
+            finally { _sendLock.Release(); }
         }
 
         private async Task ReceiveMessagesAsync(CancellationToken cancellationToken)
@@ -784,6 +753,7 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi
             {
                 using var document = JsonDocument.Parse(message);
                 var root = document.RootElement;
+                ObserveProtocol(message, OpenAiRealtimeProtocolDirection.Received);
 
                 if (!root.TryGetProperty("type", out var typeElement))
                     return;
@@ -826,7 +796,14 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi
                         break;
                     case "input_audio_buffer.speech_started":
                         _logAction(LogLevel.Info, "User started speaking - server detected interruption");
-                        _userSpeaking = true;
+                        lock (_responseGate)
+                        {
+                            _userSpeaking = true;
+                            _turnGeneration++;
+                            _pendingToolBatches = 0;
+                            _discardResponseTools = true;
+                            _responseRequested = false;
+                        }
                         await HandleInterruptionSafeAsync();
                         break;
                     case "input_audio_buffer.speech_stopped":
@@ -836,8 +813,12 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi
                     case "input_audio_buffer.committed":
                         if (_settings?.ClientResponseControl == true)
                         {
-                            _userSpeaking = false;
-                            _responseRequested = true;
+                            lock (_responseGate)
+                            {
+                                _userSpeaking = false;
+                                _responseRequested = true;
+                                _responseCreateReason = "input-audio-committed";
+                            }
                             await TryStartRequestedResponseAsync();
                         }
                         break;
@@ -874,6 +855,7 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi
             catch (Exception ex)
             {
                 _logAction(LogLevel.Error, $"Error processing received message: {ex.Message}");
+                OnError?.Invoke($"Realtime protocol processing failed: {ex.Message}");
             }
         }
 
@@ -894,99 +876,101 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi
             await Task.CompletedTask;
         }
 
-        private async Task HandleFunctionCallDone(JsonElement root)
+        private async Task RunToolBatchAsync(JsonElement[] calls, OpenAiRealtimeResponseTrace? trace,
+            long session, long turn, CancellationToken cancellationToken)
         {
-            var functionName = root.GetProperty("name").GetString() ?? "";
-            var callId = root.GetProperty("call_id").GetString() ?? "";
-            var argumentsJson = root.GetProperty("arguments").GetString() ?? "{}";
-            var toolTrace = new OpenAiRealtimeToolCallTrace
+            var sentResults = false;
+            try
             {
-                Name = functionName,
-                CallId = callId,
-                ArgumentsJson = argumentsJson
-            };
-            _currentResponseTrace?.ToolCalls.Add(toolTrace);
-
-            _logAction(LogLevel.Info, $"[Tool] Function call complete: {functionName}");
-            _logAction(LogLevel.Info, $"[Tool] Call ID: {callId}");
-            _logAction(LogLevel.Info, $"[Tool] Arguments: {argumentsJson}");
-
-            if (string.IsNullOrEmpty(functionName))
-            {
-                _logAction(LogLevel.Error, "[Tool] ERROR: Function name is empty");
-                toolTrace.Error = "Function name is empty";
-                return;
-            }
-
-            if (string.IsNullOrEmpty(callId))
-            {
-                _logAction(LogLevel.Error, "[Tool] ERROR: Call ID is empty");
-                toolTrace.Error = "Call ID is empty";
-                return;
-            }
-
-            // Find and execute the tool
-            var tool = _settings?.Tools.FirstOrDefault(t => t.Name == functionName);
-            var registeredTools = _settings?.Tools.Select(t => t.Name).ToList() ?? new List<string>();
-            _logAction(LogLevel.Info, $"[Tool] Registered tools: [{string.Join(", ", registeredTools)}]");
-
-            if (tool != null)
-            {
-                try
+                foreach (var call in calls)
                 {
-                    _logAction(LogLevel.Info, $"[Tool] Executing tool: {functionName}");
-                    var result = await tool.ExecuteAsync(argumentsJson);
-                    _logAction(LogLevel.Info, $"[Tool] Execution result: {result}");
+                    if (session != _sessionGeneration || turn != _turnGeneration) return;
+                    var name = TryGetString(call, "name") ?? "";
+                    var callId = TryGetString(call, "call_id") ?? "";
+                    var arguments = TryGetString(call, "arguments") ?? "{}";
+                    if (name.Length == 0 || callId.Length == 0) throw new InvalidOperationException("Tool call lacks name or call_id.");
+                    lock (_responseGate)
+                    {
+                        // Retain tombstones for the session: evicting them could replay a side effect.
+                        if (_executedCalls.Contains(callId)) continue;
+                        if (_executedCalls.Count >= 8192) throw new InvalidOperationException("Realtime call limit reached; start a new session.");
+                        _executedCalls.Add(callId);
+                    }
+                    var toolTrace = new OpenAiRealtimeToolCallTrace { Name = name, CallId = callId, ArgumentsJson = arguments };
+                    trace?.ToolCalls.Add(toolTrace);
+                    var tool = _settings?.Tools.FirstOrDefault(t => t.Name == name);
+                    string result;
+                    Task<string>? execution = null;
+                    try
+                    {
+                        if (tool == null) result = $"Tool not found: {name}";
+                        else
+                        {
+                            execution = tool.ExecuteAsync(arguments);
+                            result = await execution.WaitAsync(_settings!.ToolExecutionTimeout, cancellationToken);
+                        }
+                    }
+                    catch (TimeoutException)
+                    {
+                        ObserveAbandonedTool(execution, name, callId);
+                        if (session != _sessionGeneration || turn != _turnGeneration) return;
+                        toolTrace.Error = "Tool execution timed out; action outcome is uncertain. No retry or continuation was performed.";
+                        lock (_responseGate)
+                        {
+                            if (session == _sessionGeneration) { _toolExecutionUncertain = true; _responseRequested = false; }
+                        }
+                        throw new InvalidOperationException(toolTrace.Error);
+                    }
+                    catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+                    { ObserveAbandonedTool(execution, name, callId); return; }
+                    catch (Exception ex) { toolTrace.Error = ex.Message; result = $"Error: {ex.Message}"; }
+                    if (session != _sessionGeneration || turn != _turnGeneration) return;
                     toolTrace.OutputJson = result;
-
-                    // Send the tool result back to OpenAI
-                    await SendToolResultAsync(callId, functionName, result);
-
-                    // Add tool call message to chat history
-                    var formattedArgs = FormatToolArguments(argumentsJson);
-                    var toolCallMessage = ChatMessage.CreateAssistantMessage($"Calling tool: {functionName}\nArguments: {formattedArgs}");
-                    OnMessageReceived?.Invoke(toolCallMessage);
-
-                    // Add tool response message to chat history
-                    var toolResponseMessage = ChatMessage.CreateToolMessage(functionName, result, callId);
-                    OnMessageReceived?.Invoke(toolResponseMessage);
+                    var payload = JsonSerializer.Serialize(new ConversationItemCreateMessage
+                    {
+                        Item = new ConversationItem { Type = "function_call_output", CallId = callId, Output = result }
+                    }, OpenAiJsonContext.Default.ConversationItemCreateMessage);
+                    // A failed send never reruns the tool or sends a replacement result.
+                    await SendMessageAsync(payload, cancellationToken, session, expectedTurn: turn);
+                    sentResults = true;
+                    OnMessageReceived?.Invoke(ChatMessage.CreateToolMessage(name, result, callId));
                 }
-                catch (Exception ex)
+                lock (_responseGate)
                 {
-                    _logAction(LogLevel.Error, $"[Tool] ERROR executing {functionName}: {ex.Message}");
-                    _logAction(LogLevel.Error, $"[Tool] Stack trace: {ex.StackTrace}");
-                    toolTrace.Error = ex.Message;
-                    await SendToolResultAsync(callId, functionName, $"Error: {ex.Message}");
+                    if (sentResults && session == _sessionGeneration && turn == _turnGeneration)
+                    {
+                        if (!_responseRequested) _responseCreateReason = "tool-batch-completed";
+                        _responseRequested = true;
+                    }
                 }
             }
-            else
+            catch (Exception ex)
             {
-                _logAction(LogLevel.Warn, $"[Tool] Tool not found: {functionName}");
-                var error = $"Tool not found: {functionName}";
-                toolTrace.Error = error;
-                await SendToolResultAsync(callId, functionName, error);
+                _logAction(LogLevel.Error, $"Realtime tool batch failed: {ex.Message}");
+                if (session == _sessionGeneration) OnError?.Invoke($"Realtime tool batch failed: {ex.Message}");
             }
-
+            finally
+            {
+                if (session == _sessionGeneration)
+                {
+                    lock (_responseGate) { if (turn == _turnGeneration) _pendingToolBatches--; }
+                    if (trace != null) OnResponseTraceCompleted?.Invoke(trace);
+                    try { await TryStartRequestedResponseAsync(); }
+                    catch (Exception ex) { OnError?.Invoke($"Realtime response request failed: {ex.Message}"); }
+                }
+            }
         }
-        
-        private async Task SendToolResultAsync(string callId, string functionName, string result)
+
+        private void ObserveAbandonedTool(Task<string>? execution, string name, string callId)
         {
-            var toolResponse = new ConversationItemCreateMessage
+            if (execution == null) return;
+            _ = execution.ContinueWith(completed =>
             {
-                Item = new ConversationItem
-                {
-                    Type = "function_call_output",
-                    CallId = callId,
-                    Output = result
-                }
-            };
-
-            var toolResponseJson = JsonSerializer.Serialize(toolResponse, OpenAiJsonContext.Default.ConversationItemCreateMessage);
-            _logAction(LogLevel.Info, $"[Tool] Sending tool result JSON: {toolResponseJson}");
-
-            await SendMessageAsync(toolResponseJson);
-            _logAction(LogLevel.Info, $"[Tool] Tool result sent for {functionName} (call_id: {callId})");
-
+                // Observe every eventual exception without replaying or publishing an obsolete result.
+                var error = completed.Exception;
+                try { _logAction(LogLevel.Warn, $"Detached tool {name} ({callId}) finished with status {completed.Status}; its result was not submitted. {error?.GetBaseException().Message}"); }
+                catch { /* A logging observer must not create another unobserved task fault. */ }
+            }, CancellationToken.None, TaskContinuationOptions.ExecuteSynchronously, TaskScheduler.Default);
         }
 
         private void HandleError(JsonElement root)
@@ -995,9 +979,15 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi
                 error.TryGetProperty("message", out var messageElement))
             {
                 var errorMessage = messageElement.GetString() ?? "Unknown error";
+                lock (_responseGate)
+                {
+                    if (_pendingCreateEventId != null && TryGetString(error, "event_id") == _pendingCreateEventId)
+                    { _pendingCreateEventId = null; _hasActiveResponse = false; }
+                }
                 
                 // Don't report cancellation errors when there's no active response
-                if (errorMessage.Contains("Cannot cancel response", StringComparison.OrdinalIgnoreCase) && !_hasActiveResponse)
+                if (TryGetString(error, "code") == "response_cancel_not_active" &&
+                    TryGetString(error, "event_id") == _pendingCancelEventId && _pendingCancelEventId != null)
                 {
                     _logAction(LogLevel.Info, $"Ignoring cancellation error - no active response: {errorMessage}");
                     return;
@@ -1065,7 +1055,16 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi
             if (root.TryGetProperty("response", out var response) && 
                 response.TryGetProperty("id", out var idElement))
             {
-                _currentResponseId = idElement.GetString() ?? "";
+                var id = idElement.GetString() ?? "";
+                if (_completedResponses.Contains(id) || (_hasActiveResponse && _currentResponseId == id)) return;
+                if (response.TryGetProperty("conversation_id", out var conversation) && conversation.ValueKind == JsonValueKind.Null) return;
+                _pendingCreateEventId = null;
+                lock (_responseGate)
+                {
+                    if (_pendingToolBatches > 0) { _turnGeneration++; _pendingToolBatches = 0; _responseRequested = false; }
+                    _discardResponseTools = _userSpeaking;
+                }
+                _currentResponseId = id;
                 _hasActiveResponse = true;
                 _currentResponseOutputText.Clear();
                 _currentResponseAudioTranscript = null;
@@ -1081,8 +1080,19 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi
         
         private async Task HandleResponseDone(JsonElement root)
         {
-            _hasActiveResponse = false;
-            _cancelRequested = false;
+            if (!root.TryGetProperty("response", out var doneResponse)) return;
+            var doneId = TryGetString(doneResponse, "id") ?? _currentResponseId;
+            if (doneResponse.TryGetProperty("conversation_id", out var conversation) && conversation.ValueKind == JsonValueKind.Null) return;
+            lock (_responseGate)
+            {
+                if (_completedResponses.Contains(doneId)) return;
+                if (_completedResponses.Count >= 8192) throw new InvalidOperationException("Realtime response limit reached; start a new session.");
+                _completedResponses.Add(doneId);
+                if (_currentResponseId.Length != 0 && doneId != _currentResponseId) return;
+                _hasActiveResponse = false;
+                _cancelRequested = false;
+                _pendingCreateEventId = null;
+            }
             _logAction(LogLevel.Info, "Response completed");
 
             UsageReport? report = null;
@@ -1108,28 +1118,20 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi
                 OnUsageReceived?.Invoke(report);
             }
 
-            // Toolergebnisse erst nach dem nativen Antwortabschluss senden, dann genau einmal fortsetzen.
-            if (root.TryGetProperty("response", out var completedResponse) &&
-                completedResponse.TryGetProperty("status", out var status) && status.GetString() == "completed" &&
-                completedResponse.TryGetProperty("output", out var output))
+            var calls = Array.Empty<JsonElement>();
+            if (!_toolExecutionUncertain && !_discardResponseTools && TryGetString(doneResponse, "status") == "completed" &&
+                doneResponse.TryGetProperty("output", out var output))
+                calls = output.EnumerateArray().Where(item => TryGetString(item, "type") == "function_call").Select(item => item.Clone()).ToArray();
+            if (trace != null) PopulateResponseTrace(root, trace, report);
+            if (calls.Length > 0)
             {
-                var hasToolResults = false;
-                foreach (var item in output.EnumerateArray())
-                {
-                    if (!item.TryGetProperty("type", out var itemType) || itemType.GetString() != "function_call") continue;
-                    await HandleFunctionCallDone(item);
-                    hasToolResults = true;
-                }
-                if (hasToolResults)
-                {
-                    _responseRequested = true;
-                }
+                var session = _sessionGeneration;
+                var turn = _turnGeneration;
+                var token = _cts?.Token ?? CancellationToken.None;
+                lock (_responseGate) { _pendingToolBatches++; }
+                _ = Task.Run(() => RunToolBatchAsync(calls, trace, session, turn, token));
             }
-            if (trace != null)
-            {
-                PopulateResponseTrace(root, trace, report);
-                OnResponseTraceCompleted?.Invoke(trace);
-            }
+            else if (trace != null) OnResponseTraceCompleted?.Invoke(trace);
 
             _currentResponseTrace = null;
             _currentResponseOutputText.Clear();
@@ -1140,15 +1142,36 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi
 
         private async Task TryStartRequestedResponseAsync()
         {
-            if (!_responseRequested || _hasActiveResponse ||
-                (_settings?.ClientResponseControl == true && _userSpeaking)) return;
-
-            // Bereits beim Senden reservieren: response.created ist nur die spätere Serverbestätigung.
-            _responseRequested = false;
-            _hasActiveResponse = true;
-            var json = JsonSerializer.Serialize(new ResponseCreateMessage(), OpenAiJsonContext.Default.ResponseCreateMessage);
-            _logAction(LogLevel.Info, $"[Tool] Sending response.create: {json}");
-            await SendMessageAsync(json);
+            long session;
+            string eventId;
+            string createReason;
+            long turn;
+            lock (_responseGate)
+            {
+                if (_toolExecutionUncertain || !_responseRequested || _hasActiveResponse || _pendingToolBatches > 0 || _userSpeaking) return;
+                _responseRequested = false;
+                _hasActiveResponse = true;
+                _currentResponseId = "";
+                session = _sessionGeneration;
+                turn = _turnGeneration;
+                createReason = _responseCreateReason;
+                eventId = _pendingCreateEventId = "create_" + Guid.NewGuid().ToString("N");
+            }
+            try
+            {
+                var json = "{\"type\":\"response.create\",\"event_id\":\"" + eventId + "\"}";
+                _logAction(LogLevel.Info, "[Tool] Sending response.create");
+                await SendMessageAsync(json, expectedGeneration: session, createReason: createReason, expectedTurn: turn);
+            }
+            catch
+            {
+                lock (_responseGate)
+                {
+                    if (session == _sessionGeneration && _pendingCreateEventId == eventId)
+                    { _hasActiveResponse = false; _pendingCreateEventId = null; }
+                }
+                throw;
+            }
         }
 
         private void PopulateResponseTrace(JsonElement root, OpenAiRealtimeResponseTrace trace, UsageReport? usage)
@@ -1297,7 +1320,7 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi
                     _logAction(LogLevel.Info, "Interrupting active AI response");
                     await SendInterruptAsync();
                     // Der Slot wird erst durch response.done frei, auch nach response.cancel.
-                    if (_settings?.ClientResponseControl != true) _hasActiveResponse = false;
+                    // Both modes retain the reservation until response.done.
                 }
             }
             catch (Exception ex)

@@ -137,6 +137,8 @@ public sealed class OpenAiDirectLiveVoiceProvider : IDirectBrowserVoiceProvider,
     public Task<JsonObject> AppendThinkingAsync(string content, string? delegationId = null, CancellationToken cancellationToken = default) => _live.AppendThinkingAsync(content, delegationId, cancellationToken);
     public Task<JsonObject> AppendCommentaryAsync(string content, string? delegationId = null, CancellationToken cancellationToken = default) => _live.AppendCommentaryAsync(content, delegationId, cancellationToken);
     public Task SendEventAsync(JsonObject command, CancellationToken cancellationToken = default) => _live.SendEventAsync(command, cancellationToken);
+    /// <summary>Cancel client backend continuation; a running tool may still complete and is never replayed.</summary>
+    public void CancelClientBackend() => _live.CancelClientBackend();
     public async Task SetMicrophoneEnabledAsync(bool enabled, CancellationToken cancellationToken = default)
     {
         if (_client == null) throw new InvalidOperationException("No browser session.");

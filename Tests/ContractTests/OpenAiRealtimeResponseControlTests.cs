@@ -24,6 +24,7 @@ internal static class OpenAiRealtimeResponseControlTests
         var release = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var finished = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var errors = new List<string>();
+        var interrupted = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var server = Task.Run(async () =>
         {
             try
@@ -64,9 +65,13 @@ internal static class OpenAiRealtimeResponseControlTests
                 await Send("""{"type":"input_audio_buffer.speech_started","item_id":"u2"}""");
                 await Send("""{"type":"input_audio_buffer.speech_stopped","item_id":"u2"}""");
                 await Send("""{"type":"input_audio_buffer.committed","item_id":"u2"}""");
-                release.TrySetResult();
-                await Expect("conversation.item.create");
+                await interrupted.Task.WaitAsync(timeout.Token);
+                // Receiving and answering new speech must not wait for the obsolete tool.
                 await Expect("response.create");
+                release.TrySetResult();
+                await Send("""{"type":"input_audio_buffer.speech_started","item_id":"u3"}""");
+                await Send("""{"type":"input_audio_buffer.speech_stopped","item_id":"u3"}""");
+                await Send("""{"type":"input_audio_buffer.committed","item_id":"u3"}""");
                 // Noch ohne response.created muss der reservierte Antwortslot geschützt sein.
                 await Expect("response.cancel");
                 await Send("""{"type":"response.created","response":{"id":"r2"}}""");
@@ -83,6 +88,7 @@ internal static class OpenAiRealtimeResponseControlTests
         }, timeout.Token);
         await using var provider = new OpenAiVoiceProvider("test");
         provider.OnError = errors.Add;
+        provider.OnInterruptDetected = () => interrupted.TrySetResult();
         await provider.ConnectAsync(new OpenAiVoiceSettings
         {
             ClientResponseControl = true,

@@ -43,6 +43,11 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi.Models
         /// <summary>Ein gemeinsamer Client-Ablauf steuert Antworten und Unterbrechungen; VAD liefert weiterhin Spracheingabe-Ereignisse.</summary>
         public bool ClientResponseControl { get; set; }
 
+        /// <summary>Maximum time to await one Realtime tool. Expiry leaves the action outcome uncertain,
+        /// disables further tool/response continuation in this session, and never retries the action.
+        /// Tools without a cancellation contract may keep running. Must be positive.</summary>
+        public TimeSpan ToolExecutionTimeout { get; set; } = TimeSpan.FromMinutes(2);
+
         /// <summary>
         /// The OpenAI model to use for the conversation.
         /// </summary>
@@ -144,6 +149,13 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi.Models
         /// does not change the selected mode or audio/event delivery.
         /// </summary>
         public bool AppendToolCallPreambleInstructions { get; set; } = true;
+
+        /// <summary>Optional application-localized replacement for the library preamble. Ignored when appending is disabled.</summary>
+        public string? ToolCallPreambleInstructionsOverride { get; set; }
+
+        /// <summary>Opt in to diagnostic event content. Audio and client secrets are always excluded. Content can include private prompts and tool results.</summary>
+        public bool IncludeProtocolContent { get; set; }
+
 
         /// <summary>
         /// OpenAI Realtime currently ignores the shared thinking configuration.

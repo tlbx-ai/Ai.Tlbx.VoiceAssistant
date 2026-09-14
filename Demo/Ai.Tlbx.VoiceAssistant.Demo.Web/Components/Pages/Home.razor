@@ -94,6 +94,19 @@
                                         <p class="mt-1 text-xs text-gray-500">@GetModelSelectHint()</p>
                                     </div>
 
+                                    @if (IsLiveModel)
+                                    {
+                                        <div>
+                                            <label for="live-backend-mode" class="block text-xs font-medium text-gray-600 mb-1">GPT-Live backend</label>
+                                            <select id="live-backend-mode" class="w-full p-2 border border-gray-300 rounded-md text-sm" @bind="_liveBackendMode"
+                                                    disabled="@((voiceAssistant?.IsConnecting ?? false) || (voiceAssistant?.IsRecording ?? false))">
+                                                <option value="client">Application Responses backend — full tool results</option>
+                                                <option value="managed">Live-managed Responses — limited tool-result buffer</option>
+                                            </select>
+                                            <p class="mt-1 text-xs text-gray-500">The application backend reads complete tool results and returns a short spoken answer. Select the managed backend to compare its buffer limit.</p>
+                                        </div>
+                                    }
+
                                     @if (_selectedProviderString == "OpenAI" && SelectedOpenAiModelSupportsReasoningEffort)
                                     {
                                         <div class="rounded-md border border-gray-200 bg-gray-50 p-3 space-y-3">
@@ -541,6 +554,7 @@
     private List<ModelOption> availableModels = GetOpenAiModelOptions();
     private static List<ModelOption> GetOpenAiModelOptions() => [new("gpt-live-1", "GPT-Live 1 (gpt-live-1)"), .. GetEnumOptions<OpenAiRealtimeModel>(includeObsolete: true)];
     private bool IsLiveModel => _selectedProviderString == "OpenAI" && _currentModelString == "gpt-live-1";
+    private string _liveBackendMode = "client";
     private OpenAiDirectLiveVoiceProvider? _liveProvider;
     private readonly List<ChatMessage> _liveMessages = new();
     private readonly HashSet<string> _liveDisplayedCalls = new();
@@ -1305,19 +1319,21 @@
             {
                 _liveTranscriptRole = null;
                 _liveDisplayedCalls.Clear();
+                var backend = new JsonObject
+                {
+                    ["model"] = "gpt-5.6-luna",
+                    ["instructions"] = "Bearbeite die Anfrage mit den verfügbaren Werkzeugen. Beachte deren Parameter und Berechtigungen. Lies auch die abschließenden Prüfvermerke großer Dokumente. Gib geprüfte Ergebnisse kurz in der Sprache des Nutzers zurück; erfinde keine ausgeführten Aktionen.",
+                    ["parallel_tool_calls"] = false,
+                    ["max_output_tokens"] = 2048
+                };
                 settings = new OpenAiLiveSettings
                 {
                     ModelId = "gpt-live-1",
                     Voice = _currentVoiceString.ToLowerInvariant(),
                     Instructions = instructions + " Delegiere Aufgaben, die die aktivierten Werkzeuge benötigen, an dein Backend. Bestätige Aktionen erst nach dem geprüften Ergebnis.",
                     InitialHistory = _liveMessages.Where(m => m.ToolCallId == null && m.Role is ChatMessage.UserRole or ChatMessage.AssistantRole).TakeLast(128).ToList(),
-                    Responses = new JsonObject
-                    {
-                        ["model"] = "gpt-5.6-luna",
-                        ["instructions"] = "Bearbeite die Anfrage mit den verfügbaren Werkzeugen. Beachte deren Parameter und Berechtigungen. Gib geprüfte Ergebnisse kurz in der Sprache des Nutzers zurück; erfinde keine ausgeführten Aktionen.",
-                        ["parallel_tool_calls"] = false,
-                        ["max_output_tokens"] = 2048
-                    },
+                    Responses = _liveBackendMode == "managed" ? backend : null,
+                    ClientBackend = _liveBackendMode == "client" ? new OpenAiLiveClientBackendOptions { Responses = backend } : null,
                     Tools = enabledTools.ToList()
                 };
             }

@@ -68,3 +68,13 @@ The browser client reports explicit connection phases through the regular status
 ## Realtime usage events
 
 After each `response.done`, the browser forwards the response ID, model ID, and OpenAI usage object to the authenticated control WebSocket as a client event with type `usage`. If input transcription is enabled, each `conversation.item.input_audio_transcription.completed` event is forwarded separately with type `transcription_usage`, its item/content identity, and the ASR usage object because OpenAI bills that model separately from the conversational Realtime response. Hosts can process both event types in `IOpenAiDirectRealtimeSessionEventSink.OnClientEventAsync` to keep an idempotent cost ledger and apply application budgets. The usage numbers originate in OpenAI's events, but the forwarding path still depends on the connected browser and should be identified as client-forwarded in audit reports.
+
+### Shared instruction composition
+
+Browser session creation uses `OpenAiInstructionsComposer.Compose(OpenAiVoiceSettings)`,
+the same deterministic composer as `OpenAiVoiceProvider`. Set
+`ToolCallPreambleInstructionsOverride` for an application-localized preamble, or
+`AppendToolCallPreambleInstructions = false` to preserve the application instructions
+exactly. Repeated composition does not mutate settings or duplicate additions. The
+WebSocket provider's protocol callbacks and requested/sent/server-returned snapshot
+properties are not browser data-channel observability APIs.

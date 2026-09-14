@@ -12,7 +12,9 @@ public enum OpenAiLiveToolSubmissionState
     /// <summary>Written to the transport; Live provides no standalone item success acknowledgment.</summary>
     SentUnconfirmed,
     /// <summary>The API rejected this submission through its correlated error event.</summary>
-    Rejected
+    Rejected,
+    /// <summary>The ordinary client Responses HTTP API accepted a request containing the complete output.</summary>
+    AcceptedByClientBackend
 }
 
 /// <summary>A local execution snapshot. Null Output means execution has not returned yet.

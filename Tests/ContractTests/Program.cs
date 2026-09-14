@@ -18,6 +18,17 @@ using Ai.Tlbx.VoiceAssistant.Provider.XAi;
 using Ai.Tlbx.VoiceAssistant.Provider.XAi.Models;
 using Ai.Tlbx.VoiceAssistant.Provider.XAi.Protocol;
 
+if (args.FirstOrDefault(a => a.StartsWith("--large-result-", StringComparison.Ordinal)) is string largeResultMode)
+{
+    LargeResultIntegrationTests.VerifyFixtures();
+    await LargeResultIntegrationTests.RunAsync(largeResultMode["--large-result-".Length..]);
+    return;
+}
+
+LargeResultIntegrationTests.VerifyFixtures();
+await OpenAiRealtimeDiagnosticsTests.RunAsync();
+await OpenAiLiveTests.RunClientBackendAsync();
+
 if (args.Contains("--realtime-gateway-audio-smoke", StringComparer.Ordinal))
 {
     await OpenAiRealtimeGatewayConfigurationTests.RunProviderAsync();
