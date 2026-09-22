@@ -164,3 +164,19 @@ Windows can synthesize the input locally using a German SAPI voice; elsewhere
 provide `-WavPath` containing mono PCM16, 24 kHz speech. Logs go to `.logs/large-results`.
 Browser automation is in `Tests/Browser/large-result-smoke.js`; it checks spoken tail facts,
 full result visibility, bidirectional WebRTC traffic, and media cleanup.
+# Gesprächssupport
+
+The **Gesprächssupport** tab uses OpenAI Realtime microphone input with text-only output.
+Start a session and talk naturally with another person. Context hints stream above a
+separate transcript/tool-call view. The prompt in `Services/ConversationSupport.cs` sets
+Nordhausen, Germany as the location and asks the model to listen without joining the dialogue.
+
+Try discussing the weather (the existing `get_weather` demo fixture should be selected
+without a direct command), the Eiffel Tower (technical context), or ending the conversation
+after agreeing next steps. Weather values remain simulated test data, labeled Demo-Wetter.
+Both speakers share the microphone; this mode does not provide speaker identification.
+
+Verification: `node Tests/Browser/conversation-support-contracts.mjs` from the repo root
+checks browser response/tool overlap and stop isolation. The normal .NET contract suite
+includes the WebSocket counterpart. `Tests/Browser/conversation-support-smoke.js` exercises
+the actual web UI and OpenAI WebRTC using three injected WAV conversation clips.

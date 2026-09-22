@@ -43,6 +43,9 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi.Models
         /// <summary>Ein gemeinsamer Client-Ablauf steuert Antworten und Unterbrechungen; VAD liefert weiterhin Spracheingabe-Ereignisse.</summary>
         public bool ClientResponseControl { get; set; }
 
+        /// <summary>Text emits written responses while continuing to accept audio input.</summary>
+        public OpenAiOutputMode OutputMode { get; set; } = OpenAiOutputMode.Audio;
+
         /// <summary>Maximum time to await one Realtime tool. Expiry leaves the action outcome uncertain,
         /// disables further tool/response continuation in this session, and never retries the action.
         /// Tools without a cancellation contract may keep running. Must be positive.</summary>
@@ -211,7 +214,7 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi.Models
         public bool CreateResponse { get; set; } = true;
 
         /// <summary>
-        /// Model is interruptable
+        /// Whether new speech cancels responses and tool continuations, on both server and client.
         /// </summary>
         public bool InterruptResponse { get; set; } = true;
 

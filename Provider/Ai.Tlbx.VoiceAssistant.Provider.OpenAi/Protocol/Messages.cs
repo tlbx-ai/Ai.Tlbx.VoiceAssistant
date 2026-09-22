@@ -218,6 +218,7 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi.Protocol
         public string? Instructions { get; set; }
 
         [JsonPropertyName("max_output_tokens")]
+        [JsonConverter(typeof(OutputTokenLimitConverter))]
         public string? MaxOutputTokens { get; set; }
 
         [JsonPropertyName("truncation")]

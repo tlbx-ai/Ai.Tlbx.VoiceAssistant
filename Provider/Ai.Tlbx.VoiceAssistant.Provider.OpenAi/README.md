@@ -2,6 +2,38 @@
 
 OpenAI Realtime and GPT-Live providers for the AI Voice Assistant Toolkit.
 
+## Audio input with text-only responses (11.3)
+
+OpenAI Realtime supports a silent conversation companion on both the WebSocket provider
+and `OpenAiDirectRealtimeVoiceProvider` (WebRTC). Configure before starting:
+
+```csharp
+var settings = new OpenAiVoiceSettings
+{
+    OutputMode = OpenAiOutputMode.Text,
+    ClientResponseControl = true,
+    TurnDetection = new TurnDetection { InterruptResponse = false, SilenceDurationMs = 700 },
+    AppendToolCallPreambleInstructions = false,
+    Instructions = "Listen to the conversation between two people. Do not answer as a participant. " +
+        "Provide only brief, useful written context hints. Use relevant registered tools proactively.",
+    Tools = [myTool]
+};
+assistant.OnTextDelta = delta => AppendHintText(delta);
+assistant.OnMessageAdded = message => HandleCompletedMessage(message);
+await assistant.StartAsync(settings);
+```
+
+`OutputMode` defaults to `Audio`. `Text` disables generated audio and playback, while
+leaving microphone input enabled. `OnTextDelta` streams written output; completed text
+still arrives as an assistant message. Providers expose streaming via `ITextOutputProvider`.
+
+With `InterruptResponse = false`, new speech does not cancel text or invalidate an in-flight
+tool. `ClientResponseControl` queues/coalesces committed audio turns until the current
+response and tools finish, then requests one follow-up. Tool continuations remain enabled.
+This does not identify individual speakers in mixed microphone audio. The two human
+speakers must not be confused with the API's user/assistant roles. GPT-Live is a separate
+protocol; these settings apply to OpenAI Realtime only.
+
 ## GPT-Live (11.0)
 
 Use `OpenAiLiveProvider` with `OpenAiLiveSettings` for `gpt-live-1`.

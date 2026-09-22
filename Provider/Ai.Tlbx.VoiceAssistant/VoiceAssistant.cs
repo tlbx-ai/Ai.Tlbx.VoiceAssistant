@@ -73,6 +73,9 @@ namespace Ai.Tlbx.VoiceAssistant
         /// </summary>
         public Action<string>? OnTranscriptionDelta { get; set; }
 
+        /// <summary>Streamed assistant text; OnMessageAdded delivers the completed message.</summary>
+        public Action<string>? OnTextDelta { get; set; }
+
         /// <summary>
         /// Callback that fires with the finalized transcript when an utterance completes.
         /// </summary>
@@ -864,6 +867,9 @@ namespace Ai.Tlbx.VoiceAssistant
         {
             if (_provider == null) return;
 
+            if (_provider is ITextOutputProvider textProvider)
+                textProvider.OnTextDelta = delta => OnTextDelta?.Invoke(delta);
+
             _provider.OnMessageReceived = (message) =>
             {
                 _chatHistory.AddMessage(message);
@@ -1074,6 +1080,7 @@ namespace Ai.Tlbx.VoiceAssistant
                     _provider.OnInterruptDetected = null;
                     _provider.OnUsageReceived = null;
                     _provider.OnTranscriptionDelta = null;
+                    if (_provider is ITextOutputProvider textProvider) textProvider.OnTextDelta = null;
                     _provider.OnTranscriptionCompleted = null;
                     if (_provider is IStructuredTranscriptionProvider structuredProvider)
                     {

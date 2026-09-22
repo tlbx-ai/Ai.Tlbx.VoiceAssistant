@@ -23,6 +23,9 @@ try
     dotnet run --project Tests\ContractTests\ContractTests.csproj -c $Configuration --no-build
     Assert-LastCommandSucceeded "Provider contract tests"
 
+    node Tests\Browser\conversation-support-contracts.mjs
+    Assert-LastCommandSucceeded "Browser response control contracts"
+
     dotnet run --project Demo\Ai.Tlbx.VoiceAssistant.Demo.Console\Ai.Tlbx.VoiceAssistant.Demo.Console.csproj -c $Configuration --no-build -- --smoke-test
     Assert-LastCommandSucceeded "Console demo smoke test"
 

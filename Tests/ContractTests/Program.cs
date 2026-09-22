@@ -59,6 +59,7 @@ if (args.Contains("--live-gpt-live-smoke", StringComparer.Ordinal))
     return;
 }
 
+await ConversationSupportTests.RunAsync();
 await OpenAiRealtimeToolContinuationTests.RunAsync();
 await OpenAiRealtimeResponseControlTests.RunAsync();
 if (args.Contains("--realtime-tools-only", StringComparer.Ordinal)) return;

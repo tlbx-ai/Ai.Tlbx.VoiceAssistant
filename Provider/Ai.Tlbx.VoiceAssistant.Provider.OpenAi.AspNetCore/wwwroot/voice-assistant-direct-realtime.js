@@ -21,6 +21,15 @@ export class OpenAiDirectRealtimeClient
         this.pendingFunctionNames = new Map();
         this.pendingRealtimeEvents = [];
         this.activeResponse = false;
+        this.responseRequested = false;
+        this.cancelRequested = false;
+        this.userSpeaking = false;
+        this.pendingTools = 0;
+        this.sessionGeneration = 0;
+        this.executedCalls = new Set();
+        this.interruptResponse = true;
+        this.clientResponseControl = false;
+        this.textOnly = false;
         this.responseWatchdog = null;
         this.closed = false;
     }
@@ -32,12 +41,17 @@ export class OpenAiDirectRealtimeClient
 
     async start(config)
     {
+        this.textOnly = config?.textOnly === true;
+        this.interruptResponse = config?.interruptResponse !== false;
+        this.clientResponseControl = config?.clientResponseControl === true;
         if (this.peerConnection || this.dataChannel || this.controlSocket || this.mediaStream || this.audioElement)
         {
             await this.stop();
         }
 
         this.pendingRealtimeEvents = [];
+        this.cancelRequested = false;
+        this.userSpeaking = false;
         this.pendingFunctionArgs.clear();
         this.pendingFunctionNames.clear();
         this.recentChats = [];
@@ -82,6 +96,12 @@ export class OpenAiDirectRealtimeClient
 
     async stop()
     {
+        this.sessionGeneration++;
+        this.responseRequested = false;
+        this.cancelRequested = false;
+        this.userSpeaking = false;
+        this.pendingTools = 0;
+        this.executedCalls.clear();
         try
         {
             this.sendControl({ type: 'stop' });
@@ -221,9 +241,9 @@ export class OpenAiDirectRealtimeClient
     {
         this.emitConnectionPhase('webrtc.initializing', 'Preparing browser audio pipeline...');
         const audioElement = this.options.audioElement ?? document.createElement('audio');
-        audioElement.autoplay = true;
+        audioElement.autoplay = !this.textOnly;
         audioElement.playsInline = true;
-        audioElement.muted = false;
+        audioElement.muted = this.textOnly;
         this.audioElement = audioElement;
         this.ownsAudioElement = !this.options.audioElement;
         if (this.ownsAudioElement)
@@ -235,6 +255,7 @@ export class OpenAiDirectRealtimeClient
         this.peerConnection = new RTCPeerConnection(this.options.rtcConfiguration);
         this.peerConnection.ontrack = event =>
         {
+            if (this.textOnly) return;
             audioElement.srcObject = event.streams[0];
             void audioElement.play().catch(error =>
             {
@@ -370,12 +391,15 @@ export class OpenAiDirectRealtimeClient
 
     interrupt()
     {
-        if (this.activeResponse)
+        this.responseRequested = false;
+        if (this.activeResponse && !this.cancelRequested)
         {
+            this.cancelRequested = true;
             this.sendRealtimeEvent({ type: 'response.cancel' });
         }
 
-        this.activeResponse = false;
+        // Client scheduling must wait for response.done before reusing the slot.
+        if (!this.clientResponseControl) this.activeResponse = false;
         this.emitStatus('Interrupted');
     }
 
@@ -432,11 +456,11 @@ export class OpenAiDirectRealtimeClient
         switch (event.type)
         {
             case 'input_audio_buffer.speech_started':
-                if (this.activeResponse)
+                this.userSpeaking = true;
+                if (this.interruptResponse) this.responseRequested = false;
+                if (this.activeResponse && this.interruptResponse)
                 {
-                    this.sendRealtimeEvent({ type: 'response.cancel' });
-                    this.activeResponse = false;
-                    this.emitStatus('Interrupted');
+                    this.interrupt();
                     break;
                 }
 
@@ -444,11 +468,16 @@ export class OpenAiDirectRealtimeClient
                 break;
 
             case 'input_audio_buffer.speech_stopped':
+                this.userSpeaking = false;
+                this.emitStatus(this.textOnly ? 'Listening' : 'Processing');
+                break;
             case 'input_audio_buffer.committed':
+                if (this.clientResponseControl) this.requestResponse();
                 this.emitStatus('Processing');
                 break;
 
             case 'response.created':
+                if (!this.activeResponse) this.cancelRequested = false;
                 this.activeResponse = true;
                 this.armResponseWatchdog(event);
                 this.emitStatus('Processing');
@@ -456,7 +485,12 @@ export class OpenAiDirectRealtimeClient
 
             case 'response.output_audio.delta':
             case 'response.audio.delta':
-                this.emitStatus('Speaking');
+                if (!this.textOnly) this.emitStatus('Speaking');
+                break;
+
+            case 'response.output_text.delta':
+            case 'response.text.delta':
+                this.options.onTextDelta?.(event.delta ?? '');
                 break;
 
             case 'conversation.item.input_audio_transcription.completed':
@@ -479,8 +513,6 @@ export class OpenAiDirectRealtimeClient
                 break;
 
             case 'error':
-                this.activeResponse = false;
-                this.clearResponseWatchdog();
                 if (this.isBenignResponseCancelError(event))
                 {
                     this.emitDiagnostic('response.cancel.ignored', {
@@ -489,16 +521,22 @@ export class OpenAiDirectRealtimeClient
                     break;
                 }
 
+                this.activeResponse = false;
+                this.cancelRequested = false;
+                this.responseRequested = false;
+                this.clearResponseWatchdog();
                 this.options.onError?.(formatRealtimeError(event));
                 this.emitStatus('Error');
                 break;
 
             case 'response.done':
                 this.activeResponse = false;
+                this.cancelRequested = false;
                 this.clearResponseWatchdog();
                 this.emitAssistantMessagesFromResponse(event);
                 this.emitUsage(event);
                 this.emitStatus('Listening');
+                this.flushRequestedResponse();
                 break;
         }
     }
@@ -710,6 +748,11 @@ export class OpenAiDirectRealtimeClient
             return;
         }
 
+        if (this.executedCalls.has(callId)) return;
+        this.executedCalls.add(callId);
+        const generation = this.sessionGeneration;
+        this.pendingTools++;
+
         this.emitChat('assistant', `Calling tool: ${name}`, name, 'call');
         let result;
         try
@@ -726,6 +769,8 @@ export class OpenAiDirectRealtimeClient
             });
             result = `Error: ${message}`;
         }
+        if (generation !== this.sessionGeneration) return;
+        this.pendingTools--;
         this.emitChat('tool', result, name, 'answer');
 
         this.sendRealtimeEvent({
@@ -736,6 +781,24 @@ export class OpenAiDirectRealtimeClient
                 output: result
             }
         });
+        if (this.clientResponseControl) this.requestResponse();
+        else this.sendRealtimeEvent({ type: 'response.create' });
+    }
+
+    // Coalesce speech committed during a response/tool call into one follow-up.
+    requestResponse()
+    {
+        this.responseRequested = true;
+        this.flushRequestedResponse();
+    }
+
+    flushRequestedResponse()
+    {
+        if (!this.responseRequested || this.activeResponse || this.pendingTools > 0 ||
+            (this.interruptResponse && this.userSpeaking)) return;
+        this.responseRequested = false;
+        this.cancelRequested = false;
+        this.activeResponse = true;
         this.sendRealtimeEvent({ type: 'response.create' });
     }
 
@@ -1103,6 +1166,7 @@ export function createOpenAiDirectRealtimeClient(options, dotNetReference)
         onStatus: status => invokeDotNet(dotNetReference, 'OnDirectRealtimeStatus', status),
         onError: error => invokeDotNet(dotNetReference, 'OnDirectRealtimeError', error),
         onChatMessage: chat => invokeDotNet(dotNetReference, 'OnDirectRealtimeChatMessage', JSON.stringify(chat)),
+        onTextDelta: delta => invokeDotNet(dotNetReference, 'OnDirectRealtimeTextDelta', delta),
         onDiagnostic: diagnostic => invokeDotNet(dotNetReference, 'OnDirectRealtimeDiagnostic', JSON.stringify(diagnostic)),
         onRealtimeEvent: event =>
         {

@@ -76,7 +76,7 @@ internal sealed class OpenAiDirectRealtimeSessionRegistry : IOpenAiDirectRealtim
         {
             Type = "realtime",
             Model = settings.GetModelId(),
-            OutputModalities = ["audio"],
+            OutputModalities = [settings.OutputMode == OpenAiOutputMode.Text ? "text" : "audio"],
             Instructions = BuildInstructions(settings),
             MaxOutputTokens = settings.MaxTokens?.ToString(System.Globalization.CultureInfo.InvariantCulture) ?? "inf",
             Truncation = settings.AutomaticContextTruncation
@@ -113,12 +113,12 @@ internal sealed class OpenAiDirectRealtimeSessionRegistry : IOpenAiDirectRealtim
                         Threshold = semanticVad ? null : settings.TurnDetection.Threshold,
                         PrefixPaddingMs = semanticVad ? null : settings.TurnDetection.PrefixPaddingMs,
                         SilenceDurationMs = semanticVad ? null : settings.TurnDetection.SilenceDurationMs,
-                        IdleTimeoutMs = semanticVad ? null : settings.TurnDetection.IdleTimeoutMs,
-                        CreateResponse = settings.TurnDetection.CreateResponse,
-                        InterruptResponse = settings.TurnDetection.InterruptResponse
+                        IdleTimeoutMs = semanticVad || settings.ClientResponseControl ? null : settings.TurnDetection.IdleTimeoutMs,
+                        CreateResponse = !settings.ClientResponseControl && settings.TurnDetection.CreateResponse,
+                        InterruptResponse = !settings.ClientResponseControl && settings.TurnDetection.InterruptResponse
                     }
                 },
-                Output = new AudioOutputConfig
+                Output = settings.OutputMode == OpenAiOutputMode.Text ? null : new AudioOutputConfig
                 {
                     Voice = settings.Voice.ToString().ToLowerInvariant(),
                     Speed = settings.TalkingSpeed

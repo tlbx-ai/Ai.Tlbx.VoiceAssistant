@@ -21,7 +21,7 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi
     /// <summary>
     /// OpenAI voice provider implementation for real-time conversation via WebSocket.
     /// </summary>
-    public sealed partial class OpenAiVoiceProvider : IVoiceProvider
+    public sealed partial class OpenAiVoiceProvider : IVoiceProvider, ITextOutputProvider
     {
         private const int CONNECTION_TIMEOUT_MS = 10000;
         private const int DISCONNECTION_TIMEOUT_MS = 5000;
@@ -121,6 +121,10 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi
         /// </summary>
         public Action<UsageReport>? OnUsageReceived { get; set; }
         public Action<string>? OnTranscriptionDelta { get; set; }
+
+        public Action<string>? OnTextDelta { get; set; }
+
+        private bool InterruptOnSpeech => _settings?.TurnDetection.InterruptResponse != false;
         public Action<string>? OnTranscriptionCompleted { get; set; }
 
         /// <summary>
@@ -503,7 +507,7 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi
                 EventId = $"evt_{Guid.NewGuid()}",
                 Session = new SessionConfig
                 {
-                    OutputModalities = new List<string> { "audio" },
+                    OutputModalities = new List<string> { _settings.OutputMode == OpenAiOutputMode.Text ? "text" : "audio" },
                     Instructions = instructions.FinalText,
                     MaxOutputTokens = _settings.MaxTokens?.ToString() ?? "inf",
                     Truncation = new TruncationConfig
@@ -534,7 +538,7 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi
                                 : null,
                             TurnDetection = BuildTurnDetectionConfig(_settings)
                         },
-                        Output = new AudioOutputConfig
+                        Output = _settings.OutputMode == OpenAiOutputMode.Text ? null : new AudioOutputConfig
                         {
                             Speed = _settings.TalkingSpeed,
                             Voice = voiceString
@@ -795,6 +799,8 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi
                         // Erst response.done beendet die Antwort und enthält sämtliche finalen Toolargumente.
                         break;
                     case "input_audio_buffer.speech_started":
+                        _userSpeaking = true;
+                        if (!InterruptOnSpeech) break;
                         _logAction(LogLevel.Info, "User started speaking - server detected interruption");
                         lock (_responseGate)
                         {
@@ -866,7 +872,7 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi
             if (root.TryGetProperty("delta", out var delta))
             {
                 var audioData = delta.GetString();
-                if (!string.IsNullOrEmpty(audioData))
+                if (!string.IsNullOrEmpty(audioData) && _settings?.OutputMode != OpenAiOutputMode.Text)
                 {
                     // Don't log every audio chunk - too verbose
                     OnAudioReceived?.Invoke(audioData);
@@ -1043,6 +1049,7 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi
             {
                 _currentAiMessage.Append(deltaText);
                 _currentResponseOutputText.Append(deltaText);
+                OnTextDelta?.Invoke(deltaText);
                 if (_currentResponseTrace != null)
                 {
                     _currentResponseTrace.OutputText = _currentResponseOutputText.ToString();
@@ -1062,7 +1069,7 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi
                 lock (_responseGate)
                 {
                     if (_pendingToolBatches > 0) { _turnGeneration++; _pendingToolBatches = 0; _responseRequested = false; }
-                    _discardResponseTools = _userSpeaking;
+                    _discardResponseTools = _userSpeaking && InterruptOnSpeech;
                 }
                 _currentResponseId = id;
                 _hasActiveResponse = true;
@@ -1148,7 +1155,7 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi
             long turn;
             lock (_responseGate)
             {
-                if (_toolExecutionUncertain || !_responseRequested || _hasActiveResponse || _pendingToolBatches > 0 || _userSpeaking) return;
+                if (_toolExecutionUncertain || !_responseRequested || _hasActiveResponse || _pendingToolBatches > 0 || (_userSpeaking && InterruptOnSpeech)) return;
                 _responseRequested = false;
                 _hasActiveResponse = true;
                 _currentResponseId = "";

@@ -154,8 +154,10 @@ Always use `Action<LogLevel, string>` for logging delegation and forward logs up
 
 ### Testing Strategy
 
+- When testing voice behavior or tool selection, keep existing demo tool fixtures unchanged; real external integrations are a separate scope and require an explicit request.
+
 - Automated provider contracts and controlled HTTP/WebSocket event sequences live in `Tests/ContractTests`.
-- Run `pwsh -File verify-release.ps1` before publication; it builds the solution, runs contracts and console smoke, and verifies Native AOT.
+- Run `pwsh -File verify-release.ps1` before publication; it builds the solution, runs .NET and browser response-control contracts plus console smoke, and verifies Native AOT. Node.js is required for the browser contracts.
 - Large-tool-result work must prove that the configured reasoning backend consumes complete output and returns facts located beyond character 40000. A retained output plus an explicit failure alone does not solve the application use case. Keep GPT-Live managed delegation, client delegation, and Realtime evidence distinct.
 - Real audio and browser tests complement the deterministic contracts; document unavailable gateway coverage explicitly.
 - Tool discovery tests must use natural user requests without tool names, explicit tool-use hints, or task-specific delegation instructions. Verify the library derives Live routing context from registered tool metadata.

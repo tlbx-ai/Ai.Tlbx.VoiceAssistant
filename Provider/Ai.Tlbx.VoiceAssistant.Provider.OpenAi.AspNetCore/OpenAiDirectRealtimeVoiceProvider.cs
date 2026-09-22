@@ -7,7 +7,7 @@ using Microsoft.JSInterop;
 
 namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi.AspNetCore;
 
-public sealed class OpenAiDirectRealtimeVoiceProvider : IDirectBrowserVoiceProvider
+public sealed class OpenAiDirectRealtimeVoiceProvider : IDirectBrowserVoiceProvider, ITextOutputProvider
 {
     private const string DefaultModulePath = "./_content/Ai.Tlbx.VoiceAssistant.Provider.OpenAi.AspNetCore/voice-assistant-direct-realtime.js";
 
@@ -62,6 +62,8 @@ public sealed class OpenAiDirectRealtimeVoiceProvider : IDirectBrowserVoiceProvi
 
     public Action<string>? OnTranscriptionDelta { get; set; }
 
+    public Action<string>? OnTextDelta { get; set; }
+
     public Action<string>? OnTranscriptionCompleted { get; set; }
 
     public Task ConnectAsync(IVoiceSettings settings)
@@ -99,7 +101,10 @@ public sealed class OpenAiDirectRealtimeVoiceProvider : IDirectBrowserVoiceProvi
             MicrophoneId = string.IsNullOrWhiteSpace(microphoneDeviceId) ? null : microphoneDeviceId,
             Provider = "OpenAI",
             Voice = openAiSettings.Voice.ToString(),
-            Speed = openAiSettings.TalkingSpeed
+            Speed = openAiSettings.TalkingSpeed,
+            TextOnly = openAiSettings.OutputMode == OpenAiOutputMode.Text,
+            InterruptResponse = openAiSettings.TurnDetection.InterruptResponse,
+            ClientResponseControl = openAiSettings.ClientResponseControl
         };
 
         await _client!.InvokeVoidAsync("start", cancellationToken, startConfig);
@@ -249,7 +254,7 @@ public sealed class OpenAiDirectRealtimeVoiceProvider : IDirectBrowserVoiceProvi
         {
             ChatMessage.UserRole => ChatMessage.CreateUserMessage(content),
             ChatMessage.ToolRole => ChatMessage.CreateToolMessage(toolName ?? "", content),
-            _ => ChatMessage.CreateAssistantMessage(content)
+            _ => new ChatMessage(content, ChatMessage.AssistantRole, toolName: toolName)
         };
 
         OnMessageReceived?.Invoke(message);
@@ -301,7 +306,14 @@ public sealed class OpenAiDirectRealtimeVoiceProvider : IDirectBrowserVoiceProvi
     [JSInvokable]
     public Task OnDirectRealtimeSpeechStarted()
     {
-        OnInterruptDetected?.Invoke();
+        if (_settings?.TurnDetection.InterruptResponse != false) OnInterruptDetected?.Invoke();
+        return Task.CompletedTask;
+    }
+
+    [JSInvokable]
+    public Task OnDirectRealtimeTextDelta(string delta)
+    {
+        OnTextDelta?.Invoke(delta);
         return Task.CompletedTask;
     }
 
@@ -391,6 +403,9 @@ public sealed class OpenAiDirectRealtimeVoiceProvider : IDirectBrowserVoiceProvi
 
     private sealed class DirectRealtimeBrowserStartConfig
     {
+        public bool TextOnly { get; init; }
+        public bool InterruptResponse { get; init; } = true;
+        public bool ClientResponseControl { get; init; }
         public string PreparedSessionId { get; init; } = "";
         public string? MicrophoneId { get; init; }
         public string Provider { get; init; } = "OpenAI";

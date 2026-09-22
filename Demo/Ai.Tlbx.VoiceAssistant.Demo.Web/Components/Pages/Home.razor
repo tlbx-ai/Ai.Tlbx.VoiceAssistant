@@ -45,6 +45,10 @@
                                 disabled="@_isBusy">
                             Voice Chat
                         </button>
+                        <button id="conversation-support-tab" class="px-3 py-2 text-sm font-medium border-b-2 @(IsConversationSupport ? "border-blue-500 text-blue-600" : "border-transparent text-gray-500")"
+                                @onclick='() => OnTabChanged("support")' disabled="@_isBusy">
+                            Gesprächssupport
+                        </button>
                         <button class="px-3 py-2 text-sm font-medium border-b-2 transition-colors @(_activeTab == "transcribe" ? "border-blue-500 text-blue-600" : "border-transparent text-gray-500 hover:text-gray-700")"
                                 @onclick='() => OnTabChanged("transcribe")'
                                 disabled="@_isBusy">
@@ -53,7 +57,7 @@
                     </nav>
                 </div>
 
-                @if (_activeTab == "voice")
+                @if (_activeTab == "voice" || IsConversationSupport)
                 {
                     <div class="flex flex-col lg:flex-row gap-3">
                         <!-- Controls Panel -->
@@ -68,6 +72,12 @@
                                     <AiTalkControl OnStartTalking="StartSession" OnStopTalking="StopSession" IsTalking="voiceAssistant?.IsRecording ?? false" Loading="(voiceAssistant?.IsConnecting ?? false) || (voiceAssistant?.IsRecording ?? false)" />
 
                                     <!-- Provider Selection -->
+                                    @if (IsConversationSupport)
+                                    {
+                                        <p class="text-sm text-gray-600">Hört eurem Gespräch zu und zeigt kurze Kontexthinweise. Ort: Nordhausen, Deutschland. Ausgabe nur als Text.</p>
+                                    }
+                                    @if (!IsConversationSupport)
+                                    {
                                     <div>
                                         <label for="providerSelect" class="block text-xs font-medium text-gray-600 mb-1">AI Provider</label>
                                         <ProviderSelect AvailableProviders="@availableProviders" @bind-SelectedProvider="@selectedProviderString" Disabled="@((voiceAssistant?.IsConnecting ?? false) || (voiceAssistant?.IsRecording ?? false))" />
@@ -78,6 +88,7 @@
                                         <label for="voiceSelect" class="block text-xs font-medium text-gray-600 mb-1">Voice</label>
                                         <VoiceSelect AvailableVoices="@availableVoices" @bind-SelectedVoice="@currentVoiceString" Disabled="@((voiceAssistant?.IsConnecting ?? false) || (voiceAssistant?.IsRecording ?? false))" />
                                     </div>
+                                    }
 
                                     <!-- Model Selection -->
                                     <div>
@@ -86,7 +97,7 @@
                                                 value="@_currentModelString"
                                                 @onchange="OnModelChanged"
                                                 disabled="@((voiceAssistant?.IsConnecting ?? false) || (voiceAssistant?.IsRecording ?? false))">
-                                            @foreach (var model in availableModels)
+                                            @foreach (var model in availableModels.Where(m => !IsConversationSupport || m.Value != "gpt-live-1"))
                                             {
                                                 <option value="@model.Value">@model.Label</option>
                                             }
@@ -180,7 +191,7 @@
                                     }
 
                                     <!-- Voice Speed -->
-                                    @if (!IsLiveModel)
+                                    @if (!IsLiveModel && !IsConversationSupport)
                                     {
                                         <VoiceSpeedSlider SelectedSpeed="@currentVoiceSpeed" SelectedSpeedChanged="OnVoiceSpeedChanged" Disabled="@((voiceAssistant?.IsConnecting ?? false) || (voiceAssistant?.IsRecording ?? false))" />
                                     }
@@ -192,7 +203,7 @@
                                                      Disabled="@((voiceAssistant?.IsConnecting ?? false) || (voiceAssistant?.IsRecording ?? false))" />
                                     </div>
 
-                                    @if (!IsLiveModel)
+                                    @if (!IsLiveModel && !IsConversationSupport)
                                     {
                                     <div class="rounded-md border border-gray-200 bg-gray-50 p-3 space-y-3">
                                         <div>
@@ -264,12 +275,41 @@
                         <div class="lg:w-2/3">
                             <div class="bg-white rounded-lg shadow-sm border border-gray-200 h-[500px] flex flex-col overflow-hidden">
                                 <div class="border-b border-gray-200 px-3 py-2 flex items-center justify-between">
-                                    <h3 class="text-sm font-medium text-gray-700">Conversation</h3>
+                                    <h3 class="text-sm font-medium text-gray-700">@(IsConversationSupport ? "Kontexthinweise" : "Conversation")</h3>
                                     <DebugModeToggle @bind-ShowDebugMode="showDebugMode" />
                                 </div>
 
                                 <div class="flex-1 p-3 overflow-y-auto bg-gray-50" id="chat-messages" @ref="chatContainer">
-                                    <ChatWidget ShowDebugToolCalls="@showDebugMode" ShowToolCalls="true" Messages="@(IsLiveModel ? _liveMessages : null)" />
+                                    @if (IsConversationSupport)
+                                    {
+                                        <div id="conversation-hints" aria-live="polite" class="space-y-3">
+                                            @foreach (var hint in _supportMessages.Where(m => m.Role == ChatMessage.AssistantRole && m.ToolName == null))
+                                            {
+                                                <p class="whitespace-pre-wrap text-sm text-gray-900 border-b border-gray-200 pb-2">@hint.Content</p>
+                                            }
+                                            @if (!string.IsNullOrEmpty(_supportTextDelta))
+                                            {
+                                                <p id="streaming-hint" class="whitespace-pre-wrap text-sm text-gray-700">@_supportTextDelta</p>
+                                            }
+                                            @if (_supportMessages.Count == 0 && string.IsNullOrEmpty(_supportTextDelta))
+                                            {
+                                                <p class="text-sm text-gray-500">Sprecht z. B. über das Wetter, den Eiffelturm oder eure nächsten Schritte. Hinweise erscheinen hier.</p>
+                                            }
+                                        </div>
+                                        <details class="mt-4" open="@showDebugMode">
+                                            <summary class="text-sm text-gray-600">Gehörtes Gespräch und Toolaufrufe</summary>
+                                            <div id="support-transcript" class="space-y-2 mt-2">
+                                                @foreach (var message in _supportMessages.Where(m => m.Role != ChatMessage.AssistantRole || m.ToolName != null))
+                                                {
+                                                    <p class="text-xs whitespace-pre-wrap"><strong>@(message.ToolName ?? "Gespräch"):</strong> @message.Content</p>
+                                                }
+                                            </div>
+                                        </details>
+                                    }
+                                    else
+                                    {
+                                        <ChatWidget ShowDebugToolCalls="@showDebugMode" ShowToolCalls="true" Messages="@(IsLiveModel ? _liveMessages : null)" />
+                                    }
                                 </div>
 
                                 <div class="px-3 py-2 border-t border-gray-200 bg-white">
@@ -513,6 +553,9 @@
 
     // Tab state
     private string _activeTab = "voice";
+    private bool IsConversationSupport => _activeTab == "support";
+    private readonly List<ChatMessage> _supportMessages = new();
+    private string _supportTextDelta = "";
     private bool _isBusy => (voiceAssistant?.IsConnecting ?? false) || (voiceAssistant?.IsRecording ?? false) || _isPttRecording || _isPttProcessing;
 
     // Provider management
@@ -585,6 +628,7 @@
 
     private string GetModelSelectHint()
     {
+        if (IsConversationSupport) return "OpenAI Realtime hört zu und liefert ausschließlich Texthinweise.";
         return _selectedProviderString switch
         {
             "OpenAI" when IsLiveModel => "Continuous GPT-Live conversation over WebRTC. Enabled tools run through the Responses backend (gpt-5.6-luna).",
@@ -692,6 +736,7 @@
         {
             voiceAssistant.OnConnectionStatusChanged = null;
             voiceAssistant.OnMessageAdded = null;
+            voiceAssistant.OnTextDelta = null;
             voiceAssistant.OnMicrophoneDevicesChanged = null;
         }
 
@@ -749,6 +794,12 @@
         // Wire up callbacks
         voiceAssistant.OnConnectionStatusChanged = OnConnectionStatusChanged;
         voiceAssistant.OnMessageAdded = OnMessageAdded;
+        voiceAssistant.OnTextDelta = delta => _ = InvokeAsync(() =>
+        {
+            if (!IsConversationSupport) return;
+            _supportTextDelta += delta;
+            StateHasChanged();
+        });
         voiceAssistant.OnMicrophoneDevicesChanged = OnMicrophoneDevicesChanged;
         voiceAssistant.OnTranscriptionDelta = OnTranscriptionDelta;
         voiceAssistant.OnTranscriptionCompleted = OnTranscriptionCompleted;
@@ -1233,6 +1284,12 @@
     {
         InvokeAsync(async () => {
             if (IsLiveModel) { _liveMessages.Add(message); _liveTranscriptRole = null; }
+            if (IsConversationSupport)
+            {
+                _supportMessages.Add(message);
+                if (_supportMessages.Count > 100) _supportMessages.RemoveAt(0);
+                if (message.Role == ChatMessage.AssistantRole && message.ToolName == null) _supportTextDelta = "";
+            }
             StateHasChanged();
             await Task.Delay(50); // Give the DOM time to update
             await ScrollToBottom();
@@ -1436,6 +1493,9 @@
                 return;
             }
 
+            if (IsConversationSupport && settings is OpenAiVoiceSettings supportSettings)
+                ConversationSupport.Configure(supportSettings);
+
             // Start the session with the configured settings
             await voiceAssistant.StartAsync(settings);
             if (_liveProvider != null && _liveMessages.Count == 0)
@@ -1459,6 +1519,7 @@
 
     private async Task StopSession()
     {
+        _supportTextDelta = "";
         if (_stopping) return;
         _stopping = true;
         try
@@ -1485,6 +1546,8 @@
 
     private void ClearChat()
     {
+        _supportMessages.Clear();
+        _supportTextDelta = "";
         _liveMessages.Clear();
         _liveDisplayedCalls.Clear();
         _liveTranscriptRole = null;
@@ -1544,6 +1607,14 @@
         }
 
         _activeTab = tab;
+        if (IsConversationSupport)
+        {
+            _selectedProviderString = "OpenAI";
+            if (IsLiveModel || !Enum.TryParse<OpenAiRealtimeModel>(_currentModelString, out _))
+                _currentModelString = nameof(OpenAiRealtimeModel.GptRealtime21);
+            availableModels = GetOpenAiModelOptions();
+        }
+        _supportTextDelta = "";
         RecreateVoiceAssistant();
         Log(LogLevel.Info, $"Switched to tab: {tab}");
     }
@@ -1796,6 +1867,7 @@
             voiceAssistant.OnMicrophoneDevicesChanged = null;
             voiceAssistant.OnTranscriptionDelta = null;
             voiceAssistant.OnTranscriptionCompleted = null;
+            voiceAssistant.OnTextDelta = null;
             await voiceAssistant.DisposeAsync();
         }
     }
