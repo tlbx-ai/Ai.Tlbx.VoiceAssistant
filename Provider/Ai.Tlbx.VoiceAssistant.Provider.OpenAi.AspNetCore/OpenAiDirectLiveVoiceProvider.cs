@@ -7,7 +7,7 @@ using Microsoft.JSInterop;
 namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi.AspNetCore;
 
 /// <summary>Blazor Server GPT-Live provider. Browser media goes directly to OpenAI; server controls use a sideband.</summary>
-public sealed class OpenAiDirectLiveVoiceProvider : IDirectBrowserVoiceProvider, IStructuredTranscriptionProvider
+public sealed class OpenAiDirectLiveVoiceProvider : IDirectBrowserVoiceProvider, IStructuredTranscriptionProvider, IVisualInputProvider
 {
     private readonly IJSRuntime _js;
     private readonly OpenAiDirectLivePreparedSessionStore _prepared;
@@ -137,6 +137,11 @@ public sealed class OpenAiDirectLiveVoiceProvider : IDirectBrowserVoiceProvider,
     public Task<JsonObject> AppendThinkingAsync(string content, string? delegationId = null, CancellationToken cancellationToken = default) => _live.AppendThinkingAsync(content, delegationId, cancellationToken);
     public Task<JsonObject> AppendCommentaryAsync(string content, string? delegationId = null, CancellationToken cancellationToken = default) => _live.AppendCommentaryAsync(content, delegationId, cancellationToken);
     public Task SendEventAsync(JsonObject command, CancellationToken cancellationToken = default) => _live.SendEventAsync(command, cancellationToken);
+    public Action<JsonObject>? OnClientVisualInput { get => _live.OnClientVisualInput; set => _live.OnClientVisualInput = value; }
+    public Task SendImageAsync(string imageUrl, string? text = null, bool requestResponse = true, CancellationToken cancellationToken = default) =>
+        _live.SendImageAsync(imageUrl, text, requestResponse, cancellationToken);
+    public Task DownloadRecordingAsync(string sessionId, Stream destination, OpenAiLiveSettings? settings = null, CancellationToken cancellationToken = default) =>
+        _live.DownloadRecordingAsync(sessionId, destination, settings, _options.HttpClient, cancellationToken);
     /// <summary>Cancel client backend continuation; a running tool may still complete and is never replayed.</summary>
     public void CancelClientBackend() => _live.CancelClientBackend();
     public async Task SetMicrophoneEnabledAsync(bool enabled, CancellationToken cancellationToken = default)

@@ -1,0 +1,46 @@
+@page "/translation"
+@rendermode InteractiveServer
+@implements IAsyncDisposable
+@using Ai.Tlbx.VoiceAssistant.Provider.OpenAi.AspNetCore
+@using Ai.Tlbx.VoiceAssistant.Provider.OpenAi.Models
+@inject OpenAiDirectTranslationVoiceProvider Translator
+
+<PageTitle>Live translation</PageTitle>
+<h1>Live translation</h1>
+<p>Speak into the microphone. OpenAI translates continuously into the selected language.</p>
+<label for="translation-language">Translate into</label>
+<select id="translation-language" @bind="language" disabled="@busy">
+    <option value="en">English</option><option value="de">Deutsch</option>
+    <option value="es">Español</option><option value="fr">Français</option>
+</select>
+<button id="translation-start" @onclick="Start" disabled="@busy">Start translation</button>
+<button id="translation-stop" @onclick="Stop" disabled="@(!connected)">Stop</button>
+<button id="translation-mute" @onclick="Mute" disabled="@(!connected)">@(muted ? "Unmute microphone" : "Mute microphone")</button>
+<p id="translation-status" role="status">@status</p>
+<p id="translation-final">Final output confirmed: @Translator.FinalOutputConfirmed</p>
+<h2>Original</h2><p id="translation-source">@source</p>
+<h2>Translation</h2><p id="translation-target">@target</p>
+
+@code {
+    private string language = "en", status = "Ready", source = "", target = "";
+    private bool connected, busy, muted;
+    protected override void OnInitialized()
+    {
+        Translator.OnTranscriptDelta = d => { if (d.Role == "user") source += d.Delta; else target += d.Delta; _ = InvokeAsync(StateHasChanged); };
+        Translator.OnError = e => { status = "Error: " + e; _ = InvokeAsync(StateHasChanged); };
+    }
+    private async Task Start()
+    {
+        busy = true; status = "Starting"; source = target = "";
+        try { await Translator.StartBrowserSessionAsync(new OpenAiTranslationSettings { TargetLanguage = language }); connected = true; status = "Translating"; }
+        catch (Exception ex) { status = "Error: " + ex.Message; busy = false; }
+    }
+    private async Task Stop()
+    {
+        try { await Translator.DisconnectAsync(); status = "Stopped"; }
+        catch (Exception ex) { status = "Error: " + ex.Message; }
+        finally { connected = busy = muted = false; }
+    }
+    private async Task Mute() { muted = !muted; await Translator.SetMicrophoneEnabledAsync(!muted); }
+    public async ValueTask DisposeAsync() { Translator.OnTranscriptDelta = null; Translator.OnError = null; await Translator.DisposeAsync(); }
+}

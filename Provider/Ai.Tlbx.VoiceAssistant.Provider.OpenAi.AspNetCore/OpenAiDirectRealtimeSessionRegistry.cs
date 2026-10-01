@@ -96,16 +96,7 @@ internal sealed class OpenAiDirectRealtimeSessionRegistry : IOpenAiDirectRealtim
                 {
                     Format = new AudioInputFormatConfig { Type = "audio/pcm", Rate = 24000 },
                     NoiseReduction = new NoiseReductionConfig { Type = settings.NoiseReduction.ToApiString() },
-                    Transcription = settings.InputAudioTranscription.Enabled
-                        ? new TranscriptionConfig
-                        {
-                            Model = settings.InputAudioTranscription.GetModelId(),
-                            Prompt = settings.InputAudioTranscription.Model.SupportsTranscriptionPrompt()
-                                ? settings.InputAudioTranscription.Prompt ?? settings.TranscriptionHint
-                                : null,
-                            Language = settings.MostLikelySpokenLanguage
-                        }
-                        : null,
+                    Transcription = settings.InputAudioTranscription.BuildConfiguration(true, settings.TranscriptionHint, settings.MostLikelySpokenLanguage),
                     TurnDetection = new TurnDetectionConfig
                     {
                         Type = settings.TurnDetection.Type,

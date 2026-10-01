@@ -35,6 +35,11 @@ public class Program
         // since we create it manually in Home.razor with the factory pattern
         builder.Services.AddScoped<IAudioHardwareAccess, WebAudioAccess>();
         builder.Services.AddScoped<OpenAiDirectRealtimeVoiceProvider>();
+        builder.Services.AddOpenAiDirectTranslation(options =>
+        {
+            options.AuthorizeRequest = _ => true; // Local demo; production must authorize its users.
+            options.Log = (level, message) => Debug.WriteLine($"[Translation:{level}] {message}");
+        });
         builder.Services.AddOpenAiDirectLiveVoice(options =>
         {
             // Local demo; production applications must authorize their users.
@@ -80,6 +85,7 @@ public class Program
         app.MapStaticAssets();
         app.MapOpenAiDirectRealtimeVoice();
         app.MapOpenAiDirectLiveVoice();
+        app.MapOpenAiDirectTranslation();
         app.MapRazorComponents<App>()
             .AddInteractiveServerRenderMode();
 

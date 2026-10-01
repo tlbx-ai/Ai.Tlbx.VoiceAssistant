@@ -175,7 +175,10 @@ static class ProxyConfigurationTests
         using var document = JsonDocument.Parse(json);
         var session = document.RootElement.GetProperty("session");
         var transcription = session.GetProperty("audio").GetProperty("input").GetProperty("transcription");
-        Check(transcription.GetProperty("language").GetString() == settings.MostLikelySpokenLanguage,
+        var language = settings.InputAudioTranscription.Model.SupportsContextLists()
+            ? transcription.GetProperty("languages")[0].GetString()
+            : transcription.GetProperty("language").GetString();
+        Check(language == settings.MostLikelySpokenLanguage,
             "OpenAI WebSocket sends input language on connect, update and reconnect");
         Check(transcription.GetProperty("prompt").GetString() ==
             (settings.InputAudioTranscription.Prompt ?? settings.TranscriptionHint),

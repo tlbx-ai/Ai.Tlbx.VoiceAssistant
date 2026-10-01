@@ -12,6 +12,7 @@ internal static partial class OpenAiLiveTests
     public static async Task RunClientBackendAsync()
     {
         VerifyClientCapabilityInstructions();
+        await VerifyClientVisualInputAsync();
         await VerifyLargeClientBackendAsync();
         await VerifyClientSupersessionAsync();
         await VerifyClientFailureBoundariesAsync();
@@ -53,6 +54,23 @@ internal static partial class OpenAiLiveTests
             && managed["delegation"]!["responses"]!["tools"]!.AsArray().Count == 1,
             "managed mode preserves its native registration and mutable backend update contract");
         Console.WriteLine("GPT-Live capability routing contracts passed: metadata, escaping, prompt preservation, reconnect, opt-out and managed isolation.");
+    }
+
+    private static async Task VerifyClientVisualInputAsync()
+    {
+        using var http = new HttpClient(new ClientHandler(async request => {
+            var body = JsonNode.Parse(await request.Content!.ReadAsStringAsync())!;
+            var input = body["input"]!.AsArray();
+            Check(input.Count == 3 && input[0]!["content"]!.GetValue<string>().Contains("before") &&
+                input[1]!["content"]![0]!["image_url"]!.GetValue<string>() == "https://example.com/image.png" &&
+                input[2]!["content"]!.GetValue<string>().Contains("after"), "original image delivered as native Responses content between speech fragments");
+            return ClientResponse(ClientAnswer("visual answer"));
+        }));
+        using var backend = new ClientBackendProbe(new OpenAiLiveSettings { ClientBackend = new() { HttpClient = http } }, "key", [], _ => { }, _ => { }, _ => { });
+        var transcript = new JsonArray(new JsonObject { ["role"] = "user", ["delta"] = "before" },
+            new JsonObject { ["visual_input"] = new JsonObject { ["type"] = "message", ["role"] = "user", ["content"] = new JsonArray(new JsonObject { ["type"] = "input_image", ["image_url"] = "https://example.com/image.png" }) } },
+            new JsonObject { ["role"] = "user", ["delta"] = "after" });
+        Check(await backend.RunAsync(transcript, CancellationToken.None) == "visual answer", "client image result");
     }
 
     private sealed class CapabilityTool(string name, string description) : IVoiceTool

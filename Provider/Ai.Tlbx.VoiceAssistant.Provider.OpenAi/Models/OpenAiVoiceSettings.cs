@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using Ai.Tlbx.VoiceAssistant.Interfaces;
 using Ai.Tlbx.VoiceAssistant.Models;
 
@@ -232,7 +233,36 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi.Models
     {
         public string? ModelId { get; set; }
         public string GetModelId() => string.IsNullOrWhiteSpace(ModelId) ? Model.ToApiString() : ModelId;
-        public OpenAiTranscriptionModel Model { get; set; } = OpenAiTranscriptionModel.Gpt4oTranscribe;
+        public OpenAiTranscriptionModel Model { get; set; } = OpenAiTranscriptionModel.GptLiveTranscribe;
+
+        public List<string> Keywords { get; set; } = new();
+        public List<string> Languages { get; set; } = new();
+        public OpenAiTranscriptionDelay Delay { get; set; } = OpenAiTranscriptionDelay.Low;
+
+        /// <summary>Builds the model-specific input transcription configuration. GptTranscribe requires WebSocket.</summary>
+        public Protocol.TranscriptionConfig? BuildConfiguration(bool webRtc, string? fallbackPrompt = null, string? fallbackLanguage = null)
+        {
+            if (!Enabled) return null;
+            if (webRtc && Model == OpenAiTranscriptionModel.GptTranscribe)
+                throw new ArgumentException("GptTranscribe input transcription requires WebSocket. Use GptLiveTranscribe for WebRTC.");
+            if (Model == OpenAiTranscriptionModel.Gpt4oTranscribeDiarize)
+                throw new ArgumentException("Speaker diarization requires the HTTP transcription API.");
+            var lists = Model.SupportsContextLists();
+            var languages = Languages.Where(x => !string.IsNullOrWhiteSpace(x)).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+            if (!string.IsNullOrWhiteSpace(fallbackLanguage) && languages.Count == 0) languages.Add(fallbackLanguage);
+            foreach (var keyword in Keywords)
+                if (string.IsNullOrWhiteSpace(keyword) || keyword.IndexOfAny(['<', '>', '\r', '\n']) >= 0)
+                    throw new ArgumentException("Transcription keywords must be nonempty single-line terms without angle brackets.");
+            return new Protocol.TranscriptionConfig
+            {
+                Model = GetModelId(),
+                Prompt = Model.SupportsTranscriptionPrompt() ? Prompt ?? fallbackPrompt : null,
+                Language = lists ? null : fallbackLanguage,
+                Languages = lists && languages.Count > 0 ? languages : null,
+                Keywords = lists && Keywords.Count > 0 ? Keywords.ToList() : null,
+                Delay = Model.SupportsDelayControl() ? Delay.ToApiString() : null
+            };
+        }
 
         /// <summary>
         /// Whether to enable transcription.

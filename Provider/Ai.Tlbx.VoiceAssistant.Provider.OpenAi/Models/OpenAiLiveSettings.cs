@@ -14,6 +14,10 @@ public sealed class OpenAiLiveSettings : IVoiceSettings
     /// <summary>API voice name, including Live voices such as quartz, ripple, and willow.</summary>
     public string Voice { get; set; } = "marin";
     public bool Store { get; set; }
+    /// <summary>Completed stored source session to fork. Requires the source project's storage policy.
+    /// Model, voice, instructions and history are inherited; only Store and Responses settings override the source.
+    /// Configure the same delegation mode and local tools as the source. Never replay unfinished actions.</summary>
+    public string? ForkFromSessionId { get; set; }
     public ProviderEndpointOptions Connection { get; set; } = new("wss://api.openai.com/v1/live/sessions");
     /// <summary>Null selects client delegation. Otherwise this is the Live-supported Responses configuration
     /// (model, instructions, tools, reasoning, text, tool_choice, parallel_tool_calls, max_output_tokens, service_tier).</summary>

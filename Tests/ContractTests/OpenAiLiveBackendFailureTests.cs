@@ -65,11 +65,12 @@ internal static partial class OpenAiLiveTests
         var batchIndex = 0;
         async Task BatchAsync(WebSocket socket)
         {
-            await WriteAsync(socket, """{"type":"response.event","delegation_id":"d","event":{"type":"response.created","response":{"id":"r"}}}""", timeout.Token);
+            var responseId = chained ? $"r_{batchIndex}" : "r";
+            await WriteAsync(socket, """{"type":"response.event","delegation_id":"d","event":{"type":"response.created","response":{"id":"r"}}}""".Replace("\"r\"", $"\"{responseId}\""), timeout.Token);
             for (var i = chained ? batchIndex : 0; i < (chained ? batchIndex + 1 : outputs.Length); i++)
                 await WriteAsync(socket, new JsonObject { ["type"] = "response.event", ["delegation_id"] = "d", ["event"] = new JsonObject {
                     ["type"] = "response.output_item.done", ["item"] = new JsonObject { ["type"] = "function_call", ["call_id"] = $"call_{i}", ["name"] = "budget", ["arguments"] = "{}" } } }.ToJsonString(), timeout.Token);
-            await WriteAsync(socket, """{"type":"response.event","delegation_id":"d","event":{"type":"response.completed","response":{"id":"r","output":[]}}}""", timeout.Token);
+            await WriteAsync(socket, """{"type":"response.event","delegation_id":"d","event":{"type":"response.completed","response":{"id":"r","output":[]}}}""".Replace("\"r\"", $"\"{responseId}\""), timeout.Token);
         }
 
         var server = Task.Run(async () =>

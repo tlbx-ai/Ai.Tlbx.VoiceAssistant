@@ -792,6 +792,15 @@ export class OpenAiDirectRealtimeClient
         this.flushRequestedResponse();
     }
 
+    sendImage(imageUrl, text, requestResponse = true)
+    {
+        if (this.dataChannel?.readyState !== 'open') throw new Error('No connected Realtime session');
+        const content = [{ type: 'input_image', image_url: imageUrl }];
+        if (text) content.push({ type: 'input_text', text });
+        this.sendRealtimeEvent({ type: 'conversation.item.create', item: { type: 'message', role: 'user', content } });
+        if (requestResponse) this.requestResponse();
+    }
+
     flushRequestedResponse()
     {
         if (!this.responseRequested || this.activeResponse || this.pendingTools > 0 ||

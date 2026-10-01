@@ -21,7 +21,7 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi
     /// <summary>
     /// OpenAI voice provider implementation for real-time conversation via WebSocket.
     /// </summary>
-    public sealed partial class OpenAiVoiceProvider : IVoiceProvider, ITextOutputProvider
+    public sealed partial class OpenAiVoiceProvider : IVoiceProvider, ITextOutputProvider, IVisualInputProvider
     {
         private const int CONNECTION_TIMEOUT_MS = 10000;
         private const int DISCONNECTION_TIMEOUT_MS = 5000;
@@ -526,16 +526,7 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi
                         Input = new AudioInputConfig
                         {
                             NoiseReduction = new NoiseReductionConfig { Type = _settings.NoiseReduction.ToApiString() },
-                            Transcription = _settings.InputAudioTranscription.Enabled
-                                ? new TranscriptionConfig
-                                {
-                                    Model = _settings.InputAudioTranscription.GetModelId(),
-                                    Prompt = _settings.InputAudioTranscription.Model.SupportsTranscriptionPrompt()
-                                        ? _settings.InputAudioTranscription.Prompt ?? _settings.TranscriptionHint
-                                        : null,
-                                    Language = _settings.MostLikelySpokenLanguage
-                                }
-                                : null,
+                            Transcription = _settings.InputAudioTranscription.BuildConfiguration(false, _settings.TranscriptionHint, _settings.MostLikelySpokenLanguage),
                             TurnDetection = BuildTurnDetectionConfig(_settings)
                         },
                         Output = _settings.OutputMode == OpenAiOutputMode.Text ? null : new AudioOutputConfig

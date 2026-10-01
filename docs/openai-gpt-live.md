@@ -359,6 +359,22 @@ It uses synthetic microphone media against the real API and verifies bidirection
 speech captions, mute/unmute, one server tool execution, final usage and released media resources.
 This validates the browser transport, not physical microphone/speaker acoustics.
 
-Remaining transport options (telephony codecs and stored-session forking)
-are documented API extension points, not implemented or tested by this release. Stored sessions may
-be requested with `Store`; callers should allow a longer close timeout when recordings take time.
+Since 11.4, stored-session forking is available through `OpenAiLiveSettings.ForkFromSessionId`.
+Create the source with `Store = true`, retain `SessionId` and await successful `DisconnectAsync`.
+Start a new provider with that source ID; both WebSocket and direct WebRTC use the fork endpoint.
+The model, voice, initial instructions and history are inherited; new startup history is rejected.
+The child `Store` value is explicitly sent (default false). Responses-mode configuration may be
+overridden within the same delegation mode. For client delegation, keep the same backend/tool
+configuration locally. Original client-backend process history is not copied into a new backend.
+Use `AppendInstructionsAsync` or `AppendThinkingAsync` to supply current task state after startup.
+
+`DownloadRecordingAsync(sessionId, destinationStream)` streams the finalized stereo WAV (input
+left, output right) without closing the destination. Storage requires an enabled non-ZDR project;
+recordings are retained for 30 days. Allow a longer close timeout when recordings take time.
+
+`SendImageAsync` routes native image items into managed Responses, waiting for all active backend
+responses/tools to finish. With `ClientBackend`, the complete image reaches ordinary Responses in
+the original order alongside transcript fragments. Application-owned client delegation must set
+`OnClientVisualInput` and return findings through commentary. Large inline images remain subject
+to the managed Live input budget; use an HTTPS image URL or client delegation. Telephony codecs
+remain an unimplemented extension point.

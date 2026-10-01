@@ -26,6 +26,9 @@ try
     node Tests\Browser\conversation-support-contracts.mjs
     Assert-LastCommandSucceeded "Browser response control contracts"
 
+    node Tests\Browser\translation-contracts.mjs
+    Assert-LastCommandSucceeded "Browser translation and visual input contracts"
+
     dotnet run --project Demo\Ai.Tlbx.VoiceAssistant.Demo.Console\Ai.Tlbx.VoiceAssistant.Demo.Console.csproj -c $Configuration --no-build -- --smoke-test
     Assert-LastCommandSucceeded "Console demo smoke test"
 

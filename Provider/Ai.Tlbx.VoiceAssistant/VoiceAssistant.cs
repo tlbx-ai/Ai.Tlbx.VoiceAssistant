@@ -2,6 +2,7 @@ using System;
 using System.Collections.Concurrent;
 using System.Linq;
 using System.Threading.Tasks;
+using System.Threading;
 using Ai.Tlbx.VoiceAssistant.Interfaces;
 using Ai.Tlbx.VoiceAssistant.Managers;
 using Ai.Tlbx.VoiceAssistant.Models;
@@ -14,6 +15,11 @@ namespace Ai.Tlbx.VoiceAssistant
     /// </summary>
     public sealed class VoiceAssistant : IAsyncDisposable
     {
+        /// <summary>Discuss an image with a provider that supports visual input.</summary>
+        public Task SendImageAsync(string imageUrl, string? text = null, bool requestResponse = true, CancellationToken cancellationToken = default) =>
+            _provider is IVisualInputProvider visual
+                ? visual.SendImageAsync(imageUrl, text, requestResponse, cancellationToken)
+                : throw new NotSupportedException("The selected voice provider does not support visual input.");
         private const int PRE_CONNECT_AUDIO_QUEUE_CAPACITY = 100;
 
         private readonly IAudioHardwareAccess _hardwareAccess;

@@ -7,7 +7,7 @@ using Microsoft.JSInterop;
 
 namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi.AspNetCore;
 
-public sealed class OpenAiDirectRealtimeVoiceProvider : IDirectBrowserVoiceProvider, ITextOutputProvider
+public sealed class OpenAiDirectRealtimeVoiceProvider : IDirectBrowserVoiceProvider, ITextOutputProvider, IVisualInputProvider
 {
     private const string DefaultModulePath = "./_content/Ai.Tlbx.VoiceAssistant.Provider.OpenAi.AspNetCore/voice-assistant-direct-realtime.js";
 
@@ -308,6 +308,13 @@ public sealed class OpenAiDirectRealtimeVoiceProvider : IDirectBrowserVoiceProvi
     {
         if (_settings?.TurnDetection.InterruptResponse != false) OnInterruptDetected?.Invoke();
         return Task.CompletedTask;
+    }
+
+    public async Task SendImageAsync(string imageUrl, string? text = null, bool requestResponse = true, CancellationToken cancellationToken = default)
+    {
+        OpenAiVisualInput.Validate(imageUrl);
+        if (!_isConnected || _client == null) throw new InvalidOperationException("No connected browser session.");
+        await _client.InvokeVoidAsync("sendImage", cancellationToken, imageUrl, text, requestResponse);
     }
 
     [JSInvokable]

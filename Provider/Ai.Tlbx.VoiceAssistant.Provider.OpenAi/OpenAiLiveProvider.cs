@@ -21,7 +21,7 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi;
 
 /// <summary>Continuous GPT-Live audio over a server-side WebSocket with client or Responses delegation.
 /// Callback handlers must return promptly; run application-owned backend work outside the receive loop.</summary>
-public sealed partial class OpenAiLiveProvider : IVoiceProvider, IStartupHistoryVoiceProvider, IStructuredTranscriptionProvider
+public sealed partial class OpenAiLiveProvider : IVoiceProvider, IStartupHistoryVoiceProvider, IStructuredTranscriptionProvider, IVisualInputProvider
 {
     private readonly string _apiKey;
     private readonly Action<LogLevel, string> _log;
@@ -37,6 +37,7 @@ public sealed partial class OpenAiLiveProvider : IVoiceProvider, IStartupHistory
     private readonly Dictionary<string, TaskCompletionSource<JsonObject>> _pending = new();
     private readonly Dictionary<string, List<JsonObject>> _calls = new();
     private readonly Dictionary<string, string> _responseIds = new();
+    private readonly HashSet<string> _completedResponseIds = new();
     private readonly object _backendLock = new();
     private readonly SemaphoreSlim _toolLock = new(1, 1);
     private readonly SemaphoreSlim _disconnectLock = new(1, 1);
@@ -98,9 +99,9 @@ public sealed partial class OpenAiLiveProvider : IVoiceProvider, IStartupHistory
         try
         {
             using var timeout = new CancellationTokenSource(_settings!.ConnectionTimeout);
-            await _socket!.ConnectAsync(_settings.Connection.BuildUri(fallbackApiKey: _apiKey), timeout.Token).ConfigureAwait(false);
+            await _socket!.ConnectAsync(LiveUri(_settings, ForkSuffix(_settings), true), timeout.Token).ConfigureAwait(false);
             _receiver = ReceiveAsync(_socket, _lifetime!.Token);
-            await SendCoreAsync(new JsonObject { ["type"] = "session.start", ["session"] = _startup!.DeepClone() }, timeout.Token).ConfigureAwait(false);
+            await SendCoreAsync(new JsonObject { ["type"] = "session.start", ["session"] = BuildStartup(_settings, false) }, timeout.Token).ConfigureAwait(false);
             await _started.Task.WaitAsync(timeout.Token).ConfigureAwait(false);
             _audio = Channel.CreateBounded<string>(new BoundedChannelOptions(100) { SingleReader = true, FullMode = BoundedChannelFullMode.Wait });
             _audioLifetime = CancellationTokenSource.CreateLinkedTokenSource(_lifetime.Token);
@@ -136,6 +137,10 @@ public sealed partial class OpenAiLiveProvider : IVoiceProvider, IStartupHistory
         SessionId = null;
         _calls.Clear();
         _responseIds.Clear();
+        _completedResponseIds.Clear();
+        _managedBusy = 0;
+        _visualInputs.Clear();
+        _queuedVisualBytes = 0;
         lock (_backendLock)
         {
             _toolResults.Clear();
@@ -163,8 +168,8 @@ public sealed partial class OpenAiLiveProvider : IVoiceProvider, IStartupHistory
         {
             using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
             timeout.CancelAfter(settings.ConnectionTimeout);
-            using var request = new HttpRequestMessage(HttpMethod.Post, LiveUri(settings, "", false));
-            request.Content = new StringContent(new JsonObject { ["session"] = _startup!.DeepClone(),
+            using var request = new HttpRequestMessage(HttpMethod.Post, LiveUri(settings, ForkSuffix(settings), false));
+            request.Content = new StringContent(new JsonObject { ["session"] = BuildStartup(settings, true),
                 ["transport"] = new JsonObject { ["type"] = "webrtc", ["sdp"] = sdpOffer } }.ToJsonString(), Encoding.UTF8, "application/json");
             settings.Connection.Apply(request, _apiKey);
             using var response = await client.SendAsync(request, timeout.Token).ConfigureAwait(false);
@@ -552,7 +557,10 @@ public sealed partial class OpenAiLiveProvider : IVoiceProvider, IStartupHistory
         var delegation = envelope["delegation_id"]?.GetValue<string>() ?? "";
         var type = inner["type"]?.GetValue<string>();
         if (type == "response.created" && inner["response"]?["id"] is JsonNode responseId)
+        {
+            Interlocked.Exchange(ref _managedBusy, 1);
             _responseIds[delegation] = responseId.GetValue<string>();
+        }
         if (type == "response.output_item.done" && inner["item"] is JsonObject item && item["type"]?.GetValue<string>() == "function_call")
         {
             if (!_responseIds.TryGetValue(delegation, out var activeResponse)) return;
@@ -561,6 +569,8 @@ public sealed partial class OpenAiLiveProvider : IVoiceProvider, IStartupHistory
         }
         if (type is "response.completed" or "response.failed" or "response.incomplete" or "response.cancelled")
         {
+            var terminalId = inner["response"]?["id"]?.GetValue<string>();
+            if (terminalId != null && !_completedResponseIds.Add(terminalId)) return;
             if (inner["response"] is JsonObject response && response["usage"] is JsonObject usage)
                 OnUsageReceived?.Invoke(new UsageReport { ProviderId = "openai", ModelId = response["model"]?.GetValue<string>(),
                     OperationId = response["id"]?.GetValue<string>(), OperationType = UsageOperationType.DelegatedResponse,
@@ -583,6 +593,21 @@ public sealed partial class OpenAiLiveProvider : IVoiceProvider, IStartupHistory
                 // Tool execution must not block microphone/audio/transcript reception.
                 var task = Task.Run(() => ExecuteToolsAsync(calls));
                 lock (_backendTasks) { _backendTasks.RemoveAll(t => t.IsCompleted); _backendTasks.Add(task); }
+            }
+            else
+            {
+                // A duplicate terminal event must not release the tool batch's ownership.
+                if (_responseIds.Count == 0)
+                {
+                    var token = _lifetime!.Token;
+                    Interlocked.Exchange(ref _managedBusy, 0);
+                    var flush = Task.Run(async () => {
+                        try { await FlushVisualInputsAsync(token).ConfigureAwait(false); }
+                        catch (OperationCanceledException) when (token.IsCancellationRequested) { }
+                        catch (Exception ex) { FailBackend($"Live visual input failed: {ex.Message}"); }
+                    });
+                    lock (_backendTasks) { _backendTasks.RemoveAll(t => t.IsCompleted); _backendTasks.Add(flush); }
+                }
             }
         }
     }

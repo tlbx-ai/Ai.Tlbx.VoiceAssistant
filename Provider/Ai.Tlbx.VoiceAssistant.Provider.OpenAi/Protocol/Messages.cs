@@ -101,6 +101,8 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi.Protocol
 
     public class ContentPart
     {
+        [JsonPropertyName("image_url")]
+        public string? ImageUrl { get; set; }
         [JsonPropertyName("type")]
         public string? Type { get; set; }
 

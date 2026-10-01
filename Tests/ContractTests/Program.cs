@@ -18,6 +18,12 @@ using Ai.Tlbx.VoiceAssistant.Provider.XAi;
 using Ai.Tlbx.VoiceAssistant.Provider.XAi.Models;
 using Ai.Tlbx.VoiceAssistant.Provider.XAi.Protocol;
 
+if (args.Contains("--voice-expansion-live", StringComparer.Ordinal)) { await OpenAiVoiceExpansionTests.RunLiveAsync(); return; }
+if (args.Contains("--voice-expansion-vision", StringComparer.Ordinal)) { await OpenAiVoiceExpansionTests.RunVisionAsync(); return; }
+if (args.Contains("--voice-expansion-storage", StringComparer.Ordinal)) { await OpenAiVoiceExpansionTests.RunStorageAsync(); return; }
+await OpenAiVoiceExpansionTests.RunAsync();
+if (args.Contains("--voice-expansion-only", StringComparer.Ordinal)) return;
+
 if (args.FirstOrDefault(a => a.StartsWith("--large-result-", StringComparison.Ordinal)) is string largeResultMode)
 {
     LargeResultIntegrationTests.VerifyFixtures();

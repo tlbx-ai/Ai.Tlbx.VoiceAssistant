@@ -15,6 +15,7 @@ using Ai.Tlbx.VoiceAssistant.Hardware.Web;
 
 var builder = WebApplication.CreateSlimBuilder(args);
 builder.Services.AddOpenAiDirectLiveVoice();
+builder.Services.AddOpenAiDirectTranslation();
 
 // Configure JSON for minimal API
 builder.Services.ConfigureHttpJsonOptions(options =>
@@ -24,6 +25,16 @@ builder.Services.ConfigureHttpJsonOptions(options =>
 
 var app = builder.Build();
 app.MapOpenAiDirectLiveVoice();
+app.MapOpenAiDirectTranslation();
+
+app.MapGet("/translation-smoke", async () =>
+{
+    await using var translation = new OpenAiTranslationProvider();
+    await translation.ConnectAsync(new OpenAiTranslationSettings());
+    await translation.ProcessAudioAsync(Convert.ToBase64String(new byte[9600]));
+    await translation.DisconnectAsync();
+    return new TestResults { Success = translation.FinalOutputConfirmed, Results = new() { "Translation finalized" } };
+});
 
 // Opt-in live connection smoke; roots the GPT-Live transport and JSON paths in the native binary.
 app.MapGet("/live-smoke", async () =>

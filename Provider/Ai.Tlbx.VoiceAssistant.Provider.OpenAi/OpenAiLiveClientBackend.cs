@@ -107,8 +107,24 @@ internal sealed class OpenAiLiveClientBackend : IDisposable
         var added = new JsonArray(transcript.Skip(_transcriptFragmentsConsumed).Select(fragment => fragment?.DeepClone()).ToArray());
         if (added.Count != 0)
         {
-            _history.Add((JsonNode)new JsonObject { ["role"] = "user", ["content"] =
-                "New live conversation fragments since the previous delegation (original role-labelled text with audio intervals; later speech can correct earlier requests). " + added.ToJsonString() });
+            var fragments = new JsonArray();
+            void FlushFragments()
+            {
+                if (fragments.Count == 0) return;
+                _history.Add((JsonNode)new JsonObject { ["role"] = "user", ["content"] =
+                    "New live conversation fragments since the previous delegation (original role-labelled text with audio intervals; later speech can correct earlier requests). " + fragments.ToJsonString() });
+                fragments.Clear();
+            }
+            foreach (var fragment in added)
+            {
+                if (fragment is JsonObject visual && visual["visual_input"] != null)
+                {
+                    FlushFragments();
+                    _history.Add(visual["visual_input"]!.DeepClone());
+                }
+                else fragments.Add(fragment?.DeepClone());
+            }
+            FlushFragments();
             _transcriptFragmentsConsumed = transcript.Count;
         }
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);

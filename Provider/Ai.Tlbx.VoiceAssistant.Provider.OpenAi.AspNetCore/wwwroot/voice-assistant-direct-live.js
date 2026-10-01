@@ -2,6 +2,7 @@ export function createOpenAiDirectLiveClient(configuration, dotNet) {
     const options = typeof configuration === "string" ? JSON.parse(configuration) : configuration;
     let peer, events, microphone, playback, disconnectTimer;
     let disposed = false, finalized = false;
+    let translationEvents = Promise.resolve(), translationClosing = false;
     const abort = new AbortController();
     const timers = new Set();
     const notify = (method, ...args) => { if (dotNet) void dotNet.invokeMethodAsync(method, ...args).catch(() => {}); };
@@ -44,7 +45,7 @@ export function createOpenAiDirectLiveClient(configuration, dotNet) {
             playback = document.createElement("audio");
             playback.autoplay = true;
             playback.controls = true; // Allows the caller to resume playback if autoplay is blocked.
-            playback.setAttribute("aria-label", "GPT-Live audio playback");
+            playback.setAttribute("aria-label", options.translation ? "Translated audio playback" : "GPT-Live audio playback");
             document.body.appendChild(playback);
             peer.ontrack = event => {
                 if (disposed) return;
@@ -69,7 +70,11 @@ export function createOpenAiDirectLiveClient(configuration, dotNet) {
             events.onmessage = ({ data }) => {
                 let event;
                 try { event = JSON.parse(data); } catch { fail("Invalid Live data-channel event"); return; }
-                if (event.type === "session.started") resolveStarted();
+                if (event.type === "session.started" || (options.translation && event.type === "session.created")) resolveStarted();
+                if (options.translation && event.type !== 'session.output_audio.delta') {
+                    translationEvents = translationEvents.then(() => dotNet.invokeMethodAsync('OnTranslationEvent', JSON.stringify(event)));
+                    translationEvents.catch(() => {});
+                }
                 if (event.type === "error" && !finalized) {
                     // Server sideband owns detailed error reporting and backend commands.
                     rejectStarted(new Error(event.error?.message || "Live startup rejected"));
@@ -78,7 +83,8 @@ export function createOpenAiDirectLiveClient(configuration, dotNet) {
                     finalized = true;
                     rejectStarted(new Error("Live session ended during startup"));
                     notify("OnLiveBrowserClosed");
-                    dispose();
+                    if (!options.translation) dispose();
+                    else if (!translationClosing) void translationEvents.finally(dispose).catch(() => {});
                 }
             };
             events.onerror = () => { rejectStarted(new Error("Live data channel failed")); fail("Live data channel failed"); };
@@ -112,5 +118,29 @@ export function createOpenAiDirectLiveClient(configuration, dotNet) {
     }
     function setMicrophoneEnabled(enabled) { microphone?.getAudioTracks().forEach(track => { track.enabled = !!enabled; }); }
     function setPlaybackMuted(muted) { if (playback) playback.muted = !!muted; }
-    return { start, dispose, setMicrophoneEnabled, setPlaybackMuted };
+    async function stopTranslation() {
+        if (!options.translation) throw new Error('Only translation sessions use this close flow');
+        if (disposed) { if (!finalized) throw new Error('Translation ended without session.closed'); return; }
+        if (events?.readyState !== 'open') { dispose(); throw new Error('Translation data channel unavailable'); }
+        translationClosing = true;
+        setMicrophoneEnabled(false);
+        try {
+            await bounded(new Promise((resolve, reject) => {
+                const terminal = ({ data }) => {
+                    const event = JSON.parse(data);
+                    if (event.type === 'session.closed') { events.removeEventListener('message', terminal); resolve(); }
+                    if (event.type === 'error') { events.removeEventListener('message', terminal); reject(new Error(event.error?.message || 'Translation close rejected')); }
+                };
+                events.addEventListener('message', terminal);
+                events.send(JSON.stringify({ type: 'session.close' }));
+            }), options.closeTimeoutMs || 15000, 'Translation session.closed timed out');
+            await bounded(translationEvents, options.closeTimeoutMs || 15000, 'Translation final callbacks timed out');
+        } finally { dispose(); }
+    }
+    return { start, dispose, setMicrophoneEnabled, setPlaybackMuted, stopTranslation };
+}
+
+export function createOpenAiDirectTranslationClient(configuration, dotNet) {
+    const options = typeof configuration === 'string' ? JSON.parse(configuration) : configuration;
+    return createOpenAiDirectLiveClient({ ...options, translation: true }, dotNet);
 }

@@ -14,6 +14,13 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi.Extensions
     /// </summary>
     public static class ServiceCollectionExtensions
     {
+        /// <summary>Adds continuous speech translation. Start with OpenAiTranslationSettings.</summary>
+        public static VoiceAssistantBuilder WithOpenAiTranslation(this VoiceAssistantBuilder builder, string? apiKey = null)
+        {
+            builder.Services.AddScoped<OpenAiTranslationProvider>(sp => new OpenAiTranslationProvider(apiKey, sp.GetService<Action<LogLevel, string>>()));
+            builder.Services.AddScoped<IVoiceProvider>(sp => sp.GetRequiredService<OpenAiTranslationProvider>());
+            return builder;
+        }
         /// <summary>Adds the separate GPT-Live provider. Pass OpenAiLiveSettings when starting the assistant.</summary>
         public static VoiceAssistantBuilder WithOpenAiLive(this VoiceAssistantBuilder builder, string? apiKey = null)
         {

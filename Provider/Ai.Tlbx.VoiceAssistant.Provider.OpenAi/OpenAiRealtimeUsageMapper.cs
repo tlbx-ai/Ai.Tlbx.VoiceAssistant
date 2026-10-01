@@ -15,6 +15,12 @@ public static class OpenAiRealtimeUsageMapper
         TimeSpan? inputAudioDuration = null,
         TimeSpan? outputAudioDuration = null,
         UsageMeasurementSource measurementSource = UsageMeasurementSource.ProviderReported)
+        => CreateUsageReport(usage, modelId, operationId, operationType, false, false, inputAudioDuration, outputAudioDuration, measurementSource);
+
+    public static UsageReport CreateUsageReport(JsonElement usage, string? modelId, string? operationId,
+        UsageOperationType operationType, bool isCumulative, bool isFinal,
+        TimeSpan? inputAudioDuration = null, TimeSpan? outputAudioDuration = null,
+        UsageMeasurementSource measurementSource = UsageMeasurementSource.ProviderReported)
     {
         var inputTotal = TryGetInt32(usage, "input_tokens");
         var outputTotal = TryGetInt32(usage, "output_tokens");
@@ -78,7 +84,9 @@ public static class OpenAiRealtimeUsageMapper
             IsEstimated = measurementSource != UsageMeasurementSource.ProviderReported,
             InputAudioDuration = inputAudioDuration,
             OutputAudioDuration = outputAudioDuration,
-            RawProviderUsageJson = usage.GetRawText()
+            RawProviderUsageJson = usage.GetRawText(),
+            IsCumulative = isCumulative,
+            IsFinal = isFinal
         };
     }
 
