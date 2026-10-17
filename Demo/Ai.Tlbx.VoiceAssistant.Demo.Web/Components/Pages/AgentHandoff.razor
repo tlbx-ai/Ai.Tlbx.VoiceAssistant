@@ -32,7 +32,7 @@
 <p id="handoff-status" role="status">@status</p>
 <p>Beispiel: „Prüfe die große Projektakte. Welche Mängel verhindern die Freigabe, welcher Code steht am Ende, und wie würdest du die nächsten Schritte priorisieren?“ Danach kannst du Rückfragen stellen.</p>
 <p class="text-muted">Die Demo verwendet synthetische Unterlagen und lokale Beispieltools. Beenden schließt die kostenpflichtige Sprachsitzung. Abbrechen stoppt ausstehende Agent-Fortsetzungen; ein bereits laufendes Tool kann noch fertig werden.</p>
-<p id="handoff-usage">Sprachzeit: @ledger.TotalSessionDuration.TotalSeconds.ToString("F1") s · Agent-Tokens: @ledger.TotalTokens · bekannte Modellkosten: $@cost.ToString("F5") @(partial ? "(unvollständige Schätzung)" : "(Schätzung)") · finale Sprach-Usage: @(Live.FinalUsageConfirmed ? "bestätigt" : "offen")</p>
+<p id="handoff-usage" data-final-usage="@(Live.FinalUsageConfirmed ? "true" : "false")">Sprachzeit: @ledger.TotalSessionDuration.TotalSeconds.ToString("F1") s · Agent-Tokens: @ledger.TotalTokens · bekannte Modellkosten: $@cost.ToString("F5") @(partial ? "(unvollständige Schätzung)" : "(Schätzung)") · finale Sprach-Usage: @(Live.FinalUsageConfirmed ? "bestätigt" : "offen")</p>
 <h2>Agent-Aktivität</h2>
 <ul id="handoff-activity">@foreach (var item in activity) { <li>@item</li> }</ul>
 <h2>Gespräch</h2>
@@ -54,10 +54,7 @@
         Live.OnStatusChanged = s => Update(() => status = s);
         Live.OnError = e => Update(() => status = "Fehler: " + e);
         Live.OnTranscriptDelta = d => Update(() => { if (d.Role == "user") userText += d.Delta; else assistantText += d.Delta; });
-        Live.OnBackendActivity = a => Update(() => {
-            activity.Add($"{a.DelegationId}: {a.State}{(a.Detail == null ? "" : " · " + a.Detail)}");
-            if (activity.Count > 60) activity.RemoveAt(0);
-        });
+        Live.OnBackendActivity = a => AddActivity($"{a.DelegationId}: {a.State}{(a.Detail == null ? "" : " · " + a.Detail)}");
         Live.OnUsageReceived = u => Update(() => {
             ledger.AddReport(u);
             var estimates = ledger.GetReports().Select(r => VoiceCostCalculator.Estimate(r, VoiceCostCalculator.GetRates(r))).ToArray();
@@ -65,7 +62,12 @@
             partial = estimates.Any(e => !e.IsComplete);
         });
         Backend.OnResult = r => Update(() => resultText = r);
+        Backend.OnProgress = AddActivity;
     }
+    private void AddActivity(string message) => Update(() => {
+        activity.Add($"{DateTime.Now:HH:mm:ss} · {message}");
+        if (activity.Count > 60) activity.RemoveAt(0);
+    });
     private void Update(Action change)
     {
         if (!disposed) _ = InvokeAsync(() => { change(); StateHasChanged(); });
@@ -102,6 +104,7 @@
     {
         disposed = true;
         Backend.OnResult = null;
+        Backend.OnProgress = null;
         await Live.DisposeAsync();
     }
 }

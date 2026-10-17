@@ -18,6 +18,8 @@ For a Tailscale dev loop, bind `dotnet watch --no-hot-reload` to the Tailscale H
 
 Remaining verification: one synthetic-speech run timed out before a document result was observed; equivalent runs before and after it passed. Its cause is unconfirmed. The browser harness now preserves the full visible conversation, activity, usage, console errors and screenshot on failure, then attempts graceful session finalization. Do not turn a failed or ambiguous real action into an automatic replay.
 
+The activity view timestamps individual inference calls, tool execution and speech-summary preparation. Failure snapshots also capture the audio-context state, WebRTC audio byte counters and a bounded event-type timeline, without storing raw event payloads. Live acceptance requires provider-confirmed final usage before it reports success.
+
 `Tests/Browser/agent-handoff-smoke.cjs` checks desktop/mobile rendering in an isolated Playwright browser. Set `HANDOFF_LIVE_SMOKE=1`, `HANDOFF_REQUEST_WAV` and `HANDOFF_FOLLOWUP_WAV` explicitly for paid speech acceptance: read dossier tail facts, delegate a follow-up calculation, speak both results and collect final usage. `HANDOFF_URL` and `HANDOFF_ARTIFACTS` select the running demo and evidence directory. The standalone provider smoke is `dotnet run --project Tests/ContractTests -- --provider-update-live` with `PROVIDER_SMOKE_WAV` (mono PCM16/24kHz); `PROVIDER_SMOKE_FILTER=gemini-` limits it to Google models. These tests send synthetic speech and incur provider charges.
 
 ### Voice Chat Functionality

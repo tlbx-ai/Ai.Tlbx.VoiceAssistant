@@ -27,6 +27,26 @@ const { chromium } = require(process.env.PLAYWRIGHT_MODULE_PATH || 'playwright')
             const request = fs.readFileSync(process.env.HANDOFF_REQUEST_WAV).toString('base64');
             const followup = fs.readFileSync(process.env.HANDOFF_FOLLOWUP_WAV).toString('base64');
             await page.evaluate(async () => {
+                window.__handoffEvents = [];
+                window.__handoffPeers = [];
+                const OriginalPeer = window.RTCPeerConnection;
+                window.RTCPeerConnection = class extends OriginalPeer {
+                    constructor(...args) { super(...args); window.__handoffPeers.push(this); }
+                    createDataChannel(...args) {
+                        const channel = super.createDataChannel(...args);
+                        channel.addEventListener('message', event => {
+                            try {
+                                const value = JSON.parse(event.data);
+                                if (/audio[._]delta/.test(value.type || '')) return;
+                                window.__handoffEvents.push({ type: value.type, at: performance.now(),
+                                    delegationId: value.delegation?.id || value.delegation_id,
+                                    errorCode: value.error?.code });
+                                if (window.__handoffEvents.length > 200) window.__handoffEvents.shift();
+                            } catch {}
+                        });
+                        return channel;
+                    }
+                };
                 const audio = new AudioContext(); await audio.resume();
                 const gain = audio.createGain(), oscillator = audio.createOscillator(), mute = audio.createGain();
                 mute.gain.value = 0; oscillator.connect(mute); mute.connect(gain); oscillator.start();
@@ -34,6 +54,7 @@ const { chromium } = require(process.env.PLAYWRIGHT_MODULE_PATH || 'playwright')
                     const destination = audio.createMediaStreamDestination(); gain.connect(destination); return destination.stream;
                 };
                 window.__handoffFeed = async base64 => {
+                    window.__handoffEvents.push({ type: 'test.speech.feed', at: performance.now(), audioState: audio.state });
                     const bytes = Uint8Array.from(atob(base64), c => c.charCodeAt(0));
                     const source = audio.createBufferSource(); source.buffer = await audio.decodeAudioData(bytes.buffer);
                     source.connect(gain); source.start();
@@ -56,20 +77,32 @@ const { chromium } = require(process.env.PLAYWRIGHT_MODULE_PATH || 'playwright')
             await page.waitForFunction(previous => /836/.test(document.querySelector('#handoff-assistant').innerText.slice(previous.length)), before, { timeout: 60000 });
             await page.locator('#handoff-stop').click();
             await page.waitForFunction(() => document.querySelector('#handoff-status').innerText === 'Beendet', null, { timeout: 20000 });
+            if (await page.locator('#handoff-usage').getAttribute('data-final-usage') !== 'true')
+                throw new Error('Session stopped without provider-confirmed final usage');
             const result = await page.locator('#handoff-result').innerText();
             fs.writeFileSync(path.join(artifacts, 'acceptance.json'), JSON.stringify({
                 usage: await page.locator('#handoff-usage').innerText(),
                 activity: await page.locator('#handoff-activity').innerText(),
                 spoken: await page.locator('#handoff-assistant').innerText(),
                 fullResultHasTailFacts: /ZEDER.?8426/i.test(firstResult) && firstResult.includes('863'),
-                followupResultHas836: result.includes('836'), errors
+                followupResultHas836: result.includes('836'), finalUsageConfirmed: true, errors
             }, null, 2));
             await page.screenshot({ path: path.join(artifacts, 'live-result.png'), fullPage: true });
         }
         if (errors.length) throw new Error(errors.join('; '));
         console.log(live ? 'Agent handoff: real speech, complete dossier tail facts, spoken result, follow-up and finalization passed.' : 'Agent handoff: direct Blazor circuit, desktop and mobile layout passed.');
     } catch (error) {
-        fs.writeFileSync(path.join(artifacts, 'failure.json'), JSON.stringify({ error: error.message, errors,
+        const transport = await page.evaluate(async () => {
+            const peers = [];
+            for (const peer of window.__handoffPeers || []) {
+                const stats = await peer.getStats();
+                peers.push({ connection: peer.connectionState, ice: peer.iceConnectionState,
+                    audio: [...stats.values()].filter(s => /^(inbound|outbound)-rtp$/.test(s.type) && s.kind === 'audio')
+                        .map(s => ({ type: s.type, bytesSent: s.bytesSent, bytesReceived: s.bytesReceived })) });
+            }
+            return { audioState: window.__handoffAudio?.state, peers, events: window.__handoffEvents || [] };
+        }).catch(e => ({ unavailable: e.message }));
+        fs.writeFileSync(path.join(artifacts, 'failure.json'), JSON.stringify({ error: error.message, errors, transport,
             status: await page.locator('#handoff-status').innerText().catch(() => ''),
             activity: await page.locator('#handoff-activity').innerText().catch(() => ''),
             usage: await page.locator('#handoff-usage').innerText().catch(() => ''),
