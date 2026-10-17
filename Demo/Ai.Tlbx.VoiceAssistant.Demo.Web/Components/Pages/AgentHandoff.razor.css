@@ -1,0 +1,10 @@
+.handoff-page { max-width: 68rem; margin: 0 auto; padding: 2rem 0 4rem; line-height: 1.6; }
+h1 { margin: .9rem 0 1rem; font-size: clamp(1.8rem, 4vw, 2.6rem); line-height: 1.2; font-weight: 650; letter-spacing: -.025em; }
+h2 { margin: 2rem 0 .65rem; font-size: 1.3rem; font-weight: 600; }
+p { margin-bottom: 1rem; }
+label { display: block; margin-bottom: .4rem; font-weight: 600; }
+#handoff-status { font-weight: 600; color: #174d38; }
+#handoff-usage { padding-top: 1rem; border-top: 1px solid #dce3df; font-size: .9rem; }
+#handoff-result { font: inherit; line-height: 1.65; overflow-wrap: anywhere; }
+#handoff-activity { padding-left: 1.2rem; font: .85rem/1.6 monospace; overflow-wrap: anywhere; }
+@media (max-width: 600px) { .handoff-page { padding-top: 1rem; } .btn { flex: 1 1 auto; } }

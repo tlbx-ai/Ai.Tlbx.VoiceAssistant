@@ -8,6 +8,18 @@ The demo uses reusable Razor components from `Ai.Tlbx.VoiceAssistant.WebUi` and 
 
 ## Features
 
+### Agent handoff
+
+Open `/agent-handoff` for continuous GPT-Live speech with GPT-6.1 Sol through Ai.Tlbx.Inference 2.6.0. The agent receives complete synthetic documents, retains tool results across follow-ups and emits per-call usage, including summary calls and failures with unknown usage. The page shows full results, queued/running/completed/cancelled activity and model cost estimates. The core library remains independent of the inference package; applications can supply their own `ClientBackend.Handler`.
+
+The verified API model is `gpt-live-1`. GPT-Live 1.1/Quip API availability and pricing are unconfirmed; supply an exact model ID if your account has access. The demo never silently substitutes another model. Google demo credentials prefer the dedicated `GEMINI_API_KEY`, then `GOOGLE_API_KEY`.
+
+For a Tailscale dev loop, bind `dotnet watch --no-hot-reload` to the Tailscale HTTPS address and set `DOTNET_WATCH_SUPPRESS_BROWSER_REFRESH=true`; otherwise the SDK's localhost browser-refresh WebSocket can fail against the Tailscale origin. Use a suitable development certificate. Direct browser acceptance is required: the tlbx reverse-proxy preview rendered this page but failed its Blazor circuit during verification, while direct HTTPS interaction worked.
+
+Remaining verification: one synthetic-speech run timed out before a document result was observed; equivalent runs before and after it passed. Its cause is unconfirmed. The browser harness now preserves the full visible conversation, activity, usage, console errors and screenshot on failure, then attempts graceful session finalization. Do not turn a failed or ambiguous real action into an automatic replay.
+
+`Tests/Browser/agent-handoff-smoke.cjs` checks desktop/mobile rendering in an isolated Playwright browser. Set `HANDOFF_LIVE_SMOKE=1`, `HANDOFF_REQUEST_WAV` and `HANDOFF_FOLLOWUP_WAV` explicitly for paid speech acceptance: read dossier tail facts, delegate a follow-up calculation, speak both results and collect final usage. `HANDOFF_URL` and `HANDOFF_ARTIFACTS` select the running demo and evidence directory. The standalone provider smoke is `dotnet run --project Tests/ContractTests -- --provider-update-live` with `PROVIDER_SMOKE_WAV` (mono PCM16/24kHz); `PROVIDER_SMOKE_FILTER=gemini-` limits it to Google models. These tests send synthetic speech and incur provider charges.
+
 ### Voice Chat Functionality
 - **Real-time voice interaction** with an AI assistant
 - **OpenAI direct WebRTC on Blazor Server**: browser microphone/playback audio goes directly between the browser and OpenAI; the server only prepares ephemeral sessions and executes tools

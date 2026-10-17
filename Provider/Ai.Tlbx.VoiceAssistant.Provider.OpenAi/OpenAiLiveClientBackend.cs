@@ -37,6 +37,7 @@ internal sealed class OpenAiLiveClientBackend : IDisposable
         if (settings.ClientBackend is not { } options) return;
         if (settings.Responses != null) throw new ArgumentException("ClientBackend requires Responses=null; select delegation explicitly before connecting.");
         if (options.MaxRounds <= 0 || options.Timeout <= TimeSpan.Zero) throw new ArgumentException("Client backend rounds and timeout must be positive.");
+        if (options.Handler != null) return;
         if (string.IsNullOrWhiteSpace(options.Responses["model"]?.GetValue<string>())) throw new ArgumentException("Client backend requires a Responses model.");
         foreach (var owned in new[] { "input", "tools", "stream", "store", "previous_response_id", "conversation", "background" })
             if (options.Responses.ContainsKey(owned)) throw new ArgumentException($"Client backend owns Responses.{owned}.");
@@ -201,9 +202,11 @@ internal sealed class OpenAiLiveClientBackend : IDisposable
     {
         if (response["usage"] is not JsonObject usage) return;
         _usage(new UsageReport { ProviderId = "openai", ModelId = response["model"]?.GetValue<string>() ?? _configuration["model"]?.GetValue<string>(),
+            ServiceTier = response["service_tier"]?.GetValue<string>() ?? _configuration["service_tier"]?.GetValue<string>(),
             OperationId = response["id"]?.GetValue<string>(), OperationType = UsageOperationType.DelegatedResponse,
             ReportedInputTokens = usage["input_tokens"]?.GetValue<int>(), ReportedOutputTokens = usage["output_tokens"]?.GetValue<int>(),
             ReportedTotalTokens = usage["total_tokens"]?.GetValue<int>(), CacheReadInputTokens = usage["input_tokens_details"]?["cached_tokens"]?.GetValue<int>(),
+            CacheCreationInputTokens = usage["input_tokens_details"]?["cache_write_tokens"]?.GetValue<int>(),
             ReasoningOutputTokens = usage["output_tokens_details"]?["reasoning_tokens"]?.GetValue<int>(), IsFinal = true, RawProviderUsageJson = usage.ToJsonString() });
     }
 

@@ -30,6 +30,9 @@ public class Program
 
         // Register provider factory
         builder.Services.AddScoped<IVoiceProviderFactory, VoiceProviderFactory>();
+        Ai.Tlbx.Inference.Configuration.ServiceCollectionExtensions.AddAiInference(builder.Services,
+            options => options.AddOpenAi(Environment.GetEnvironmentVariable("OPENAI_API_KEY") ?? ""));
+        builder.Services.AddScoped<InferenceHandoffBackend>();
 
         // Register services needed by VoiceAssistant (without registering VoiceAssistant itself)
         // since we create it manually in Home.razor with the factory pattern

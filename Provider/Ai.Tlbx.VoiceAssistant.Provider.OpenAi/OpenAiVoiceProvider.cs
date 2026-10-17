@@ -1110,7 +1110,7 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi
                     usage,
                     modelId,
                     responseId,
-                    UsageOperationType.VoiceResponse);
+                    UsageOperationType.VoiceResponse, false, true);
 
                 _logAction(LogLevel.Info, $"Usage: text_in={report.InputTokens}, text_out={report.OutputTokens}, audio_in={report.InputAudioTokens}, audio_out={report.OutputAudioTokens}, cached_in={report.CacheReadInputTokens}");
                 OnUsageReceived?.Invoke(report);

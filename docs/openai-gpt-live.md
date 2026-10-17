@@ -241,7 +241,7 @@ await live.ConnectAsync(new OpenAiLiveSettings
     Instructions = "Help the caller. Be concise; delegate factual lookups to the backend.",
     Responses = new JsonObject
     {
-        ["model"] = "gpt-5.6-luna",
+        ["model"] = "gpt-6-luna",
         ["instructions"] = "Return concise verified results.",
         ["tools"] = new JsonArray(JsonNode.Parse("{\"type\":\"web_search\"}"))
     }
@@ -282,7 +282,7 @@ from a user gesture after rendering:
 await live.StartBrowserSessionAsync(new OpenAiLiveSettings
 {
     Instructions = "Help the caller concisely.",
-    Responses = new JsonObject { ["model"] = "gpt-5.6-luna" }
+    Responses = new JsonObject { ["model"] = "gpt-6-luna" }
 });
 // Subscribe to live.OnTranscriptDelta / OnUsageReceived before starting.
 await live.SetMicrophoneEnabledAsync(false);
@@ -378,3 +378,10 @@ the original order alongside transcript fragments. Application-owned client dele
 `OnClientVisualInput` and return findings through commentary. Large inline images remain subject
 to the managed Live input budget; use an HTTPS image URL or client delegation. Telephony codecs
 remain an unimplemented extension point.
+
+
+### Application-owned agent handoff
+
+`ClientBackend.Handler` receives original speech fragments and delegation metadata, and can connect Ai.Tlbx.Inference or any application-owned agent. Progress and usage callbacks keep the spoken conversation and cost ledger informed while work runs outside the receive loop. Follow-ups queue by default; `Supersede` is explicit. Full agent output remains application-owned, with only a concise spoken result appended to Live. See the [working inference adapter](../Demo/Ai.Tlbx.VoiceAssistant.Demo.Web/Services/InferenceHandoffBackend.cs) and `/agent-handoff` demo.
+
+The available API model on 2026-10-17 is `gpt-live-1`. Official API docs and the account catalog do not yet establish GPT-Live 1.1/Quip IDs, pricing or protocol compatibility. The library preserves an explicit `ModelId` and does not silently substitute models. A ChatGPT Voice announcement does not establish API availability. Native Decisions delegation is a separate beta workflow; this update keeps the typed client/Responses boundary and supports application-owned decision routing through the agent callback.

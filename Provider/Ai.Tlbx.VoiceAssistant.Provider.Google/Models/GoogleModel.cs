@@ -3,16 +3,22 @@ using System;
 namespace Ai.Tlbx.VoiceAssistant.Provider.Google.Models
 {
     /// <summary>
-    /// Supported Google Gemini Live API models that have been verified to work with this library.
-    /// Current defaults should prefer <see cref="Gemini31FlashLivePreview"/>.
+    /// Supported Google Gemini Live API model identifiers.
+    /// Current defaults prefer <see cref="Gemini38Live"/>.
     /// </summary>
     public enum GoogleModel
     {
+        /// <summary>Low-latency stable native audio with asynchronous function calling.</summary>
+        Gemini38Live = 100,
+
+        /// <summary>Stable native audio with background reasoning and asynchronous tools.</summary>
+        Gemini38LiveExtendedThinking = 101,
+
         /// <summary>
-        /// Current Gemini 3.1 Flash Live preview model.
+        /// Previous Gemini 3.1 Flash Live preview model.
         /// Model: gemini-3.1-flash-live-preview
         /// </summary>
-        Gemini31FlashLivePreview,
+        Gemini31FlashLivePreview = 0,
 
         /// <summary>
         /// Rolling Gemini 2.5 Flash native audio Live API model.
@@ -23,14 +29,14 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.Google.Models
         /// <summary>
         /// Legacy alias retained for compatibility with older integrations.
         /// </summary>
-        [Obsolete("Use Gemini31FlashLivePreview. This legacy alias is kept only for compatibility.")]
+        [Obsolete("Use Gemini38Live. This legacy alias is kept only for compatibility.")]
         GeminiLive25FlashNativeAudio,
 
         /// <summary>
         /// Gemini 2.5 Flash native audio model.
         /// Model: gemini-2.5-flash-native-audio-preview-12-2025
         /// </summary>
-        [Obsolete("Prefer Gemini31FlashLivePreview for current Gemini Live work. Keep this only for compatibility checks against the older native-audio path.")]
+        [Obsolete("Prefer Gemini38Live for current Gemini Live work. Keep this only for compatibility checks against the older native-audio path.")]
         Gemini25FlashNativeAudio,
 
         /// <summary>
@@ -43,14 +49,14 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.Google.Models
         /// Gemini Live 2.5 Flash preview.
         /// Google shut this model down on December 9, 2025.
         /// </summary>
-        [Obsolete("Google shut this model down on 2025-12-09. Use Gemini31FlashLivePreview.")]
+        [Obsolete("Google shut this model down on 2025-12-09. Use Gemini38Live.")]
         GeminiLive25Flash,
 
         /// <summary>
         /// Gemini 2.0 Flash Live.
         /// Google shut this model down on December 9, 2025.
         /// </summary>
-        [Obsolete("Google shut this model down on 2025-12-09. Use Gemini31FlashLivePreview.")]
+        [Obsolete("Google shut this model down on 2025-12-09. Use Gemini38Live.")]
         Gemini20FlashLive001
     }
 
@@ -69,6 +75,8 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.Google.Models
         {
             return model switch
             {
+                GoogleModel.Gemini38Live => "models/gemini-3.8-live",
+                GoogleModel.Gemini38LiveExtendedThinking => "models/gemini-3.8-live-extended-thinking",
                 GoogleModel.Gemini31FlashLivePreview => "models/gemini-3.1-flash-live-preview",
                 GoogleModel.Gemini25FlashNativeAudioLatest => "models/gemini-2.5-flash-native-audio-latest",
                 GoogleModel.GeminiLive25FlashNativeAudio => "models/gemini-live-2.5-flash-native-audio",

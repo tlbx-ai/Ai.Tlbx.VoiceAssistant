@@ -285,7 +285,7 @@ public sealed class OpenAiDirectRealtimeVoiceProvider : IDirectBrowserVoiceProvi
             document.RootElement,
             modelId ?? _settings?.GetModelId(),
             responseId,
-            UsageOperationType.VoiceResponse);
+            UsageOperationType.VoiceResponse, false, true);
         OnUsageReceived?.Invoke(report);
         return Task.CompletedTask;
     }
@@ -298,7 +298,7 @@ public sealed class OpenAiDirectRealtimeVoiceProvider : IDirectBrowserVoiceProvi
             document.RootElement,
             _settings?.InputAudioTranscription.GetModelId(),
             itemId,
-            UsageOperationType.InputTranscription);
+            UsageOperationType.InputTranscription, false, true);
         OnUsageReceived?.Invoke(report);
         return Task.CompletedTask;
     }

@@ -337,7 +337,7 @@ public sealed partial class OpenAiLiveProvider : IVoiceProvider, IStartupHistory
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(content);
         var acknowledgment = await SendCommandAsync(new JsonObject { ["type"] = $"session.{kind}.append", ["content"] = content, ["delegation_id"] = delegationId }, cancellationToken).ConfigureAwait(false);
-        if (_clientBackend != null && kind != "commentary")
+        if (_settings?.ClientBackend != null && kind != "commentary")
             lock (_clientLock) _clientTranscript.Add((JsonNode)new JsonObject { ["role"] = "application", ["kind"] = kind, ["text"] = content });
         return acknowledgment;
     }
@@ -573,9 +573,11 @@ public sealed partial class OpenAiLiveProvider : IVoiceProvider, IStartupHistory
             if (terminalId != null && !_completedResponseIds.Add(terminalId)) return;
             if (inner["response"] is JsonObject response && response["usage"] is JsonObject usage)
                 OnUsageReceived?.Invoke(new UsageReport { ProviderId = "openai", ModelId = response["model"]?.GetValue<string>(),
+                    ServiceTier = response["service_tier"]?.GetValue<string>() ?? _settings?.Responses?["service_tier"]?.GetValue<string>(),
                     OperationId = response["id"]?.GetValue<string>(), OperationType = UsageOperationType.DelegatedResponse,
                     ReportedInputTokens = usage["input_tokens"]?.GetValue<int>(), ReportedOutputTokens = usage["output_tokens"]?.GetValue<int>(),
                     ReportedTotalTokens = usage["total_tokens"]?.GetValue<int>(), CacheReadInputTokens = usage["input_tokens_details"]?["cached_tokens"]?.GetValue<int>(),
+                    CacheCreationInputTokens = usage["input_tokens_details"]?["cache_write_tokens"]?.GetValue<int>(),
                     ReasoningOutputTokens = usage["output_tokens_details"]?["reasoning_tokens"]?.GetValue<int>(), IsFinal = true, RawProviderUsageJson = usage.ToJsonString() });
             var completedId = inner["response"]?["id"]?.GetValue<string>();
             if (completedId != null && _responseIds.TryGetValue(delegation, out var activeId) && activeId == completedId)

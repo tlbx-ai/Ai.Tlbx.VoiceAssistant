@@ -27,6 +27,7 @@
 @implements IAsyncDisposable
 
 <PageTitle>AI Voice Chat</PageTitle>
+<p><a href="/agent-handoff">Agent-Handoff: GPT-Live + GPT-6.1 Sol</a></p>
 
 <CascadingValue Value="voiceAssistant">
     <CascadingValue Value="sessionSettings">
@@ -631,9 +632,9 @@
         if (IsConversationSupport) return "OpenAI Realtime hört zu und liefert ausschließlich Texthinweise.";
         return _selectedProviderString switch
         {
-            "OpenAI" when IsLiveModel => "Continuous GPT-Live conversation over WebRTC. Enabled tools run through the Responses backend (gpt-5.6-luna).",
+            "OpenAI" when IsLiveModel => "Continuous GPT-Live conversation over WebRTC. Enabled tools run through the Responses backend (gpt-6-luna).",
             "OpenAI" => "Choose GPT-Live 1 for continuous conversation, or a Realtime model for turn-based voice.",
-            "xAI" => "Latest currently uses Think Fast 2.0; pin GrokVoiceThinkFast20 for deterministic production rollout.",
+            "xAI" => "Latest currently uses Grok Voice 3.0; pin GrokVoice30 for deterministic production rollout.",
             _ => "Obsolete models stay selectable here for manual compatibility checks."
         };
     }
@@ -828,7 +829,7 @@
             availableVoices = Enum.GetValues<GoogleVoice>().Select(v => v.ToString()).ToList();
             _currentVoiceString = "Aoede";
             availableModels = GetEnumOptions<GoogleModel>(includeObsolete: true);
-            _currentModelString = nameof(GoogleModel.Gemini31FlashLivePreview);
+            _currentModelString = nameof(GoogleModel.Gemini38Live);
         }
         else if (_selectedProviderString == "xAI")
         {
@@ -1168,7 +1169,7 @@
     {
         return Enum.TryParse<GoogleModel>(_currentModelString, out var model)
             ? model
-            : GoogleModel.Gemini31FlashLivePreview;
+            : GoogleModel.Gemini38Live;
     }
 
     private OpenAiRealtimeModel GetSelectedOpenAiModelOrDefault()
@@ -1189,7 +1190,7 @@
     {
         if (SelectedGoogleModelSupportsThinkingLevel)
         {
-            return "Used by Gemini 3.1 Live. Leave empty to keep the provider default.";
+            return "Used by Gemini 3.1 Live and Gemini 3.8 Live Extended Thinking. Extended Thinking supports low, medium and high.";
         }
 
         if (SelectedGoogleModelSupportsThinkingBudget)
@@ -1197,7 +1198,7 @@
             return "This model uses thinking budgets instead of thinking levels.";
         }
 
-        return "This legacy model does not expose Google thinking controls.";
+        return "This model uses built-in reasoning without configurable thinking controls.";
     }
 
     private string GetGoogleThinkingBudgetHint()
@@ -1209,10 +1210,10 @@
 
         if (SelectedGoogleModelSupportsThinkingLevel)
         {
-            return "Gemini 3.1 Live ignores token budgets and uses thinking levels.";
+            return "This model uses thinking levels instead of token budgets.";
         }
 
-        return "This legacy model does not expose Google thinking controls.";
+        return "This model uses built-in reasoning without configurable thinking controls.";
     }
 
     private string GetToolCallPreambleModeHint()
@@ -1378,7 +1379,7 @@
                 _liveDisplayedCalls.Clear();
                 var backend = new JsonObject
                 {
-                    ["model"] = "gpt-5.6-luna",
+                    ["model"] = "gpt-6-luna",
                     ["instructions"] = "Bearbeite die Anfrage mit den verfügbaren Werkzeugen. Beachte deren Parameter und Berechtigungen. Lies auch die abschließenden Prüfvermerke großer Dokumente. Gib geprüfte Ergebnisse kurz in der Sprache des Nutzers zurück; erfinde keine ausgeführten Aktionen.",
                     ["parallel_tool_calls"] = false,
                     ["max_output_tokens"] = 2048
@@ -1435,7 +1436,7 @@
 
                 if (!Enum.TryParse<GoogleModel>(_currentModelString, out var googleModel))
                 {
-                    googleModel = GoogleModel.Gemini31FlashLivePreview;
+                    googleModel = GoogleModel.Gemini38Live;
                 }
 
                 settings = new GoogleVoiceSettings

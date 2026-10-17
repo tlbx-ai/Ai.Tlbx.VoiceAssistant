@@ -7,28 +7,35 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.XAi.Models
     /// </summary>
     public enum XaiVoiceModel
     {
+        /// <summary>Current flagship voice model. The latest alias routes here.</summary>
+        GrokVoice30 = 100,
+
+        /// <summary>Deprecated previous generation; kept for explicitly pinned sessions.</summary>
+        [Obsolete("Use GrokVoice30. xAI deprecated grok-voice-2.0.")]
+        GrokVoice20 = 101,
         /// <summary>
         /// Moving alias for xAI's newest voice model. Recommended for new integrations.
         /// Pin a versioned model when deterministic production rollout is more important than automatic upgrades.
         /// </summary>
-        GrokVoiceLatest,
+        GrokVoiceLatest = 0,
 
         /// <summary>
-        /// xAI's current flagship voice model, released July 29, 2026.
+        /// Historical voice model released July 29, 2026.
         /// The grok-voice-latest alias began routing to this version on August 5, 2026.
         /// </summary>
+        [Obsolete("Use GrokVoice30 or GrokVoiceLatest. This is a historical model ID.")]
         GrokVoiceThinkFast20,
 
         /// <summary>
         /// xAI's flagship realtime voice model for multi-step, tool-heavy voice workflows.
         /// </summary>
-        [Obsolete("grok-voice-think-fast-1.0 is the previous generation. Use GrokVoiceLatest or GrokVoiceThinkFast20.")]
+        [Obsolete("grok-voice-think-fast-1.0 is the previous generation. Use GrokVoiceLatest or GrokVoice30.")]
         GrokVoiceThinkFast10,
 
         /// <summary>
         /// Previous realtime voice model. Useful as an A/B baseline.
         /// </summary>
-        [Obsolete("grok-voice-fast-1.0 is deprecated by xAI. Use GrokVoiceLatest or GrokVoiceThinkFast20.")]
+        [Obsolete("grok-voice-fast-1.0 is deprecated by xAI. Use GrokVoiceLatest or GrokVoice30.")]
         GrokVoiceFast10
     }
 
@@ -45,6 +52,8 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.XAi.Models
         {
             return model switch
             {
+                XaiVoiceModel.GrokVoice30 => "grok-voice-3.0",
+                XaiVoiceModel.GrokVoice20 => "grok-voice-2.0",
                 XaiVoiceModel.GrokVoiceLatest => "grok-voice-latest",
                 XaiVoiceModel.GrokVoiceThinkFast20 => "grok-voice-think-fast-2.0",
                 XaiVoiceModel.GrokVoiceThinkFast10 => "grok-voice-think-fast-1.0",

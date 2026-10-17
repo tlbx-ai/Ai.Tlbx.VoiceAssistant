@@ -41,7 +41,7 @@ namespace Ai.Tlbx.VoiceAssistant.Demo.Web.Services
                 VoiceProviderType.OpenAI => _serviceProvider.GetRequiredService<OpenAiDirectRealtimeVoiceProvider>(),
                 VoiceProviderType.OpenAiLive => _serviceProvider.GetRequiredService<OpenAiDirectLiveVoiceProvider>(),
                 VoiceProviderType.Google => new GoogleVoiceProvider(
-                    Environment.GetEnvironmentVariable("GOOGLE_API_KEY"), logAction),
+                    Environment.GetEnvironmentVariable("GEMINI_API_KEY") ?? Environment.GetEnvironmentVariable("GOOGLE_API_KEY"), logAction),
                 VoiceProviderType.XAi => new XaiVoiceProvider(
                     Environment.GetEnvironmentVariable("XAI_API_KEY"), logAction),
                 VoiceProviderType.OpenAiTranscription => new OpenAiTranscriptionProvider(

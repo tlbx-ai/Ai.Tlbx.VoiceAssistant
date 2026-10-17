@@ -171,6 +171,8 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.Google.Protocol
 
     public class FunctionDeclaration
     {
+        [JsonPropertyName("behavior")]
+        public string? Behavior { get; set; }
         [JsonPropertyName("name")]
         public string Name { get; set; } = string.Empty;
 

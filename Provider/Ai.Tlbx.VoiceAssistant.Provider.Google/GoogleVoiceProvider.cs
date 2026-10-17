@@ -47,6 +47,16 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.Google
         private readonly Dictionary<string, string> _pendingToolCalls = new();
         private int _audioTxCount = 0;
         private int _audioRxCount = 0;
+        private readonly SemaphoreSlim _sendLock = new(1, 1);
+        private Task _toolWork = Task.CompletedTask;
+        private readonly System.Collections.Concurrent.ConcurrentDictionary<string, byte> _cancelledTools = new();
+        private readonly HashSet<string> _seenTools = new(StringComparer.Ordinal);
+
+        /// <summary>Original server messages, including future API fields. Handlers must return promptly.</summary>
+        public Action<JsonElement>? OnEventReceived { get; set; }
+        /// <summary>Authoritative background activity signal; turnComplete alone does not mean idle.</summary>
+        public string? InteractionStatus { get; private set; }
+        public Action<string>? OnInteractionStatusChanged { get; set; }
 
         /// <summary>
         /// Gets a value indicating whether the provider is connected and ready.
@@ -122,6 +132,7 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.Google
             }
 
             ValidateSettings(googleSettings);
+            if (!_toolWork.IsCompleted) throw new InvalidOperationException("Previous Google tools are still running. Wait before reconnecting.");
             ResetConversationState();
             _settings = googleSettings;
             _logAction(LogLevel.Info, $"Settings configured - Voice: {_settings.Voice}, Model: {_settings.Model}");
@@ -347,6 +358,15 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.Google
 
         private static void ValidateSettings(GoogleVoiceSettings settings)
         {
+            if (settings.Model is GoogleModel.Gemini38Live or GoogleModel.Gemini38LiveExtendedThinking)
+            {
+                if (settings.ResponseModality != "AUDIO") throw new ArgumentException("Gemini 3.8 Live requires AUDIO; enable output transcription for text.");
+                if (settings.Model == GoogleModel.Gemini38Live && settings.Thinking.IsConfigured)
+                    throw new ArgumentException("Gemini 3.8 Live uses interleaved reasoning; omit Thinking or select Extended Thinking.");
+                if (settings.Model == GoogleModel.Gemini38LiveExtendedThinking &&
+                    (settings.Thinking.Level == SessionThinkingLevel.Minimal || settings.Thinking.Budget.HasValue))
+                    throw new ArgumentException("Extended Thinking supports low, medium or high thinking levels, not minimal or token budgets.");
+            }
             if (!settings.VoiceActivityDetection.AutomaticDetection)
             {
                 throw new InvalidOperationException(
@@ -364,6 +384,9 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.Google
             _pendingToolCalls.Clear();
             _audioTxCount = 0;
             _audioRxCount = 0;
+            InteractionStatus = null;
+            _cancelledTools.Clear();
+            _seenTools.Clear();
         }
 
         private async Task WaitForSetupCompletionAsync()
@@ -441,7 +464,8 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.Google
                             Disabled = false
                         } : new Protocol.AutomaticActivityDetection { Disabled = true },
                         ActivityHandling = _settings.VoiceActivityDetection.ActivityHandling.ToApiString(),
-                        TurnCoverage = "TURN_INCLUDES_ALL_INPUT"
+                        TurnCoverage = _settings.Model is GoogleModel.Gemini38Live or GoogleModel.Gemini38LiveExtendedThinking
+                            ? "TURN_INCLUDES_AUDIO_ACTIVITY_AND_ALL_VIDEO" : "TURN_INCLUDES_ALL_INPUT"
                     },
                     ContextWindowCompression = _settings.AutomaticContextCompression
                         ? new ContextWindowCompressionConfig
@@ -489,7 +513,10 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.Google
             var functionDeclarations = _settings.Tools.Select(tool =>
             {
                 var schema = ToolSchemaInferrer.InferSchema(tool.ArgsType);
-                return (FunctionDeclaration)_toolTranslator.TranslateToolDefinition(tool, schema);
+                var declaration = (FunctionDeclaration)_toolTranslator.TranslateToolDefinition(tool, schema);
+                if (_settings.Model is GoogleModel.Gemini38Live or GoogleModel.Gemini38LiveExtendedThinking)
+                    declaration.Behavior = "NON_BLOCKING";
+                return declaration;
             }).ToList();
 
             return new List<Tool>
@@ -562,7 +589,13 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.Google
                 }
 
                 var buffer = Encoding.UTF8.GetBytes(json);
-                await _webSocket.SendAsync(new ArraySegment<byte>(buffer), WebSocketMessageType.Text, true, CancellationToken.None);
+                await _sendLock.WaitAsync();
+                try
+                {
+                    if (_webSocket?.State == WebSocketState.Open)
+                        await _webSocket.SendAsync(new ArraySegment<byte>(buffer), WebSocketMessageType.Text, true, CancellationToken.None);
+                }
+                finally { _sendLock.Release(); }
             }
             catch (ObjectDisposedException)
             {
@@ -640,6 +673,12 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.Google
             {
                 using var document = JsonDocument.Parse(message);
                 var root = document.RootElement;
+                OnEventReceived?.Invoke(root.Clone());
+                if (root.TryGetProperty("interactionStatus", out var interaction) || root.TryGetProperty("interaction_status", out interaction))
+                {
+                    InteractionStatus = interaction.GetString();
+                    if (InteractionStatus != null) OnInteractionStatusChanged?.Invoke(InteractionStatus);
+                }
 
                 if (root.TryGetProperty("setupComplete", out _))
                 {
@@ -682,7 +721,20 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.Google
 
                 if (root.TryGetProperty("toolCall", out var toolCall))
                 {
-                    await HandleToolCall(toolCall);
+                    FlushUserTranscript();
+                    if (_settings?.Model is GoogleModel.Gemini38Live or GoogleModel.Gemini38LiveExtendedThinking)
+                    {
+                        var snapshot = toolCall.Clone();
+                        var previous = _toolWork;
+                        var token = _cts?.Token ?? CancellationToken.None;
+                        _toolWork = Task.Run(async () =>
+                        {
+                            try { await previous.ConfigureAwait(false); await HandleToolCall(snapshot, token).ConfigureAwait(false); }
+                            catch (OperationCanceledException) when (token.IsCancellationRequested) { }
+                            catch (Exception ex) { OnError?.Invoke($"Google tool work failed: {ex.Message}"); }
+                        });
+                    }
+                    else await HandleToolCall(toolCall);
                     return;
                 }
 
@@ -888,19 +940,10 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.Google
             return _currentTranscript.ToString();
         }
 
-        private async Task HandleToolCall(JsonElement toolCall)
+        private async Task HandleToolCall(JsonElement toolCall, CancellationToken cancellationToken = default)
         {
             if (!toolCall.TryGetProperty("functionCalls", out var functionCalls))
                 return;
-
-            // Flush user transcript BEFORE tool call messages to maintain correct order
-            if (_currentUserTranscript.Length > 0)
-            {
-                var userMessage = _currentUserTranscript.ToString();
-                _logAction(LogLevel.Info, $"[USER-COMPLETE] {userMessage}");
-                OnMessageReceived?.Invoke(ChatMessage.CreateUserMessage(userMessage));
-                _currentUserTranscript.Clear();
-            }
 
             var responses = new List<FunctionResponse>();
 
@@ -912,6 +955,8 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.Google
 
                 var id = idElement.GetString() ?? "";
                 var name = nameElement.GetString() ?? "";
+                cancellationToken.ThrowIfCancellationRequested();
+                if (_cancelledTools.ContainsKey(id) || !_seenTools.Add(id)) continue;
 
                 _logAction(LogLevel.Info, $"Tool call received: {name} (ID: {id})");
 
@@ -963,6 +1008,9 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.Google
 
             if (responses.Count > 0)
             {
+                cancellationToken.ThrowIfCancellationRequested();
+                responses.RemoveAll(r => _cancelledTools.ContainsKey(r.Id));
+                if (responses.Count == 0) return;
                 var toolResponse = new ToolResponseMessage
                 {
                     ToolResponse = new ToolResponse
@@ -987,6 +1035,7 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.Google
                     if (!string.IsNullOrEmpty(idValue))
                     {
                         cancelledIds.Add(idValue);
+                        _cancelledTools.TryAdd(idValue, 0);
                         _pendingToolCalls.Remove(idValue);
                     }
                 }

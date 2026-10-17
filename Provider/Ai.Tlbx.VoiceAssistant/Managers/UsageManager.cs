@@ -34,6 +34,9 @@ namespace Ai.Tlbx.VoiceAssistant.Managers
 
             lock (_lock)
             {
+                if (report.IsFinal && !report.IsCumulative && !string.IsNullOrEmpty(report.OperationId) &&
+                    _reports.Any(r => r.IsFinal && !r.IsCumulative && r.OperationId == report.OperationId &&
+                        r.ProviderId == report.ProviderId && r.OperationType == report.OperationType)) return;
                 if (report.IsCumulative && !string.IsNullOrEmpty(report.OperationId))
                 {
                     var index = _reports.FindIndex(r => r.IsCumulative && r.OperationId == report.OperationId &&

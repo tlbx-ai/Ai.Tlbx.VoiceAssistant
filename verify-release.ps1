@@ -1,7 +1,9 @@
 param(
     [string]$Configuration = "Release",
     [string]$RuntimeIdentifier = $(if ($IsWindows) { "win-x64" } else { "linux-x64" }),
-    [switch]$SkipAot
+    [switch]$SkipAot,
+    [ValidateRange(1, 64)]
+    [int]$MaxCpuCount = 1
 )
 
 $ErrorActionPreference = "Stop"
@@ -17,7 +19,7 @@ function Assert-LastCommandSucceeded([string]$Step)
 Push-Location $PSScriptRoot
 try
 {
-    dotnet build TLBX.Ai.VoiceAssistant.slnx -c $Configuration --nologo -m:14
+    dotnet build TLBX.Ai.VoiceAssistant.slnx -c $Configuration --nologo "-m:$MaxCpuCount"
     Assert-LastCommandSucceeded "Solution build"
 
     dotnet run --project Tests\ContractTests\ContractTests.csproj -c $Configuration --no-build
@@ -52,7 +54,7 @@ try
             & $developerShell -Arch amd64 -HostArch amd64 -SkipAutomaticLocation
         }
 
-        dotnet publish Tests\AotTest\AotTest.csproj -c $Configuration -r $RuntimeIdentifier --self-contained true --nologo -m:14
+        dotnet publish Tests\AotTest\AotTest.csproj -c $Configuration -r $RuntimeIdentifier --self-contained true --nologo "-m:$MaxCpuCount"
         Assert-LastCommandSucceeded "Native AOT publish"
     }
 

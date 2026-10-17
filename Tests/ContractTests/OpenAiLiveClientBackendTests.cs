@@ -16,6 +16,7 @@ internal static partial class OpenAiLiveTests
         await VerifyLargeClientBackendAsync();
         await VerifyClientSupersessionAsync();
         await VerifyClientFailureBoundariesAsync();
+        await VerifyApplicationAgentAsync();
         Console.WriteLine("GPT-Live client backend contracts passed: complete large Unicode results, followups, duplicate actions/delegations, supersession, endpoint isolation and failures.");
     }
 
@@ -177,7 +178,7 @@ internal static partial class OpenAiLiveTests
         provider.OnDelegationCreated = d => { if (d.Id == "second") heard.TrySetResult(); };
         provider.OnEventReceived = e => { if (e["type"]?.GetValue<string>() == "session.commentary.appended") complete.TrySetResult(); };
         await provider.ConnectAsync(new OpenAiLiveSettings { Connection = new($"ws://localhost:{port}/live"), Tools = [tool],
-            ClientBackend = new() { Connection = new($"http://localhost:{port}/responses"), HttpClient = http } });
+            ClientBackend = new() { NewDelegationBehavior = OpenAiLiveDelegationBehavior.Supersede, Connection = new($"http://localhost:{port}/responses"), HttpClient = http } });
         await complete.Task.WaitAsync(timeout.Token);
         await provider.DisconnectAsync();
         await server;

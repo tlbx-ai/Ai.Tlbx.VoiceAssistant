@@ -45,7 +45,7 @@
         {
             await Live.StartBrowserSessionAsync(new OpenAiLiveSettings {
                 Instructions = "Speak briefly in English. Delegate requests for the current time to the backend.",
-                Responses = new JsonObject { ["model"] = "gpt-5.6-luna", ["instructions"] = "Use get_current_time to retrieve the current time when asked. Return the result briefly.", ["max_output_tokens"] = 128 },
+                Responses = new JsonObject { ["model"] = "gpt-6-luna", ["instructions"] = "Use get_current_time to retrieve the current time when asked. Return the result briefly.", ["max_output_tokens"] = 2048 },
                 Tools = new() { new TimeTool() }
             });
             connected = true;

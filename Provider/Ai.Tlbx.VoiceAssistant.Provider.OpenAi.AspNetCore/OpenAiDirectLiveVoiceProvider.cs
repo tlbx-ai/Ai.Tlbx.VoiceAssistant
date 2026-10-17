@@ -37,6 +37,7 @@ public sealed class OpenAiDirectLiveVoiceProvider : IDirectBrowserVoiceProvider,
     public Action<StructuredTranscript>? OnStructuredTranscriptionReceived { get; set; }
     public Action<OpenAiLiveTranscriptDelta>? OnTranscriptDelta { get; set; }
     public Action<OpenAiLiveDelegation>? OnDelegationCreated { get; set; }
+    public Action<OpenAiLiveBackendActivity>? OnBackendActivity { get; set; }
     /// <summary>Trusted sideband events, excluding reflected audio. Browser data-channel events do not execute tools.</summary>
     public Action<JsonObject>? OnEventReceived { get; set; }
 
@@ -55,6 +56,7 @@ public sealed class OpenAiDirectLiveVoiceProvider : IDirectBrowserVoiceProvider,
         _live.OnStructuredTranscriptionReceived = t => OnStructuredTranscriptionReceived?.Invoke(t);
         _live.OnTranscriptDelta = d => OnTranscriptDelta?.Invoke(d);
         _live.OnDelegationCreated = d => OnDelegationCreated?.Invoke(d);
+        _live.OnBackendActivity = a => OnBackendActivity?.Invoke(a);
         _live.OnEventReceived = e => OnEventReceived?.Invoke(e);
     }
 

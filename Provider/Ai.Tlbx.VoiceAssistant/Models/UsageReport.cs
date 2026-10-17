@@ -1,5 +1,7 @@
 namespace Ai.Tlbx.VoiceAssistant.Models
 {
+    /// <summary>Distinguishes wall-clock voice billing from input/output media billing.</summary>
+    public enum VoiceBillingMode { ProviderDefault, SessionDuration, AudioDuration }
     /// <summary>
     /// Identifies the provider operation that generated usage.
     /// </summary>
@@ -66,6 +68,9 @@ namespace Ai.Tlbx.VoiceAssistant.Models
         /// Provider model identifier used for this operation, when known.
         /// </summary>
         public string? ModelId { get; init; }
+        /// <summary>Actual provider processing tier when reported. Pricing must use this tier.</summary>
+        public string? ServiceTier { get; init; }
+        public VoiceBillingMode BillingMode { get; init; }
 
         /// <summary>
         /// Provider response, item, or request identifier, when available.

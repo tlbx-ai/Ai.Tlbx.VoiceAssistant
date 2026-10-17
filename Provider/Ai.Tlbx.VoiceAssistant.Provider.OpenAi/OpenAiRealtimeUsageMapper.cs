@@ -73,7 +73,7 @@ public static class OpenAiRealtimeUsageMapper
             InputImageTokens = inputImageTokens,
             OutputImageTokens = outputImageTokens,
             ReasoningOutputTokens = reasoningTokens,
-            CacheCreationInputTokens = cacheCreationTokens,
+            CacheCreationInputTokens = hasInputDetails ? TryGetInt32(inputDetails, "cache_write_tokens") ?? cacheCreationTokens : cacheCreationTokens,
             CacheReadInputTokens = cachedTokens,
             CachedTextInputTokens = hasCachedDetails ? TryGetInt32(cachedDetails, "text_tokens") : null,
             CachedAudioInputTokens = hasCachedDetails ? TryGetInt32(cachedDetails, "audio_tokens") : null,

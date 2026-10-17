@@ -17,7 +17,8 @@ public static class XaiRealtimeUsageMapper
         string? operationId,
         TimeSpan? inputAudioDuration,
         TimeSpan? outputAudioDuration,
-        int billableTextInputEvents)
+        int billableTextInputEvents,
+        VoiceBillingMode billingMode = VoiceBillingMode.AudioDuration)
     {
         var hasProviderUsage = usage.HasValue && usage.Value.ValueKind == JsonValueKind.Object;
         var usageValue = hasProviderUsage ? usage!.Value : default;
@@ -51,6 +52,7 @@ public static class XaiRealtimeUsageMapper
         return new UsageReport
         {
             ProviderId = "xai",
+            BillingMode = billingMode,
             ModelId = modelId,
             OperationId = operationId,
             OperationType = UsageOperationType.VoiceResponse,

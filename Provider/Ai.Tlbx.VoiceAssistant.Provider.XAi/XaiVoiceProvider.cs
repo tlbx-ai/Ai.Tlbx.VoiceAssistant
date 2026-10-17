@@ -8,6 +8,7 @@ using System.Text.Json;
 using System.Text.Json.Serialization;
 using System.Threading;
 using System.Threading.Tasks;
+using System.Diagnostics;
 using Ai.Tlbx.VoiceAssistant.Interfaces;
 using Ai.Tlbx.VoiceAssistant.Models;
 using Ai.Tlbx.VoiceAssistant.Reflection;
@@ -47,6 +48,9 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.XAi
         private long _pendingInputAudioBytes;
         private long _pendingOutputAudioBytes;
         private int _pendingBillableTextInputEvents;
+        private readonly Stopwatch _sessionClock = new();
+        private string? _meteringSessionId;
+        private bool _sessionDurationBilling;
 
         /// <summary>
         /// Gets a value indicating whether the provider is connected and ready.
@@ -101,6 +105,8 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.XAi
         /// Callback invoked when usage data is received from the AI provider.
         /// </summary>
         public Action<UsageReport>? OnUsageReceived { get; set; }
+        /// <summary>Original events, including hosted tool progress and future fields. Return promptly.</summary>
+        public Action<JsonElement>? OnEventReceived { get; set; }
         public Action<string>? OnTranscriptionDelta { get; set; }
         public Action<string>? OnTranscriptionCompleted { get; set; }
 
@@ -131,6 +137,9 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.XAi
             ValidateSettings(xaiSettings);
             ResetResponseState();
             _settings = xaiSettings;
+            _sessionClock.Reset();
+            _meteringSessionId = "xai_" + Guid.NewGuid().ToString("N");
+            _sessionDurationBilling = xaiSettings.TurnDetection != null;
             _logAction(LogLevel.Info, $"Settings configured - Voice: {GetVoiceId(_settings)}, Speed: {_settings.TalkingSpeed}, Model: {_settings.Model}");
 
             try
@@ -151,6 +160,7 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.XAi
                 using (var connectionCts = new CancellationTokenSource(CONNECTION_TIMEOUT_MS))
                 {
                     await _webSocket.ConnectAsync(uri, connectionCts.Token);
+                    _sessionClock.Start();
                 }
 
                 OnStatusChanged?.Invoke("Connected to xAI");
@@ -164,6 +174,10 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.XAi
             catch (Exception ex)
             {
                 _sessionUpdateCompletionSource?.TrySetException(ex);
+                _cts?.Cancel();
+                _webSocket?.Abort();
+                _sessionClock.Stop();
+                FlushUsageReport();
                 _logAction(LogLevel.Error, $"Failed to connect to xAI: {ex.Message}");
                 OnError?.Invoke($"Connection failed: {ex.Message}");
                 throw;
@@ -218,6 +232,8 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.XAi
             }
 
             ValidateSettings(xaiSettings);
+            if (IsConnected && _sessionDurationBilling != (xaiSettings.TurnDetection != null))
+                throw new InvalidOperationException("Reconnect to switch between session-duration billing and push-to-talk audio billing.");
             _settings = xaiSettings;
             _logAction(LogLevel.Info, $"Settings configured - Voice: {GetVoiceId(_settings)}, Speed: {_settings.TalkingSpeed}, Model: {_settings.Model}");
 
@@ -633,6 +649,7 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.XAi
             }
             finally
             {
+                _sessionClock.Stop();
                 FlushUsageReport();
             }
         }
@@ -643,6 +660,7 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.XAi
             {
                 using var document = JsonDocument.Parse(message);
                 var root = document.RootElement;
+                OnEventReceived?.Invoke(root.Clone());
 
                 if (!root.TryGetProperty("type", out var typeElement))
                     return;
@@ -1059,7 +1077,16 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.XAi
                 outputAudioBytes > 0
                     ? TimeSpan.FromSeconds(outputAudioBytes / (double)PCM16_BYTES_PER_SECOND)
                     : null,
-                textEvents);
+                textEvents,
+                _sessionDurationBilling ? VoiceBillingMode.SessionDuration : VoiceBillingMode.AudioDuration);
+
+            if (_sessionDurationBilling && _sessionClock.Elapsed > TimeSpan.Zero)
+                OnUsageReceived?.Invoke(new UsageReport {
+                    ProviderId = "xai", ModelId = _settings?.GetModelId(), OperationId = _meteringSessionId,
+                    OperationType = UsageOperationType.VoiceSession, BillingMode = VoiceBillingMode.SessionDuration,
+                    SessionDuration = _sessionClock.Elapsed, IsCumulative = true, IsEstimated = true,
+                    MeasurementSource = UsageMeasurementSource.ClientMeasured
+                });
 
             if (!report.HasUsage)
             {

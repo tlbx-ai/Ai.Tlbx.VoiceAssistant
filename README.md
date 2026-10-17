@@ -212,7 +212,7 @@ var provider = new GoogleVoiceProvider(apiKey);
 var settings = new GoogleVoiceSettings
 {
     Voice = GoogleVoice.Puck,
-    Model = GoogleModel.Gemini31FlashLivePreview
+    Model = GoogleModel.Gemini38Live
 };
 
 // xAI Grok — all 28 built-in voices plus custom voice IDs
@@ -247,11 +247,11 @@ new OpenAiVoiceSettings
     MostLikelySpokenLanguage = "en"
 };
 
-// Google — current recommended Live model is Gemini31FlashLivePreview
+// Google — current recommended Live model is Gemini38Live
 new GoogleVoiceSettings
 {
     Voice = GoogleVoice.Puck,
-    Model = GoogleModel.Gemini31FlashLivePreview,
+    Model = GoogleModel.Gemini38Live,
     LanguageCode = "en",
     Temperature = 0.8,
     AutomaticContextCompression = true,
@@ -295,8 +295,8 @@ OpenAI threshold applies only to `server_vad`; semantic VAD uses `Eagerness`.
 - OpenAI: `OpenAiRealtimeModel.GptRealtime21` is the default full reasoning voice model; `GptRealtime21Mini` is the faster, lower-cost option. Older model IDs remain available for compatibility.
 - OpenAI voice settings default to `SessionReasoningEffort.Low`, 200 ms server-VAD silence detection, and `Eagerness.high` when semantic VAD is selected. The selected model remains entirely controlled by `OpenAiVoiceSettings.Model`; the library never switches a session to the mini model automatically.
 - `ToolCallPreambleMode.Disabled` is a provider instruction, not an audio gate: every received audio delta is forwarded immediately in both WebSocket and Direct WebRTC sessions.
-- Google: `GoogleModel.Gemini31FlashLivePreview` is the current default for the Gemini Live API. `GoogleModel.Gemini25FlashNativeAudioLatest` is also available for testing Google's rolling native-audio Live API alias. The `gemini-3.1-flash-tts-preview` and older `gemini-2.5-*-tts` models are text-to-speech `generateContent` models, not realtime `bidiGenerateContent` voice-session models, so they are not exposed through this realtime provider.
-- xAI: `XaiVoiceModel.GrokVoiceLatest` follows xAI's moving alias, which has pointed to `grok-voice-think-fast-2.0` since August 5, 2026. Use `GrokVoiceThinkFast20` to pin the current flagship; the 1.0 models remain only for compatibility. Think Fast 2.0 uses `high` reasoning when `ReasoningEffort` is omitted and accepts `None` to disable it. xAI prices it at USD 0.08 per audio minute plus USD 0.004 per text input.
+- Google: `GoogleModel.Gemini38Live` is the current default for the Gemini Live API. `GoogleModel.Gemini25FlashNativeAudioLatest` is also available for testing Google's rolling native-audio Live API alias. The `gemini-3.1-flash-tts-preview` and older `gemini-2.5-*-tts` models are text-to-speech `generateContent` models, not realtime `bidiGenerateContent` voice-session models, so they are not exposed through this realtime provider.
+- xAI: `XaiVoiceModel.GrokVoiceLatest` follows `grok-voice-3.0`; use `GrokVoice30` to pin it. Server VAD bills session duration; push-to-talk bills input and output audio. Both add USD 0.004 per billable text input event. See the [billing contract](https://docs.x.ai/developers/models/speech-to-speech).
 
 ### xAI Tool Continuations
 
@@ -763,3 +763,14 @@ MIT — do whatever you want.
 Configure endpoints, authentication, headers and model IDs at runtime for company
 gateways such as LiteLLM. See [gateway configuration](tools/gateway-configuration.md)
 for reconnect, HTTP transcription and direct-browser examples.
+
+
+## Application-owned agents and cost estimates
+
+Set `OpenAiLiveSettings.ClientBackend.Handler` to connect any model, agent harness or service. The callback receives a delegation ID, a snapshot of original role-labelled speech fragments, startup history, registered tools, an awaited progress callback and a usage callback. Keep full agent state in your application and return a concise spoken result of at most 500 UTF-8 bytes. The limit is a conservative bound for the Live append budget; full tool results are never truncated into it.
+
+Follow-ups queue in arrival order while speech continues. Choose `NewDelegationBehavior = OpenAiLiveDelegationBehavior.Supersede` explicitly to cancel prior continuation. `CancelClientBackend()` cancels running and queued work. Already-started tools can still finish; the application must preserve real actions and avoid replaying them. `OnBackendActivity` reports queued/running/completed/cancelled/failed independently of speech playback. Custom handlers own authorization, durable history, context compaction and their agent's lifecycle. The core package has no dependency on Ai.Tlbx.Inference.
+
+The web demo's `/agent-handoff` page demonstrates Ai.Tlbx.Inference 2.6.0 with GPT-6.1 Sol, complete synthetic document tools, follow-up history, per-model-call usage and a separate full result display. GPT-Live 1 is the currently verified API model. As of 2026-10-17 the account model catalog and official API docs do not expose GPT-Live 1.1 or Quip; arbitrary `ModelId` values pass through unchanged, with no silent fallback. The demo accepts an exact application-supplied API model ID, but does not claim verified 1.1 availability or invent pricing for it.
+
+`UsageManager` replaces cumulative session snapshots and deduplicates repeated final operations. Use `VoiceCostCalculator.Estimate(report, VoiceCostCalculator.GetRates(report))` for current verified model, context-length and processing-tier prices, or pass `VoiceCostRates` for custom/negotiated schedules. Estimates distinguish cached text/audio/image tokens, cache writes, reasoning subsets, session duration and media duration. Inspect `IsComplete`: unknown models, unsupported service tiers, and missing modality details remain explicit gaps. Sum the retained ledger reports, not every cumulative callback. Hosted tool charges and taxes are outside these model estimates. Public list rates were checked on 2026-10-17 against [OpenAI](https://developers.openai.com/api/docs/pricing), [Google](https://ai.google.dev/gemini-api/docs/pricing) and [xAI](https://docs.x.ai/developers/pricing).

@@ -176,7 +176,7 @@ internal static class LargeResultIntegrationTests
         await socket.CloseOutputAsync(WebSocketCloseStatus.NormalClosure, "test complete", deadline.Token);
     }
 
-    private static byte[] ReadPcm(string path)
+    internal static byte[] ReadPcm(string path)
     {
         using var reader = new BinaryReader(File.OpenRead(path));
         if (Encoding.ASCII.GetString(reader.ReadBytes(4)) != "RIFF") throw new InvalidOperationException("Expected WAV");

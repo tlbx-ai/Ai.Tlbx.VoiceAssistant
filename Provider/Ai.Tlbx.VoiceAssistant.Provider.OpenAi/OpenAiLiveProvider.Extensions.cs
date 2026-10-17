@@ -80,7 +80,7 @@ public sealed partial class OpenAiLiveProvider
             }
             await FlushVisualInputsAsync(cancellationToken).ConfigureAwait(false);
         }
-        else if (_clientBackend != null)
+        else if (_settings.ClientBackend != null)
         {
             lock (_clientLock) _clientTranscript.Add((JsonNode)new JsonObject { ["visual_input"] = item });
             if (requestResponse) StartClientDelegation(new OpenAiLiveDelegation("visual_" + Guid.NewGuid().ToString("N"), "client", 0, null));

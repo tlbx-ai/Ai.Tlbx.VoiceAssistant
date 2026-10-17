@@ -274,7 +274,7 @@ internal static class Program
         selectedModel = selectedProvider switch
         {
             ProviderChoice.OpenAI => PromptEnum("OpenAI realtime model", OpenAiRealtimeModel.GptRealtime21, includeObsolete: true).ToString(),
-            ProviderChoice.Google => PromptEnum("Google Live model", GoogleModel.Gemini31FlashLivePreview, includeObsolete: true).ToString(),
+            ProviderChoice.Google => PromptEnum("Google Live model", GoogleModel.Gemini38Live, includeObsolete: true).ToString(),
             ProviderChoice.XAi => PromptEnum("xAI realtime model", XaiVoiceModel.GrokVoiceLatest, includeObsolete: true).ToString(),
             _ => selectedModel
         };
@@ -583,7 +583,7 @@ internal static class Program
     {
         EnsureAnyKey("GOOGLE_API_KEY", "GEMINI_API_KEY");
         var voice = ParseOrDefault(selectedVoice, GoogleVoice.Puck);
-        var model = ParseOrDefault(selectedModel, GoogleModel.Gemini31FlashLivePreview);
+        var model = ParseOrDefault(selectedModel, GoogleModel.Gemini38Live);
         var settings = new GoogleVoiceSettings
         {
             Voice = voice,

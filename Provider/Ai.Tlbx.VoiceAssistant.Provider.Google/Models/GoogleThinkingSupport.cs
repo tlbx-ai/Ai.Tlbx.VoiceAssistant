@@ -7,7 +7,7 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.Google.Models
     {
         public static bool SupportsThinkingLevel(this GoogleModel model)
         {
-            return model == GoogleModel.Gemini31FlashLivePreview;
+            return model is GoogleModel.Gemini31FlashLivePreview or GoogleModel.Gemini38LiveExtendedThinking;
         }
 
 #pragma warning disable CS0618

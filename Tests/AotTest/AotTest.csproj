@@ -7,6 +7,8 @@
 
     <!-- Strict AOT/Trimming settings -->
     <PublishAot>true</PublishAot>
+    <!-- Size codegen avoids the .NET 9 Windows COFF generic-task symbol collision seen with default codegen. -->
+    <OptimizationPreference>Size</OptimizationPreference>
     <IsAotCompatible>true</IsAotCompatible>
     <IsTrimmable>true</IsTrimmable>
     <EnableTrimAnalyzer>true</EnableTrimAnalyzer>

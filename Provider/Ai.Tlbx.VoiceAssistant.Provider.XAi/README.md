@@ -37,25 +37,13 @@ false interruptions from quiet background audio. It is a convenience alias for
 
 `XaiVoice` contains all 28 current built-in voices. Set `VoiceId` to use a custom xAI voice ID instead.
 
-## Grok Voice Think Fast 2.0
+## Grok Voice 3.0
 
-| Library value | API model ID | Use case |
-|---|---|---|
-| `GrokVoiceLatest` | `grok-voice-latest` | Recommended moving alias; currently routes to Think Fast 2.0 |
-| `GrokVoiceThinkFast20` | `grok-voice-think-fast-2.0` | Pinned production rollout |
-| `GrokVoiceThinkFast10` | `grok-voice-think-fast-1.0` | Deprecated compatibility baseline |
+`GrokVoiceLatest` currently routes to `grok-voice-3.0`. Use `GrokVoice30` to pin this release; older IDs remain explicitly selectable and deprecated. xAI documents no separate economy voice model. The existing endpoint and session protocol remain supported, including custom voices, pronunciation replacements, tools and session resumption.
 
-xAI released Think Fast 2.0 on July 29, 2026 and moved `grok-voice-latest`
-to it on August 5. The wire protocol remains the Speech-to-Speech Realtime
-WebSocket API, so the model supports the provider's existing 24 kHz PCM audio,
-streaming transcription, interruption, tools, custom voices, pronunciation
-replacement, and session resumption paths.
+Pricing is USD 0.08 per minute plus USD 0.004 per text input event. With default server VAD, billing covers the whole session, including silence and tool wait. Push-to-talk bills input plus output audio duration. The provider emits a separate cumulative, client-measured `VoiceSession` report for VAD sessions; response audio durations remain diagnostic and must not be charged again. Local clock estimates are marked as estimates and are not provider-confirmed invoices. Switching metering modes requires reconnecting.
 
-Reasoning is enabled at `high` by xAI when `ReasoningEffort` is left unset. Set
-`SessionReasoningEffort.None` explicitly for workloads where reasoning is not
-wanted. xAI documents Think Fast 2.0 at USD 0.08 per minute of audio plus USD
-0.004 per text input. For migration from 1.0, prefer a shorter system prompt and
-remove workaround instructions that only compensated for older model behavior.
+`OnEventReceived` forwards complete original messages, including hosted-tool progress. See [model migration](https://docs.x.ai/developers/model-capabilities/audio/speech-to-speech#model-selection) and [billing rules](https://docs.x.ai/developers/models/speech-to-speech).
 
 ## Streaming Speech to Text
 
