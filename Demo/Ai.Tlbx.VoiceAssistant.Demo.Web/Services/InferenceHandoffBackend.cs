@@ -71,6 +71,9 @@ public sealed class InferenceHandoffBackend(IAiInferenceClient client)
         _history.Add(new Message { Role = ChatRole.Assistant, Content = result.Content });
         OnResult?.Invoke(result.Content);
         OnProgress?.Invoke("Vollständiges Ergebnis liegt vor; Sprachausgabe vorbereiten");
+        // A concise verified result can go straight to Live; preserve long output in history/UI.
+        if (Encoding.UTF8.GetByteCount(result.Content) <= 500)
+            return result.Content;
         var summary = await client.CompleteWithToolsAsync(new CompletionRequest {
             Model = AiModel.Gpt61Sol, ReasoningEffort = "low", ServiceTier = "default", MaxTokens = 1024,
             SystemMessage = "Summarize this verified agent result for a German voice conversation. Return only plain spoken German, at most 350 UTF-8 bytes. Mention key facts and any open question. No private reasoning.",
