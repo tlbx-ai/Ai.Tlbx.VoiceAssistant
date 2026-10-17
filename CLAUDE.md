@@ -154,6 +154,8 @@ Always use `Action<LogLevel, string>` for logging delegation and forward logs up
 
 ### Testing Strategy
 
+- New demo conversation modes must be selectable in the normal demo UI and use its shared ChatWidget. Populate the chat with user/assistant transcripts, agent progress, tool requests with arguments, inspectable complete tool results and full agent answers. Do not create a separate conversation page or replace these events with opaque status text. Browser acceptance must verify these entries in the normal UI.
+
 - When testing voice behavior or tool selection, keep existing demo tool fixtures unchanged; real external integrations are a separate scope and require an explicit request.
 
 - Automated provider contracts and controlled HTTP/WebSocket event sequences live in `Tests/ContractTests`.

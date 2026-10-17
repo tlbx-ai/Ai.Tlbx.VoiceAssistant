@@ -22,6 +22,7 @@ if (args.Contains("--voice-expansion-live", StringComparer.Ordinal)) { await Ope
 if (args.Contains("--voice-expansion-vision", StringComparer.Ordinal)) { await OpenAiVoiceExpansionTests.RunVisionAsync(); return; }
 if (args.Contains("--voice-expansion-storage", StringComparer.Ordinal)) { await OpenAiVoiceExpansionTests.RunStorageAsync(); return; }
 await ProviderUpdateTests.RunAsync();
+await DemoHandoffTests.RunAsync();
 if (args.Contains("--provider-update-live", StringComparer.Ordinal)) { await ProviderUpdateTests.RunLiveAsync(); return; }
 await OpenAiVoiceExpansionTests.RunAsync();
 if (args.Contains("--voice-expansion-only", StringComparer.Ordinal)) return;

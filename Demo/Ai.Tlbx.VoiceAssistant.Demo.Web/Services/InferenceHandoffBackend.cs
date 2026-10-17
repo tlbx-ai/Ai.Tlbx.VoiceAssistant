@@ -25,9 +25,26 @@ public sealed class InferenceHandoffBackend(IAiInferenceClient client)
     private int _consumed;
     public Action<string>? OnResult { get; set; }
     public Action<string>? OnProgress { get; set; }
+    public Action<Ai.Tlbx.VoiceAssistant.Models.ChatMessage>? OnMessage { get; set; }
+    private readonly object _transcriptLock = new();
+    private readonly JsonArray _latestTranscript = new();
+
+    public void ResetTranscript() { lock (_transcriptLock) _latestTranscript.Clear(); }
+    public void ObserveTranscript(OpenAiLiveTranscriptDelta delta)
+    {
+        lock (_transcriptLock) _latestTranscript.Add(new JsonObject {
+            ["role"] = delta.Role, ["text"] = delta.Delta, ["start_ms"] = delta.StartMs, ["end_ms"] = delta.EndMs });
+    }
+
+    private JsonArray LatestTranscript(OpenAiLiveBackendContext context)
+    {
+        lock (_transcriptLock) return _latestTranscript.Count >= context.Transcript.Count
+            ? (JsonArray)_latestTranscript.DeepClone() : (JsonArray)context.Transcript.DeepClone();
+    }
 
     public async Task<string> RunAsync(OpenAiLiveBackendContext context, CancellationToken cancellationToken)
     {
+        context = context with { Transcript = LatestTranscript(context) };
         if (_session != context.SessionId)
         {
             _session = context.SessionId;
@@ -61,14 +78,24 @@ public sealed class InferenceHandoffBackend(IAiInferenceClient client)
         }, definitions, async call => {
             cancellationToken.ThrowIfCancellationRequested();
             var tool = context.Tools.SingleOrDefault(t => t.Name == call.Name);
+            OnMessage?.Invoke(new($"Calling tool: {call.Name}\nArguments: {call.Arguments}", "assistant", call.Id, call.Name));
             OnProgress?.Invoke($"Tool {call.Name}: gestartet");
             var output = tool == null ? "Unknown tool" : await tool.ExecuteAsync(call.Arguments);
+            OnMessage?.Invoke(new(output, "tool", call.Id, call.Name));
             OnProgress?.Invoke($"Tool {call.Name}: beendet");
             return new ToolCallResult { ToolCallId = call.Id, Result = output, IsError = tool == null };
         }, maxIterations: 12, ct: cancellationToken);
         _history.Clear();
         _history.AddRange(result.Messages);
         _history.Add(new Message { Role = ChatRole.Assistant, Content = result.Content });
+        // Live can delegate before the caller finishes speaking. Retain completed tools and
+        // consume later user fragments before publishing an answer to that partial request.
+        var latest = LatestTranscript(context);
+        if (latest.Skip(_consumed).Any(n => n?["role"]?.GetValue<string>() == "user"))
+        {
+            OnProgress?.Invoke("Weitere Frageteile eingetroffen; Analyse mit vorhandenem Ergebnis fortsetzen");
+            return await RunAsync(context with { Transcript = latest }, cancellationToken);
+        }
         OnResult?.Invoke(result.Content);
         OnProgress?.Invoke("Vollständiges Ergebnis liegt vor; Sprachausgabe vorbereiten");
         // A concise verified result can go straight to Live; preserve long output in history/UI.

@@ -8,7 +8,16 @@
     {
         @foreach (var message in Messages ?? VoiceAssistant.ChatHistory)
         {
-            <div class="mb-3">
+            <div class="mb-3" data-chat-role="@message.Role" data-tool-name="@message.ToolName" data-operation-id="@message.ToolCallId">
+                @if (message.Role == "activity")
+                {
+                    <div class="flex gap-2 text-xs text-gray-500 border-l-2 border-gray-200 pl-3">
+                        <time>@message.Timestamp.ToLocalTime().ToString("HH:mm:ss")</time>
+                        <span class="break-words">@message.Content</span>
+                    </div>
+                }
+                else
+                {
                 <div class="@(GetMessageAlignment(message))">
                     <!-- Role label -->
                     <div class="text-xs text-gray-500 mb-1">
@@ -29,7 +38,14 @@
                                         <span class="text-purple-500 ml-1">(Response)</span>
                                     </span>
                                 </div>
-                                @if (ShowDebugToolCalls && !string.IsNullOrWhiteSpace(message.Content))
+                                @if (InspectableToolCalls && !string.IsNullOrWhiteSpace(message.Content))
+                                {
+                                    <details class="mt-2" open="@ShowDebugToolCalls">
+                                        <summary class="cursor-pointer text-xs text-purple-700">Vollständiges Tool-Ergebnis (@message.Content.Length Zeichen)</summary>
+                                        <pre class="mt-2 text-xs max-h-80 overflow-auto whitespace-pre-wrap break-words font-mono">@(IsJsonContent(message.Content) ? FormatJson(message.Content) : message.Content)</pre>
+                                    </details>
+                                }
+                                else if (ShowDebugToolCalls && !string.IsNullOrWhiteSpace(message.Content))
                                 {
                                     @if (IsJsonContent(message.Content))
                                     {
@@ -57,7 +73,7 @@
                                         <span class="text-amber-500 ml-1">(Request)</span>
                                     </span>
                                 </div>
-                                @if (ShowDebugToolCalls)
+                                @if (ShowDebugToolCalls || InspectableToolCalls)
                                 {
                                     var (toolDescription, toolArgs) = ParseToolCallMessage(message.Content);
                                     @if (!string.IsNullOrEmpty(toolArgs))
@@ -79,6 +95,7 @@
                         @message.Timestamp.ToLocalTime().ToString("HH:mm:ss")
                     </div>
                 </div>
+                }
             </div>
         }
     }
@@ -91,6 +108,8 @@
     public bool ShowDebugToolCalls { get; set; }
     
     [Parameter] public bool ShowToolCalls { get; set; } = true;
+    /// <summary>Expose complete tool results in expandable chat entries without requiring debug mode.</summary>
+    [Parameter] public bool InspectableToolCalls { get; set; }
     /// <summary>Optional application-owned transcript display, including continuous Live fragments.</summary>
     [Parameter] public IReadOnlyList<ChatMessage>? Messages { get; set; }
     
@@ -125,6 +144,8 @@
             ChatMessage.UserRole => "You",
             ChatMessage.AssistantRole => "Assistant",
             ChatMessage.ToolRole => "Tool Response",
+            "agent" => "Agent · Vollständiges Ergebnis",
+            "activity" => "Agent-Fortschritt",
             _ => message.Role
         };
     }

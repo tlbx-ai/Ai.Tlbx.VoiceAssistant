@@ -13,6 +13,7 @@
 @using Ai.Tlbx.VoiceAssistant.Demo.Web.Services
 @using Ai.Tlbx.VoiceAssistant.Models
 @using Ai.Tlbx.VoiceAssistant.Interfaces
+@using Ai.Tlbx.VoiceAssistant.Managers
 @using System.Diagnostics
 @using System.Threading
 @using System.Text.Json
@@ -24,10 +25,10 @@
 @inject IVoiceProviderFactory ProviderFactory
 @inject IAudioHardwareAccess HardwareAccess
 @inject Action<LogLevel, string> LogAction
+@inject InferenceHandoffBackend HandoffBackend
 @implements IAsyncDisposable
 
 <PageTitle>AI Voice Chat</PageTitle>
-<p><a href="/agent-handoff">Agent-Handoff: GPT-Live + GPT-6.1 Sol</a></p>
 
 <CascadingValue Value="voiceAssistant">
     <CascadingValue Value="sessionSettings">
@@ -112,10 +113,15 @@
                                             <label for="live-backend-mode" class="block text-xs font-medium text-gray-600 mb-1">GPT-Live backend</label>
                                             <select id="live-backend-mode" class="w-full p-2 border border-gray-300 rounded-md text-sm" @bind="_liveBackendMode"
                                                     disabled="@((voiceAssistant?.IsConnecting ?? false) || (voiceAssistant?.IsRecording ?? false))">
+                                                <option value="agent">Agent-Handoff · GPT-6.1 Sol (Ai.Tlbx.Inference)</option>
                                                 <option value="client">Application Responses backend — full tool results</option>
                                                 <option value="managed">Live-managed Responses — limited tool-result buffer</option>
                                             </select>
-                                            <p class="mt-1 text-xs text-gray-500">The application backend reads complete tool results and returns a short spoken answer. Select the managed backend to compare its buffer limit.</p>
+                                            <p class="mt-1 text-xs text-gray-500">@(IsAgentHandoff ? "Sprich weiter, während der Agent arbeitet. Fortschritt, Tool-Aufrufe und vollständige Ergebnisse erscheinen im Chat. Die Projektakte und der Katalog enthalten synthetische Demo-Daten." : "The application backend reads complete tool results and returns a short spoken answer. Select the managed backend to compare its buffer limit.")</p>
+                                            @if (IsAgentHandoff)
+                                            {
+                                                <button id="handoff-cancel" class="mt-2 text-sm text-blue-700 underline" @onclick="CancelAgentWork" disabled="@(!(voiceAssistant?.IsRecording ?? false))">Agent-Aufträge abbrechen</button>
+                                            }
                                         </div>
                                     }
 
@@ -309,14 +315,14 @@
                                     }
                                     else
                                     {
-                                        <ChatWidget ShowDebugToolCalls="@showDebugMode" ShowToolCalls="true" Messages="@(IsLiveModel ? _liveMessages : null)" />
+                                        <ChatWidget ShowDebugToolCalls="@showDebugMode" ShowToolCalls="true" InspectableToolCalls="@IsAgentHandoff" Messages="@(IsLiveModel ? _liveMessages : null)" />
                                     }
                                 </div>
 
                                 <div class="px-3 py-2 border-t border-gray-200 bg-white">
                                     @if (IsLiveModel)
                                     {
-                                        <p id="live-session-usage" class="text-xs text-gray-500 mb-1">Live transcript · Voice: @voiceAssistant?.TotalProviderSessionDuration.TotalSeconds s · Backend: @voiceAssistant?.TotalTokensUsed tokens · Final usage: @_liveProvider?.FinalUsageConfirmed</p>
+                                        <p id="live-session-usage" data-final-usage="@(_liveProvider?.FinalUsageConfirmed == true ? "true" : "false")" class="text-xs text-gray-500 mb-1">Live transcript · Voice: @voiceAssistant?.TotalProviderSessionDuration.TotalSeconds.ToString("F1") s · Backend: @voiceAssistant?.TotalTokensUsed tokens · Modellkosten: $@LiveCost.ToString("F5") @(LiveCostIncomplete ? "(unvollständige Schätzung)" : "(Schätzung)") · Final usage: @_liveProvider?.FinalUsageConfirmed</p>
                                     }
                                     @if (voiceAssistant?.IsRecording ?? false)
                                     {
@@ -599,10 +605,14 @@
     private static List<ModelOption> GetOpenAiModelOptions() => [new("gpt-live-1", "GPT-Live 1 (gpt-live-1)"), .. GetEnumOptions<OpenAiRealtimeModel>(includeObsolete: true)];
     private bool IsLiveModel => _selectedProviderString == "OpenAI" && _currentModelString == "gpt-live-1";
     private string _liveBackendMode = "client";
+    private bool IsAgentHandoff => IsLiveModel && _liveBackendMode == "agent";
+    private IEnumerable<VoiceCostEstimate> LiveEstimates => (voiceAssistant?.UsageReports ?? Array.Empty<UsageReport>()).Select(r => VoiceCostCalculator.Estimate(r, VoiceCostCalculator.GetRates(r)));
+    private decimal LiveCost => LiveEstimates.Sum(e => e.KnownCostUsd);
+    private bool LiveCostIncomplete => LiveEstimates.Any(e => !e.IsComplete);
     private OpenAiDirectLiveVoiceProvider? _liveProvider;
     private readonly List<ChatMessage> _liveMessages = new();
     private readonly HashSet<string> _liveDisplayedCalls = new();
-    private string? _liveTranscriptRole;
+    private readonly Dictionary<string, (int Index, double EndMs)> _liveTranscriptEntries = new();
     private bool _stopping;
     private string? _sessionError;
     private static readonly List<ModelOption> _thinkingLevels = GetEnumOptions<SessionThinkingLevel>();
@@ -632,7 +642,7 @@
         if (IsConversationSupport) return "OpenAI Realtime hört zu und liefert ausschließlich Texthinweise.";
         return _selectedProviderString switch
         {
-            "OpenAI" when IsLiveModel => "Continuous GPT-Live conversation over WebRTC. Enabled tools run through the Responses backend (gpt-6-luna).",
+            "OpenAI" when IsLiveModel => "Continuous GPT-Live conversation over WebRTC. Select Agent-Handoff to delegate complex work to GPT-6.1 Sol.",
             "OpenAI" => "Choose GPT-Live 1 for continuous conversation, or a Realtime model for turn-based voice.",
             "xAI" => "Latest currently uses Grok Voice 3.0; pin GrokVoice30 for deterministic production rollout.",
             _ => "Obsolete models stay selectable here for manual compatibility checks."
@@ -729,9 +739,9 @@
 
     private void RecreateVoiceAssistant()
     {
-        if (_liveProvider != null) { _liveProvider.OnTranscriptDelta = null; _liveProvider.OnEventReceived = null; }
+        DetachHandoffCallbacks();
+        if (_liveProvider != null) { _liveProvider.OnTranscriptDelta = null; _liveProvider.OnEventReceived = null; _liveProvider.OnBackendActivity = null; }
         _liveProvider = null;
-        _liveTranscriptRole = null;
         // Dispose old instance if exists
         if (voiceAssistant != null)
         {
@@ -765,6 +775,10 @@
         if (provider is OpenAiDirectLiveVoiceProvider live)
         {
             _liveProvider = live;
+            live.OnBackendActivity = activity =>
+            {
+                if (IsAgentHandoff) AddLiveChatMessage(new ChatMessage($"{activity.State}{(activity.Detail == null ? "" : " · " + activity.Detail)}", "activity", activity.DelegationId));
+            };
             live.OnEventReceived = envelope =>
             {
                 if (envelope["type"]?.GetValue<string>() != "response.event" || envelope["event"] is not JsonObject inner ||
@@ -776,20 +790,30 @@
                     if (!_liveDisplayedCalls.Add(callId)) return;
                     var name = item["name"]!.GetValue<string>();
                     _liveMessages.Add(new ChatMessage($"Calling tool: {name}\nArguments: {item["arguments"]!.GetValue<string>()}", ChatMessage.AssistantRole, callId, name));
-                    _liveTranscriptRole = null;
                     StateHasChanged();
                 });
             };
-            live.OnTranscriptDelta = delta => _ = InvokeAsync(() =>
+            live.OnTranscriptDelta = delta =>
             {
-                // Group fragments for display only; Live does not signal authoritative turn completion.
-                if (_liveTranscriptRole == delta.Role && _liveMessages.Count > 0 && _liveMessages[^1].Role == delta.Role)
-                    _liveMessages[^1] = new ChatMessage(_liveMessages[^1].Content + delta.Delta, delta.Role);
-                else _liveMessages.Add(new ChatMessage(delta.Delta, delta.Role));
-                _liveTranscriptRole = delta.Role;
-                StateHasChanged();
-                _ = ScrollToBottom();
-            });
+                if (IsAgentHandoff) HandoffBackend.ObserveTranscript(delta);
+                _ = InvokeAsync(() =>
+                {
+                    // Display grouping only: concurrent activity must not split a speaker into syllables.
+                    if (_liveTranscriptEntries.TryGetValue(delta.Role, out var entry) &&
+                        delta.StartMs - entry.EndMs <= 1500 && entry.Index < _liveMessages.Count)
+                    {
+                        _liveMessages[entry.Index] = new ChatMessage(_liveMessages[entry.Index].Content + delta.Delta, delta.Role);
+                        _liveTranscriptEntries[delta.Role] = (entry.Index, delta.EndMs);
+                    }
+                    else
+                    {
+                        _liveTranscriptEntries[delta.Role] = (_liveMessages.Count, delta.EndMs);
+                        _liveMessages.Add(new ChatMessage(delta.Delta, delta.Role));
+                    }
+                    StateHasChanged();
+                    _ = ScrollToBottom();
+                });
+            };
         }
 
         // Wire up callbacks
@@ -1284,7 +1308,7 @@
     private void OnMessageAdded(ChatMessage message)
     {
         InvokeAsync(async () => {
-            if (IsLiveModel) { _liveMessages.Add(message); _liveTranscriptRole = null; }
+            if (IsLiveModel) _liveMessages.Add(message);
             if (IsConversationSupport)
             {
                 _supportMessages.Add(message);
@@ -1375,8 +1399,16 @@
 
             if (IsLiveModel)
             {
-                _liveTranscriptRole = null;
                 _liveDisplayedCalls.Clear();
+                _liveTranscriptEntries.Clear();
+                HandoffBackend.ResetTranscript();
+                DetachHandoffCallbacks();
+                if (IsAgentHandoff)
+                {
+                    HandoffBackend.OnProgress = text => AddLiveChatMessage(new ChatMessage(text, "activity"));
+                    HandoffBackend.OnMessage = AddLiveChatMessage;
+                    HandoffBackend.OnResult = text => AddLiveChatMessage(new ChatMessage(text, "agent"));
+                }
                 var backend = new JsonObject
                 {
                     ["model"] = "gpt-6-luna",
@@ -1388,10 +1420,13 @@
                 {
                     ModelId = "gpt-live-1",
                     Voice = _currentVoiceString.ToLowerInvariant(),
-                    Instructions = instructions + " Delegiere Aufgaben, die die aktivierten Werkzeuge benötigen, an dein Backend. Bestätige Aktionen erst nach dem geprüften Ergebnis.",
+                    Instructions = instructions + " Delegiere Aufgaben, die die aktivierten Werkzeuge benötigen, an dein Backend. Bestätige Aktionen erst nach dem geprüften Ergebnis." +
+                        (IsAgentHandoff ? " Verwende für Dokumentfakten und Berechnungen ausschließlich die geprüften Agent-Ergebnisse. Erfinde keine fehlenden Zahlen oder Fakten. Falls eine Teilfrage noch unbeantwortet ist, delegiere sie erneut. Sage zu Beginn, dass du ein KI-Assistent bist." : ""),
                     InitialHistory = _liveMessages.Where(m => m.ToolCallId == null && m.Role is ChatMessage.UserRole or ChatMessage.AssistantRole).TakeLast(128).ToList(),
                     Responses = _liveBackendMode == "managed" ? backend : null,
-                    ClientBackend = _liveBackendMode == "client" ? new OpenAiLiveClientBackendOptions { Responses = backend } : null,
+                    ClientBackend = IsAgentHandoff
+                        ? new OpenAiLiveClientBackendOptions { Handler = HandoffBackend.RunAsync, Timeout = TimeSpan.FromMinutes(5) }
+                        : _liveBackendMode == "client" ? new OpenAiLiveClientBackendOptions { Responses = backend } : null,
                     Tools = enabledTools.ToList()
                 };
             }
@@ -1550,10 +1585,26 @@
         _supportMessages.Clear();
         _supportTextDelta = "";
         _liveMessages.Clear();
+        _liveTranscriptEntries.Clear();
         _liveDisplayedCalls.Clear();
-        _liveTranscriptRole = null;
         voiceAssistant?.ClearChatHistory();
         InvokeAsync(StateHasChanged);
+    }
+
+    private void AddLiveChatMessage(ChatMessage message) => _ = InvokeAsync(() =>
+    {
+        _liveMessages.Add(message);
+        StateHasChanged();
+        _ = ScrollToBottom();
+    });
+
+    private void CancelAgentWork() => _liveProvider?.CancelClientBackend();
+
+    private void DetachHandoffCallbacks()
+    {
+        HandoffBackend.OnProgress = null;
+        HandoffBackend.OnMessage = null;
+        HandoffBackend.OnResult = null;
     }
 
     private async Task TestMicrophone()
@@ -1858,7 +1909,8 @@
 
     public async ValueTask DisposeAsync()
     {
-        if (_liveProvider != null) { _liveProvider.OnTranscriptDelta = null; _liveProvider.OnEventReceived = null; }
+        DetachHandoffCallbacks();
+        if (_liveProvider != null) { _liveProvider.OnTranscriptDelta = null; _liveProvider.OnEventReceived = null; _liveProvider.OnBackendActivity = null; }
         await StopPttLiveTranscriptionAsync();
 
         if (voiceAssistant != null)
@@ -1881,7 +1933,14 @@
             await JS.InvokeVoidAsync("eval", @"
                 window.scrollToBottom = function(element) {
                     if (element) {
-                        element.scrollTop = element.scrollHeight;
+                        if (!element.dataset.followBound) {
+                            element.dataset.followBound = 'true';
+                            element.dataset.followTail = 'true';
+                            element.addEventListener('scroll', function() {
+                                element.dataset.followTail = element.scrollHeight - element.scrollTop - element.clientHeight < 60 ? 'true' : 'false';
+                            });
+                        }
+                        if (element.dataset.followTail !== 'false') element.scrollTop = element.scrollHeight;
                     }
                 }
             ");
