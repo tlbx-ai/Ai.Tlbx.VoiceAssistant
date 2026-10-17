@@ -75,7 +75,13 @@ public sealed partial class OpenAiLiveProvider
                                 using var linked = CancellationTokenSource.CreateLinkedTokenSource(token, work.Token);
                                 await AppendCommentaryAsync(progress, delegation.Id, linked.Token).ConfigureAwait(false);
                             },
-                            usage => OnUsageReceived?.Invoke(usage));
+                            usage => OnUsageReceived?.Invoke(usage))
+                        {
+                            ReportContextAsync = async (content, token) => {
+                                using var linked = CancellationTokenSource.CreateLinkedTokenSource(token, work.Token);
+                                await AppendThinkingAsync(content, delegation.Id, linked.Token).ConfigureAwait(false);
+                            }
+                        };
                         var answer = options.Handler != null
                             ? await options.Handler(context, work.Token).ConfigureAwait(false)
                             : await backend!.RunAsync(transcript, work.Token).ConfigureAwait(false);

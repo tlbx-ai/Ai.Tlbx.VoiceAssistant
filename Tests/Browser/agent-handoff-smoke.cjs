@@ -15,6 +15,7 @@ const { chromium } = require(process.env.PLAYWRIGHT_MODULE_PATH || 'playwright')
     page.on('pageerror', e => errors.push(e.message));
     page.on('console', e => { if (e.type() === 'error') errors.push(e.text() + ' (' + e.location().url + ')'); });
     const live = process.env.HANDOFF_LIVE_SMOKE === '1';
+    const poem = process.env.HANDOFF_POEM_SMOKE === '1';
     try {
         await page.goto(process.env.HANDOFF_URL || 'https://100.91.240.65:7087/', { waitUntil: 'domcontentloaded' });
         await page.waitForTimeout(1500); // Allow the initial server-interactive circuit to attach.
@@ -22,6 +23,19 @@ const { chromium } = require(process.env.PLAYWRIGHT_MODULE_PATH || 'playwright')
         await page.locator('#voice-model').selectOption('gpt-live-1');
         await page.locator('#live-backend-mode').selectOption('agent');
         await page.waitForSelector('#handoff-cancel');
+        await page.locator('#live-delegation-policy').selectOption('explicit');
+        if (!(await page.locator('#live-delegation-policy').inputValue() === 'explicit')) throw new Error('Delegation policy cannot be selected');
+        await page.locator('#live-delegation-policy').selectOption(process.env.HANDOFF_POLICY || 'balanced');
+        if (process.env.HANDOFF_FORWARD_CONTEXT !== '0') await page.locator('#live-stream-context').check();
+        await page.getByText('Normal Mode', { exact: true }).click();
+        await page.waitForSelector('#handoff-debug');
+        await page.evaluate(() => {
+            window.__sawBackendStreaming = false;
+            new MutationObserver(() => {
+                if ([...document.querySelectorAll('[data-backend-call][data-state=running]')].some(e => Number(e.dataset.streamLength) > 0))
+                    window.__sawBackendStreaming = true;
+            }).observe(document.querySelector('#backend-debug-calls'), { attributes: true, childList: true, subtree: true });
+        });
         if (await page.locator('a[href="/agent-handoff"]').count()) throw new Error('Dedicated handoff link remains');
         await page.waitForTimeout(1500);
         if (await page.locator('#blazor-error-ui').isVisible()) throw new Error('Blazor circuit failed: ' + errors.join('; '));
@@ -71,12 +85,29 @@ const { chromium } = require(process.env.PLAYWRIGHT_MODULE_PATH || 'playwright')
             await page.getByRole('button', { name: 'Start', exact: true }).click();
             await page.waitForFunction(() => [...document.querySelectorAll('button')].some(b => b.textContent.trim() === 'Stop' && !b.disabled), null, { timeout: 40000 });
             await page.evaluate(wav => window.__handoffFeed(wav), request);
+            if (poem) {
+                await page.waitForFunction(() => [...document.querySelectorAll('[data-chat-role=agent]')].some(e => e.textContent.length > 1500), null, { timeout: 180000 });
+                await page.waitForFunction(() => [...document.querySelectorAll('[data-chat-role=activity]')].some(e => /completed/.test(e.textContent)), null, { timeout: 60000 });
+                await page.waitForTimeout(7000);
+                const firstWork = await page.locator('[data-chat-role=agent]').first().innerText();
+                const initialSpeech = (await page.locator('[data-chat-role=assistant]:not([data-tool-name])').allInnerTexts()).join('\n');
+                if (/hier ist es|hier kommt.{0,30}Gedicht|ich lese.{0,20}vor/i.test(initialSpeech)) throw new Error('Live started an unrequested recitation instead of the completion handoff');
+                if (/Sub.?Agent.{0,35}(nicht aufrufen|nicht eingesetzt|kann ich.*nicht)/i.test(firstWork)) throw new Error('Backend denies its existing delegation');
+                await page.screenshot({ path: path.join(artifacts, 'poem-created.png'), fullPage: true });
+                const prior = await page.locator('[data-chat-role=agent]').count();
+                await page.evaluate(wav => window.__handoffFeed(wav), followup);
+                await page.waitForFunction(count => document.querySelectorAll('[data-chat-role=agent]').length > count, prior, { timeout: 120000 });
+                const assessment = await page.locator('[data-chat-role=agent]').last().innerText();
+                if (/nicht vollständig|nur der Anfang|nicht fertig|kein vollständiges|liegt nur.*Anfang|ohne den Text|nicht den vollständigen|sehe.{0,80}nur.{0,40}Fertigmeldung|kann.{0,80}nicht.{0,40}(beurteilen|überprüfen)/i.test(assessment)) throw new Error('Follow-up lost the completed poem: ' + assessment);
+                await page.waitForFunction(() => [...document.querySelectorAll('[data-chat-role=activity]')].filter(e => /completed/.test(e.textContent)).length >= 2, null, { timeout: 60000 });
+                await page.waitForTimeout(7000);
+            } else {
             await page.waitForFunction(() => /ZEDER.?8426/i.test([...document.querySelectorAll('[data-chat-role=agent]')].map(e => e.innerText).join('\n')) &&
                 [...document.querySelectorAll('[data-chat-role=agent]')].map(e => e.innerText).join('\n').includes('863'), null, { timeout: 120000 });
             await page.waitForFunction(() => /8426/.test([...document.querySelectorAll('[data-chat-role=assistant]:not([data-tool-name])')].map(e => e.innerText).join('\n')) &&
                 /863/.test([...document.querySelectorAll('[data-chat-role=assistant]:not([data-tool-name])')].map(e => e.innerText).join('\n')), null, { timeout: 60000 });
             const toolResponse = page.locator('[data-chat-role=tool][data-tool-name=get_large_project_dossier]');
-            await toolResponse.locator('summary').click();
+            if (!(await toolResponse.locator('details').getAttribute('open') !== null)) await toolResponse.locator('summary').click();
             const completeToolOutput = await toolResponse.locator('pre').innerText();
             if (completeToolOutput.length < 40000 || !/ZEDER.?8426/i.test(completeToolOutput))
                 throw new Error('Complete dossier tool output is not inspectable in the normal chat');
@@ -89,25 +120,33 @@ const { chromium } = require(process.env.PLAYWRIGHT_MODULE_PATH || 'playwright')
             await page.evaluate(wav => window.__handoffFeed(wav), followup);
             await page.waitForFunction(() => ([...document.querySelectorAll('[data-chat-role=activity]')].map(e => e.innerText).join('\n').match(/completed/g) || []).length >= 2 &&
                 /836/.test([...document.querySelectorAll('[data-chat-role=agent]')].map(e => e.innerText).join('\n')), null, { timeout: 120000 });
-            await page.waitForFunction(previous => /836/.test([...document.querySelectorAll('[data-chat-role=assistant]:not([data-tool-name])')].map(e => e.innerText).join('\n').slice(previous.length)), before, { timeout: 60000 });
+            await page.waitForFunction(previous => /836|achthundertsechsunddreißig/i.test([...document.querySelectorAll('[data-chat-role=assistant]:not([data-tool-name])')].map(e => e.innerText).join('\n').slice(previous.length)), before, { timeout: 60000 });
+            }
             await page.getByRole('button', { name: 'Stop', exact: true }).click();
             await page.waitForFunction(() => [...document.querySelectorAll('button')].some(b => b.textContent.trim() === 'Start' && !b.disabled), null, { timeout: 20000 });
             if (await page.locator('#live-session-usage').getAttribute('data-final-usage') !== 'true')
                 throw new Error('Session stopped without provider-confirmed final usage');
             const result = await page.locator('[data-chat-role=agent]').allInnerTexts().then(v => v.join('\n'));
+            if (!(await page.evaluate(() => window.__sawBackendStreaming))) throw new Error('Backend text was not visible before completion');
             fs.writeFileSync(path.join(artifacts, 'acceptance.json'), JSON.stringify({
                 usage: await page.locator('#live-session-usage').innerText(),
                 activity: await page.locator('[data-chat-role=activity]').allInnerTexts().then(v => v.join('\n')),
                 spoken: await page.locator('[data-chat-role=assistant]:not([data-tool-name])').allInnerTexts().then(v => v.join('\n')),
-                normalChatToolOutputInspectable: true,
+                normalChatToolOutputInspectable: !poem,
                 normalChatProgressVisible: await page.locator('[data-chat-role=activity]').count() > 0,
-                fullResultHasTailFacts: /ZEDER.?8426/i.test(firstResult) && firstResult.includes('863'),
-                followupResultHas836: result.includes('836'), finalUsageConfirmed: true, errors
+                fullResultHasTailFacts: poem ? null : /ZEDER.?8426/i.test(result) && result.includes('863'),
+                followupResultHas836: poem ? null : result.includes('836'),
+                poemFollowupRetainedFullWork: poem ? !/nicht vollständig|nur der Anfang|kein vollständiges|ohne den Text|nicht den vollständigen|sehe.{0,80}nur.{0,40}Fertigmeldung|kann.{0,80}nicht.{0,40}(beurteilen|überprüfen)/i.test(await page.locator('[data-chat-role=agent]').last().innerText()) : null,
+                backendTextObservedBeforeCompletion: await page.evaluate(() => window.__sawBackendStreaming),
+                backendCalls: await page.locator('#backend-debug-calls').innerText(),
+                voiceDebug: await page.locator('#voice-debug-events').textContent(),
+                agentResults: await page.locator('[data-chat-role=agent]').allInnerTexts(),
+                finalUsageConfirmed: true, errors
             }, null, 2));
             await page.screenshot({ path: path.join(artifacts, 'live-result.png'), fullPage: true });
         }
         if (errors.length) throw new Error(errors.join('; '));
-        console.log(live ? 'Agent handoff: real speech, complete dossier tail facts, spoken result, follow-up and finalization passed.' : 'Agent handoff: direct Blazor circuit, desktop and mobile layout passed.');
+        console.log(live ? (poem ? 'Agent handoff: streamed poem, retained complete work, follow-up and finalization passed.' : 'Agent handoff: real speech, complete dossier tail facts, spoken result, follow-up and finalization passed.') : 'Agent handoff: direct Blazor circuit, desktop and mobile layout passed.');
     } catch (error) {
         const transport = await page.evaluate(async () => {
             const peers = [];

@@ -120,6 +120,18 @@
                                             <p class="mt-1 text-xs text-gray-500">@(IsAgentHandoff ? "Sprich weiter, während der Agent arbeitet. Fortschritt, Tool-Aufrufe und vollständige Ergebnisse erscheinen im Chat. Die Projektakte und der Katalog enthalten synthetische Demo-Daten." : "The application backend reads complete tool results and returns a short spoken answer. Select the managed backend to compare its buffer limit.")</p>
                                             @if (IsAgentHandoff)
                                             {
+                                                <label for="live-delegation-policy" class="block text-xs font-medium mt-2 mb-1">Delegationsstrategie</label>
+                                                <select id="live-delegation-policy" class="w-full p-2 border border-gray-300 rounded-md text-sm" @bind="_delegationPolicy" disabled="@_isBusy">
+                                                    <option value="balanced">Ausgewogen · Gespräch lokal, komplexe Arbeit delegieren</option>
+                                                    <option value="delegate">Fast alles delegieren · Live führt das Gespräch</option>
+                                                    <option value="explicit">Gezielt · bei explizitem Auftrag oder Werkzeugbedarf</option>
+                                                </select>
+                                                <p class="mt-1 text-xs text-gray-500">Steuert die Live-Instruktionen; keine numerische API-Schwelle.</p>
+                                                <label class="flex gap-2 text-xs text-gray-600 mt-2">
+                                                    <input id="live-stream-context" type="checkbox" @bind="_forwardDraftContext" disabled="@_isBusy" />
+                                                    Kurze Entwurfsabsätze als Kontext an Live streamen
+                                                </label>
+                                                <p class="mt-1 text-xs text-gray-500">Live soll diese vorläufigen Abschnitte nicht vorlesen, kann sie aber in späteren Antworten verwenden. Die vollständige Ausgabe wird immer in die Debug-Ansicht gestreamt.</p>
                                                 <button id="handoff-cancel" class="mt-2 text-sm text-blue-700 underline" @onclick="CancelAgentWork" disabled="@(!(voiceAssistant?.IsRecording ?? false))">Agent-Aufträge abbrechen</button>
                                             }
                                         </div>
@@ -256,7 +268,7 @@
                                             Clear Chat
                                         </button>
 
-                                        <MicTestWidget OnStartTest="TestMicrophone" Loading="(voiceAssistant?.IsMicrophoneTesting ?? false) || (voiceAssistant?.IsConnecting ?? false) || (voiceAssistant?.IsRecording ?? false)" />
+                                        <MicTestWidget OnStartTest="TestMicrophone" Loading="voiceAssistant?.IsMicrophoneTesting ?? false" Disabled="_isBusy" />
                                     </div>
 
                                     <!-- Status -->
@@ -340,6 +352,10 @@
                                     }
                                 </div>
                             </div>
+                            @if (showDebugMode && IsAgentHandoff)
+                            {
+                                <HandoffDebugPanel LiveInstructions="@(string.IsNullOrEmpty(_sessionLiveInstructions) ? ActiveLiveInstructions : _sessionLiveInstructions)" Calls="@_handoffDebugCalls" VoiceEvents="@_voiceDebugEvents" />
+                            }
                         </div>
                     </div>
                 }
@@ -606,6 +622,29 @@
     private bool IsLiveModel => _selectedProviderString == "OpenAI" && _currentModelString == "gpt-live-1";
     private string _liveBackendMode = "client";
     private bool IsAgentHandoff => IsLiveModel && _liveBackendMode == "agent";
+    private string _delegationPolicy = "balanced";
+    private bool _forwardDraftContext;
+    private string _sessionLiveInstructions = "";
+    private readonly List<HandoffDebugCall> _handoffDebugCalls = new();
+    private readonly List<HandoffTraceEvent> _voiceDebugEvents = new();
+    private string ActiveLiveInstructions => "Sprich natürlich und knapp in der Sprache des Nutzers, im Zweifel Deutsch. Sage zu Beginn, dass du ein KI-Assistent bist. " +
+        "Der delegierte Agent ist GPT-6.1 Sol und führt seine Arbeit bereits über die Anwendung aus. " +
+        "Erstelle keine Ersatzfassung eines Agent-Ergebnisses. Eine kurze Sprachübergabe ist nicht das vollständige Werk. " +
+        "Eine Bitte, ein Werk oder einen langen Text zu erstellen, ist kein Vorleseauftrag. Lies solche Ergebnisse nur auf ausdrücklichen Wunsch vor. " +
+        "Wenn der vollständige Werktext nicht in deinem Kontext liegt, rezitiere, rekonstruiere oder erfinde keine Teile davon. Eine Fertigstellungsnachricht beantwortest du nur mit deren Fakten und dem Verweis auf den vollständigen Text im Chat. " +
+        "Nenne Aufgaben erst nach der Agent-Bestätigung abgeschlossen. Nutze für Dokumentfakten und Berechnungen nur geprüfte Agent-Ergebnisse. " +
+        "Respektiere Wünsche, ein Ergebnis nicht vorzulesen. Eine verlangte Qualitätsbewertung ist eine fachliche Aufgabe: lass den Agenten sein gespeichertes vollständiges Ergebnis unmittelbar prüfen. Biete diese Prüfung nicht nur an und verlange dafür keine erneute Zustimmung. " +
+        "Beschreibe nur tatsächlich gestartete Agent-Aufträge und bestätigte Fortschritte; erfinde keine zusätzliche Beauftragung. " +
+        "Delegation policy:\nBackend tools:\n- Writing, careful reasoning, analysis, retained complete results, and enabled application tools.\n" +
+        "Delegate to the backend when:\n" + (_delegationPolicy switch {
+            "delegate" => "- The user requests any substantive answer, composition, analysis, calculation or factual task.\n",
+            "explicit" => "- The user explicitly asks the agent/sub-agent to work, requests a tool-backed fact or action, or asks about a retained full agent result.\n",
+            _ => "- The task needs tools, calculation, careful reasoning, a longer composition, document analysis or evaluation of a previous full agent result.\n"
+        }) + "- The user requests a review, critique or quality assessment of completed agent work: start the review directly rather than offering it for later.\n" +
+        "- A correction changes work already in progress.\nDo not delegate to the backend when:\n" +
+        "- Greeting, listening confirmation, clarification, or repeating a short verified result already supplied.\n" +
+        (_delegationPolicy == "explicit" ? "- A simple request can be answered conversationally without tools and does not explicitly request an agent.\n" : "") +
+        "Delegate before answering anything that depends on backend work. Do not guess results while waiting.";
     private IEnumerable<VoiceCostEstimate> LiveEstimates => (voiceAssistant?.UsageReports ?? Array.Empty<UsageReport>()).Select(r => VoiceCostCalculator.Estimate(r, VoiceCostCalculator.GetRates(r)));
     private decimal LiveCost => LiveEstimates.Sum(e => e.KnownCostUsd);
     private bool LiveCostIncomplete => LiveEstimates.Any(e => !e.IsComplete);
@@ -781,6 +820,10 @@
             };
             live.OnEventReceived = envelope =>
             {
+                var eventType = envelope["type"]?.GetValue<string>() ?? "unknown";
+                if (!eventType.Contains("audio") && !eventType.Contains("transcript") && eventType != "response.event")
+                    AddVoiceDebug(new(envelope["delegation"]?["id"]?.GetValue<string>() ?? envelope["client_event_id"]?.GetValue<string>() ?? "session",
+                        "Live", eventType, envelope["delegation"]?.ToJsonString() ?? envelope["error"]?.ToJsonString()));
                 if (envelope["type"]?.GetValue<string>() != "response.event" || envelope["event"] is not JsonObject inner ||
                     inner["type"]?.GetValue<string>() != "response.output_item.done" || inner["item"] is not JsonObject item ||
                     item["type"]?.GetValue<string>() != "function_call") return;
@@ -1405,6 +1448,10 @@
                 DetachHandoffCallbacks();
                 if (IsAgentHandoff)
                 {
+                    _handoffDebugCalls.Clear(); _voiceDebugEvents.Clear();
+                    _sessionLiveInstructions = ActiveLiveInstructions;
+                    HandoffBackend.ForwardDraftContext = _forwardDraftContext;
+                    HandoffBackend.OnTrace = OnHandoffTrace;
                     HandoffBackend.OnProgress = text => AddLiveChatMessage(new ChatMessage(text, "activity"));
                     HandoffBackend.OnMessage = AddLiveChatMessage;
                     HandoffBackend.OnResult = text => AddLiveChatMessage(new ChatMessage(text, "agent"));
@@ -1420,8 +1467,7 @@
                 {
                     ModelId = "gpt-live-1",
                     Voice = _currentVoiceString.ToLowerInvariant(),
-                    Instructions = instructions + " Delegiere Aufgaben, die die aktivierten Werkzeuge benötigen, an dein Backend. Bestätige Aktionen erst nach dem geprüften Ergebnis." +
-                        (IsAgentHandoff ? " Verwende für Dokumentfakten und Berechnungen ausschließlich die geprüften Agent-Ergebnisse. Erfinde keine fehlenden Zahlen oder Fakten. Falls eine Teilfrage noch unbeantwortet ist, delegiere sie erneut. Sage zu Beginn, dass du ein KI-Assistent bist." : ""),
+                    Instructions = IsAgentHandoff ? _sessionLiveInstructions : instructions + " Delegiere Aufgaben, die die aktivierten Werkzeuge benötigen, an dein Backend. Bestätige Aktionen erst nach dem geprüften Ergebnis.",
                     InitialHistory = _liveMessages.Where(m => m.ToolCallId == null && m.Role is ChatMessage.UserRole or ChatMessage.AssistantRole).TakeLast(128).ToList(),
                     Responses = _liveBackendMode == "managed" ? backend : null,
                     ClientBackend = IsAgentHandoff
@@ -1585,6 +1631,8 @@
         _supportMessages.Clear();
         _supportTextDelta = "";
         _liveMessages.Clear();
+        HandoffBackend.ResetConversation();
+        _handoffDebugCalls.Clear(); _voiceDebugEvents.Clear(); _sessionLiveInstructions = "";
         _liveTranscriptEntries.Clear();
         _liveDisplayedCalls.Clear();
         voiceAssistant?.ClearChatHistory();
@@ -1605,6 +1653,43 @@
         HandoffBackend.OnProgress = null;
         HandoffBackend.OnMessage = null;
         HandoffBackend.OnResult = null;
+        HandoffBackend.OnTrace = null;
+    }
+
+    private void AddVoiceDebug(HandoffTraceEvent trace) => _ = InvokeAsync(() =>
+    {
+        _voiceDebugEvents.Add(trace);
+        if (_voiceDebugEvents.Count > 120) _voiceDebugEvents.RemoveAt(0);
+        StateHasChanged();
+    });
+
+    private void OnHandoffTrace(HandoffTraceEvent trace)
+    {
+        if (trace.Phase == "Live") { AddVoiceDebug(trace); return; }
+        _ = InvokeAsync(() =>
+        {
+            var call = _handoffDebugCalls.FirstOrDefault(c => c.Id == trace.Id);
+            if (call == null)
+            {
+                call = new HandoffDebugCall(trace.Id, trace.Phase) { StartedAt = trace.At };
+                _handoffDebugCalls.Add(call);
+                if (_handoffDebugCalls.Count > 30) _handoffDebugCalls.RemoveAt(0);
+            }
+            if (trace.Kind == "started") { call.Request = trace.Text ?? ""; call.Input = trace.Input ?? ""; }
+            else if (trace.Kind == "text_delta")
+            {
+                call.Text.Append(trace.Text);
+                call.FirstTextAt ??= trace.At;
+            }
+            else
+            {
+                call.State = trace.Kind;
+                call.EndedAt = trace.At;
+                call.InputTokens = trace.InputTokens;
+                call.OutputTokens = trace.OutputTokens;
+            }
+            StateHasChanged();
+        });
     }
 
     private async Task TestMicrophone()

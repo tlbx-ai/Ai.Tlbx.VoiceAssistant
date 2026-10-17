@@ -18,7 +18,12 @@ public sealed record OpenAiLiveBackendContext(
     IReadOnlyList<ChatMessage> InitialHistory,
     IReadOnlyList<IVoiceTool> Tools,
     Func<string, CancellationToken, Task> ReportProgressAsync,
-    Action<UsageReport> ReportUsage);
+    Action<UsageReport> ReportUsage)
+{
+    /// <summary>Append concise background context without requesting immediate speech. The model
+    /// can still use it in later speech. Await acceptance; do not send secrets or private reasoning.</summary>
+    public Func<string, CancellationToken, Task>? ReportContextAsync { get; init; }
+}
 
 /// <summary>How an incoming delegation interacts with existing backend work.</summary>
 public enum OpenAiLiveDelegationBehavior

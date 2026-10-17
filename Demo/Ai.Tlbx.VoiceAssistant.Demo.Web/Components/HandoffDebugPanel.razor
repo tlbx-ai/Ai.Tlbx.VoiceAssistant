@@ -1,0 +1,46 @@
+@using Ai.Tlbx.VoiceAssistant.Demo.Web.Services
+
+<section id="handoff-debug" class="mt-3 border-t border-gray-200 pt-3 text-xs">
+    <h3 class="font-semibold text-gray-800 mb-2">Modelldebug</h3>
+    <div class="grid grid-cols-1 xl:grid-cols-2 gap-3">
+        <div class="min-w-0">
+            <h4 class="font-medium mb-2">Sprachmodell · gpt-live-1</h4>
+            <details class="mb-2"><summary class="cursor-pointer">Live-Basisinstruktionen und Delegationsstrategie</summary><p class="text-gray-500">Registrierte Tool-Beschreibungen werden zusätzlich als Fähigkeiten ergänzt.</p><pre id="live-debug-instructions" class="max-h-60 overflow-auto whitespace-pre-wrap break-words mt-2">@LiveInstructions</pre></details>
+            <p class="text-gray-500 mb-2">Gesprochenes steht im Chat. Hier: Delegation, Kontextübergaben, deren Bestätigungen und finale Sprachübergaben.</p>
+            <div id="voice-debug-events" class="max-h-96 overflow-auto space-y-2">
+                @foreach (var item in VoiceEvents)
+                {
+                    <details class="border-l-2 border-blue-200 pl-2" data-voice-event="@item.Kind">
+                        <summary class="cursor-pointer break-words">@item.At.ToString("HH:mm:ss.fff") · @item.Kind</summary>
+                        <div class="text-gray-500 break-all">@item.Id</div>
+                        <pre class="whitespace-pre-wrap break-words mt-1">@item.Text</pre>
+                    </details>
+                }
+            </div>
+        </div>
+        <div class="min-w-0">
+            <h4 class="font-medium mb-2">Delegiertes Modell · gpt-6.1-sol</h4>
+            <details class="mb-2"><summary class="cursor-pointer">Agent-Instruktionen</summary><pre class="max-h-60 overflow-auto whitespace-pre-wrap break-words mt-2">@InferenceHandoffBackend.AgentInstructions</pre></details>
+            <p class="text-gray-500 mb-2">Öffentliche Modellausgabe erscheint während der Generierung. Entwürfe sind bis zum Abschluss vorläufig.</p>
+            <div id="backend-debug-calls" class="max-h-[36rem] overflow-auto space-y-3">
+                @foreach (var call in Calls)
+                {
+                    <div class="border-l-2 border-purple-200 pl-2" data-backend-call="@call.Id" data-state="@call.State" data-phase="@call.Phase" data-stream-length="@call.Text.Length">
+                        <div class="font-medium">@call.Phase · @call.State · @call.StartedAt.ToString("HH:mm:ss.fff")</div>
+                        <div class="text-gray-500 break-words">@call.Request</div>
+                        <div class="text-gray-500">@call.Text.Length Zeichen · Erstes Textfragment: @(call.FirstTextAt?.ToString("HH:mm:ss.fff") ?? "ausstehend") · Ende: @(call.EndedAt?.ToString("HH:mm:ss.fff") ?? "offen")</div>
+                        <div class="text-gray-500">Tokens: @(call.InputTokens?.ToString() ?? "?") ein / @(call.OutputTokens?.ToString() ?? "?") aus</div>
+                        <details class="mt-1"><summary class="cursor-pointer">An Inference übergebene Nachrichten</summary><p class="text-gray-500">Vor der Provider-Serialisierung. Fertige Werke werden zusätzlich als Anwendungsdatensätze übergeben.</p><pre class="max-h-64 overflow-auto whitespace-pre-wrap break-words">@call.Input</pre></details>
+                        <pre class="mt-1 max-h-64 overflow-auto whitespace-pre-wrap break-words" data-stream-text>@call.Text.ToString()</pre>
+                    </div>
+                }
+            </div>
+        </div>
+    </div>
+</section>
+
+@code {
+    [Parameter] public string LiveInstructions { get; set; } = "";
+    [Parameter] public IReadOnlyList<HandoffDebugCall> Calls { get; set; } = Array.Empty<HandoffDebugCall>();
+    [Parameter] public IReadOnlyList<HandoffTraceEvent> VoiceEvents { get; set; } = Array.Empty<HandoffTraceEvent>();
+}

@@ -25,6 +25,7 @@ internal static partial class OpenAiLiveTests
         var thirdCancelled = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var calls = new ConcurrentQueue<string>();
         var commentary = new ConcurrentQueue<string>();
+        var quietContext = new ConcurrentQueue<string>();
         var errors = new ConcurrentQueue<string>();
         var ledger = new UsageManager();
         var server = Task.Run(async () => {
@@ -43,6 +44,12 @@ internal static partial class OpenAiLiveTests
             {
                 var command = await ReadAsync(socket, timeout.Token);
                 var type = command["type"]?.GetValue<string>();
+                if (type == "session.thinking.append")
+                {
+                    quietContext.Enqueue(command["content"]!.GetValue<string>());
+                    Check(command["delegation_id"]!.GetValue<string>() == "first", "quiet update keeps delegation identity");
+                    await WriteAsync(socket, new JsonObject { ["type"] = "session.thinking.appended", ["client_event_id"] = command["event_id"]!.GetValue<string>() }.ToJsonString(), timeout.Token);
+                }
                 if (type == "session.commentary.append")
                 {
                     commentary.Enqueue(command["content"]!.GetValue<string>());
@@ -73,6 +80,7 @@ internal static partial class OpenAiLiveTests
                     Check(context.Transcript.Count == 1, "first snapshot excludes future user speech");
                     firstStarted.TrySetResult();
                     await releaseFirst.Task.WaitAsync(ct);
+                    await context.ReportContextAsync!("Die Akte wird noch geprüft", ct);
                     await context.ReportProgressAsync("Die Akte ist geprüft", ct);
                 }
                 else if (context.Delegation.Id == "second") Check(context.Transcript.Count == 2, "follow-up sees original role-labelled speech");
@@ -88,6 +96,7 @@ internal static partial class OpenAiLiveTests
         await secondDone.Task.WaitAsync(timeout.Token);
         Check(calls.SequenceEqual(["first", "second"]), "FIFO execution and duplicate delegation suppression");
         Check(commentary.SequenceEqual(["Die Akte ist geprüft", "Ergebnis eins", "Ergebnis zwei"]), "acknowledged progress and final results delivered in order");
+        Check(quietContext.SequenceEqual(["Die Akte wird noch geprüft"]), "quiet context is acknowledged separately from spoken commentary");
         // Inject another delegation through the same production dispatch path; it must cancel without commentary.
         var dispatch = typeof(OpenAiLiveProvider).GetMethod("StartClientDelegation", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!;
         dispatch.Invoke(provider, [new OpenAiLiveDelegation("third", "client", 300, null)]);
