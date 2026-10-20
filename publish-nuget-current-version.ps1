@@ -60,6 +60,7 @@ $projects = @(
     "Provider\Ai.Tlbx.VoiceAssistant.Provider.OpenAi.AspNetCore\Ai.Tlbx.VoiceAssistant.Provider.OpenAi.AspNetCore.csproj",
     "Provider\Ai.Tlbx.VoiceAssistant.Provider.Google\Ai.Tlbx.VoiceAssistant.Provider.Google.csproj",
     "Provider\Ai.Tlbx.VoiceAssistant.Provider.XAi\Ai.Tlbx.VoiceAssistant.Provider.XAi.csproj",
+    "Provider\Ai.Tlbx.VoiceAssistant.Provider.Mistral\Ai.Tlbx.VoiceAssistant.Provider.Mistral.csproj",
     "Hardware\Ai.Tlbx.VoiceAssistant.Hardware.Windows\Ai.Tlbx.VoiceAssistant.Hardware.Windows.csproj",
     "Hardware\Ai.Tlbx.VoiceAssistant.Hardware.Web\Ai.Tlbx.VoiceAssistant.Hardware.Web.csproj",
     "Hardware\Ai.Tlbx.VoiceAssistant.Hardware.Linux\Ai.Tlbx.VoiceAssistant.Hardware.Linux.csproj",
