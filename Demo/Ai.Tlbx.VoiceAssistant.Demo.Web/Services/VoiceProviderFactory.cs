@@ -15,7 +15,8 @@ namespace Ai.Tlbx.VoiceAssistant.Demo.Web.Services
         OpenAiLive,
         Google,
         XAi,
-        OpenAiTranscription
+        OpenAiTranscription,
+        Mistral
     }
 
     public interface IVoiceProviderFactory
@@ -46,6 +47,11 @@ namespace Ai.Tlbx.VoiceAssistant.Demo.Web.Services
                     Environment.GetEnvironmentVariable("XAI_API_KEY"), logAction),
                 VoiceProviderType.OpenAiTranscription => new OpenAiTranscriptionProvider(
                     Environment.GetEnvironmentVariable("OPENAI_API_KEY"), logAction: logAction),
+                VoiceProviderType.Mistral => new Provider.Mistral.MistralVoiceProvider(
+                    _serviceProvider.GetRequiredService<Provider.Mistral.MistralAudioClient>(), (level, message) => {
+                        logAction?.Invoke(level, message);
+                        if (level == LogLevel.Error) Console.Error.WriteLine(message);
+                    }),
                 _ => throw new ArgumentException($"Unknown provider type: {providerType}", nameof(providerType))
             };
         }

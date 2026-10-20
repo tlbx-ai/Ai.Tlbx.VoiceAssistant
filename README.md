@@ -774,3 +774,21 @@ Follow-ups queue in arrival order while speech continues. Choose `NewDelegationB
 The web demo's normal Voice Chat UI (`/`) offers **Agent-Handoff · GPT-6.1 Sol** in the GPT-Live backend selector. It demonstrates GPT-Live 1 with Ai.Tlbx.Inference 2.6.0 and GPT-6.1 Sol, complete synthetic document tools, follow-up history, per-model-call usage and full results, progress and inspectable tool requests/results in the shared ChatWidget. Results up to 500 UTF-8 bytes return directly to Live; longer results receive a separate spoken summary while their full content stays in history and the UI. GPT-Live 1.1 and Quip were announced for ChatGPT on October 15, 2026, with API access coming soon; they are outside the verified scope. Arbitrary `ModelId` values pass through unchanged, with no silent fallback or invented prices.
 
 `UsageManager` replaces cumulative session snapshots and deduplicates repeated final operations. Use `VoiceCostCalculator.Estimate(report, VoiceCostCalculator.GetRates(report))` for current verified model, context-length and processing-tier prices, or pass `VoiceCostRates` for custom/negotiated schedules. Estimates distinguish cached text/audio/image tokens, cache writes, reasoning subsets, session duration and media duration. Inspect `IsComplete`: unknown models, unsupported service tiers, and missing modality details remain explicit gaps. Sum the retained ledger reports, not every cumulative callback. Hosted tool charges and taxes are outside these model estimates. Public list rates were checked on 2026-10-17 against [OpenAI](https://developers.openai.com/api/docs/pricing), [Google](https://ai.google.dev/gemini-api/docs/pricing) and [xAI](https://docs.x.ai/developers/pricing).
+## Mistral Voxtral 3 support
+
+The `Ai.Tlbx.VoiceAssistant.Provider.Mistral` project adds a half-duplex speech pipeline
+via OpenRouter or native Mistral. The normal web demo lists **Mistral (OpenRouter)**,
+Voxtral Mini/Small Transcribe 3, and TTS 3 (Fiona: `voice_481`, German).
+Set `OPENROUTER_API_KEY` on the demo process; credentials stay on the server.
+The demo uses GPT-6 Luna through `Ai.Tlbx.Inference` for reasoning and enabled tools.
+Transcripts, tool arguments/results, answers, and per-operation usage use the shared UI.
+
+Speak, then pause: local silence detection submits WAV audio, the application responds,
+and synthesized MP3 is decoded/resampled to the toolkit's 24 kHz PCM16 playback format.
+Input is paused during replies. This is distinct from Mistral's realtime WebSocket API.
+See [provider configuration](Provider/Ai.Tlbx.VoiceAssistant.Provider.Mistral/README.md).
+
+Contracts: `dotnet run --project Tests/ContractTests -- --mistral-only`.
+Opt-in paid audio/tool test: `--mistral-live`, with `OPENROUTER_API_KEY`,
+`OPENAI_API_KEY`, and `MISTRAL_ARTIFACT_DIR` configured. Normal verification remains
+`pwsh -File verify-release.ps1`.

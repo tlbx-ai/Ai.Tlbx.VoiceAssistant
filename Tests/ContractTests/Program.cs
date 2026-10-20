@@ -21,6 +21,9 @@ using Ai.Tlbx.VoiceAssistant.Provider.XAi.Protocol;
 if (args.Contains("--voice-expansion-live", StringComparer.Ordinal)) { await OpenAiVoiceExpansionTests.RunLiveAsync(); return; }
 if (args.Contains("--voice-expansion-vision", StringComparer.Ordinal)) { await OpenAiVoiceExpansionTests.RunVisionAsync(); return; }
 if (args.Contains("--voice-expansion-storage", StringComparer.Ordinal)) { await OpenAiVoiceExpansionTests.RunStorageAsync(); return; }
+await MistralTests.RunAsync();
+if (args.Contains("--mistral-only", StringComparer.Ordinal)) return;
+if (args.Contains("--mistral-live", StringComparer.Ordinal)) { await MistralTests.RunLiveAsync(); return; }
 await ProviderUpdateTests.RunAsync();
 await DemoHandoffTests.RunAsync();
 if (args.Contains("--provider-update-live", StringComparer.Ordinal)) { await ProviderUpdateTests.RunLiveAsync(); return; }

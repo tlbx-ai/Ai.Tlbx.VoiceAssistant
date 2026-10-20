@@ -6,6 +6,9 @@
     <Nullable>enable</Nullable>
   </PropertyGroup>
   <ItemGroup>
+    <Compile Include="../../Demo/Ai.Tlbx.VoiceAssistant.Demo.Web/Services/MistralDemoBackend.cs" Link="Fixtures/MistralDemoBackend.cs" />
+    <None Include="Fixtures/mono-22050.mp3" CopyToOutputDirectory="PreserveNewest" />
+    <ProjectReference Include="../../Provider/Ai.Tlbx.VoiceAssistant.Provider.Mistral/Ai.Tlbx.VoiceAssistant.Provider.Mistral.csproj" />
     <PackageReference Include="Ai.Tlbx.Inference" Version="2.6.0" />
     <Compile Include="../../Demo/Ai.Tlbx.VoiceAssistant.Demo.Web/Services/InferenceHandoffBackend.cs" Link="Fixtures/InferenceHandoffBackend.cs" />
     <Compile Include="../../Demo/Ai.Tlbx.VoiceAssistant.Demo.Web/Services/ConversationSupport.cs" Link="Fixtures/ConversationSupport.cs" />

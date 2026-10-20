@@ -11,6 +11,7 @@
     <Project Path="Hardware/Ai.Tlbx.VoiceAssistant.Hardware.Windows/Ai.Tlbx.VoiceAssistant.Hardware.Windows.csproj" />
   </Folder>
   <Folder Name="/Provider/">
+    <Project Path="Provider/Ai.Tlbx.VoiceAssistant.Provider.Mistral/Ai.Tlbx.VoiceAssistant.Provider.Mistral.csproj" />
     <Project Path="Provider/Ai.Tlbx.VoiceAssistant.Provider.Google/Ai.Tlbx.VoiceAssistant.Provider.Google.csproj" />
     <Project Path="Provider/Ai.Tlbx.VoiceAssistant.Provider.OpenAi.AspNetCore/Ai.Tlbx.VoiceAssistant.Provider.OpenAi.AspNetCore.csproj" />
     <Project Path="Provider/Ai.Tlbx.VoiceAssistant.Provider.OpenAi/Ai.Tlbx.VoiceAssistant.Provider.OpenAi.csproj" />

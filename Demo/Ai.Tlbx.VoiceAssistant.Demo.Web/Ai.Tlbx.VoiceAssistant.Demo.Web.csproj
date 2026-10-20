@@ -6,6 +6,7 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <ProjectReference Include="../../Provider/Ai.Tlbx.VoiceAssistant.Provider.Mistral/Ai.Tlbx.VoiceAssistant.Provider.Mistral.csproj" />
     <PackageReference Include="Ai.Tlbx.Inference" Version="2.6.0" />
     <ProjectReference Include="..\..\Hardware\Ai.Tlbx.VoiceAssistant.Hardware.Web\Ai.Tlbx.VoiceAssistant.Hardware.Web.csproj" />
     <ProjectReference Include="..\..\Provider\Ai.Tlbx.VoiceAssistant\Ai.Tlbx.VoiceAssistant.csproj" />

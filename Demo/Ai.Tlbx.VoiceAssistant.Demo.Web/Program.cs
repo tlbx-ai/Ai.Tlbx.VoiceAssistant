@@ -10,6 +10,7 @@ using Ai.Tlbx.VoiceAssistant.Provider.Google.Extensions;
 using Ai.Tlbx.VoiceAssistant.BuiltInTools;
 using Ai.Tlbx.VoiceAssistant.Demo.Web.Tools;
 using System;
+using System.Net.Http;
 using System.Diagnostics;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.Extensions.DependencyInjection;
@@ -33,6 +34,12 @@ public class Program
         Ai.Tlbx.Inference.Configuration.ServiceCollectionExtensions.AddAiInference(builder.Services,
             options => options.AddOpenAi(Environment.GetEnvironmentVariable("OPENAI_API_KEY") ?? ""));
         builder.Services.AddScoped<InferenceHandoffBackend>();
+        builder.Services.AddHttpClient();
+        builder.Services.AddScoped(sp => new Provider.Mistral.MistralAudioClient(
+            sp.GetRequiredService<IHttpClientFactory>().CreateClient(),
+            Environment.GetEnvironmentVariable("OPENROUTER_API_KEY")
+                ?? throw new InvalidOperationException("Set OPENROUTER_API_KEY to use Mistral Voxtral.")));
+        builder.Services.AddScoped<MistralDemoBackend>();
 
         // Register services needed by VoiceAssistant (without registering VoiceAssistant itself)
         // since we create it manually in Home.razor with the factory pattern

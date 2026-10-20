@@ -26,7 +26,11 @@ public static class VoiceCostCalculator
             if (price == null) { complete = false; return; }
             cost += duration.Value.Ticks * price.Value / TimeSpan.TicksPerMinute;
         }
-        if ((usage.OperationType == UsageOperationType.VoiceSession || usage.BillingMode == VoiceBillingMode.SessionDuration) && rates.SessionMinute.HasValue)
+        if (usage.InputCharacters.HasValue)
+        {
+            Charge(usage.InputCharacters.Value / 1_000_000m, rates.InputMillionCharacters);
+        }
+        else if ((usage.OperationType == UsageOperationType.VoiceSession || usage.BillingMode == VoiceBillingMode.SessionDuration) && rates.SessionMinute.HasValue)
         {
             if (usage.OperationType == UsageOperationType.VoiceSession && usage.SessionDuration == null) complete = false;
             Minutes(usage.SessionDuration, rates.SessionMinute);
@@ -88,6 +92,12 @@ public static class VoiceCostCalculator
     /// The schedule does not infer prices for GPT-Live 1.1 before API pricing is published.</summary>
     public static VoiceCostRates? GetRates(UsageReport usage)
     {
+        if (usage.ProviderId == "openrouter" && usage.ServiceTier == null)
+            return usage.ModelId?.Replace("mistralai/", "", StringComparison.Ordinal) switch {
+                "voxtral-mini-transcribe-3-0" => new() { InputAudioMinute = .0035m, VerifiedOn = "2026-10-20", SourceUrl = "https://openrouter.ai/api/v1/models?output_modalities=transcription" },
+                "voxtral-small-transcribe-3-0" => new() { InputAudioMinute = .004m, VerifiedOn = "2026-10-20", SourceUrl = "https://openrouter.ai/api/v1/models?output_modalities=transcription" },
+                "voxtral-mini-tts-3-0" => new() { InputMillionCharacters = 13m, VerifiedOn = "2026-10-20", SourceUrl = "https://openrouter.ai/api/v1/models?output_modalities=speech" },
+                _ => null };
         var model = usage.ModelId?.Replace("models/", "", StringComparison.Ordinal);
         const string openai = "https://developers.openai.com/api/docs/pricing";
         VoiceCostRates? rates = (usage.ProviderId, model) switch

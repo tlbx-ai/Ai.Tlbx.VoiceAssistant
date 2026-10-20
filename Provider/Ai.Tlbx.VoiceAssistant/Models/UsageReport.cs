@@ -29,7 +29,8 @@ namespace Ai.Tlbx.VoiceAssistant.Models
         /// <summary>A duration-billed continuous voice session.</summary>
         VoiceSession,
         /// <summary>Backend reasoning and tools delegated by a voice session.</summary>
-        DelegatedResponse
+        DelegatedResponse,
+        SpeechGeneration
     }
 
     /// <summary>
@@ -96,6 +97,8 @@ namespace Ai.Tlbx.VoiceAssistant.Models
         /// Number of text input tokens consumed.
         /// </summary>
         public int? InputTokens { get; init; }
+        /// <summary>Characters billed by character-priced speech synthesis; not tokens.</summary>
+        public int? InputCharacters { get; init; }
 
         /// <summary>
         /// Number of text output tokens generated.
@@ -245,6 +248,7 @@ namespace Ai.Tlbx.VoiceAssistant.Models
         /// Whether this report contains any token, duration, or event usage.
         /// </summary>
         public bool HasUsage =>
+            InputCharacters > 0 ||
             TotalTokens > 0 ||
             SessionDuration > TimeSpan.Zero ||
             InputAudioDuration > TimeSpan.Zero ||

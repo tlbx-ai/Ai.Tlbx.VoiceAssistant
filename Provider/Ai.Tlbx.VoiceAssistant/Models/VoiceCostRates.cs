@@ -5,6 +5,7 @@ namespace Ai.Tlbx.VoiceAssistant.Models;
 public sealed record VoiceCostRates
 {
     public decimal? TextInput { get; init; }
+    public decimal? InputMillionCharacters { get; init; }
     public decimal? CachedTextInput { get; init; }
     public decimal? TextOutput { get; init; }
     public decimal? AudioInput { get; init; }

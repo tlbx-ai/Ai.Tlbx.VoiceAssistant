@@ -24,6 +24,16 @@ builder.Services.ConfigureHttpJsonOptions(options =>
 });
 
 var app = builder.Build();
+app.MapGet("/mistral-smoke", async () =>
+{
+    using var http = new HttpClient();
+    await using var provider = new Ai.Tlbx.VoiceAssistant.Provider.Mistral.MistralVoiceProvider(
+        new Ai.Tlbx.VoiceAssistant.Provider.Mistral.MistralAudioClient(http, "aot-contract-no-network"));
+    await provider.ConnectAsync(new Ai.Tlbx.VoiceAssistant.Provider.Mistral.MistralVoiceSettings { TranscriptionOnly = true });
+    await provider.ProcessAudioAsync(Convert.ToBase64String(new byte[3200]));
+    await provider.DisconnectAsync();
+    return new TestResults { Success = !provider.IsConnected, Results = new() { "Mistral silence/lifecycle completed without a network request" } };
+});
 app.MapOpenAiDirectLiveVoice();
 app.MapOpenAiDirectTranslation();
 

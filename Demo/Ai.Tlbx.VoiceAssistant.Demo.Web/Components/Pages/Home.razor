@@ -8,6 +8,7 @@
 @using Ai.Tlbx.VoiceAssistant.Provider.Google.Models
 @using Ai.Tlbx.VoiceAssistant.Provider.XAi
 @using Ai.Tlbx.VoiceAssistant.Provider.XAi.Models
+@using Ai.Tlbx.VoiceAssistant.Provider.Mistral
 @using Ai.Tlbx.VoiceAssistant.WebUi.Components
 @using Ai.Tlbx.VoiceAssistant.Demo.Web
 @using Ai.Tlbx.VoiceAssistant.Demo.Web.Services
@@ -26,6 +27,7 @@
 @inject IAudioHardwareAccess HardwareAccess
 @inject Action<LogLevel, string> LogAction
 @inject InferenceHandoffBackend HandoffBackend
+@inject MistralDemoBackend MistralBackend
 @implements IAsyncDisposable
 
 <PageTitle>AI Voice Chat</PageTitle>
@@ -212,7 +214,7 @@
                                     <!-- Voice Speed -->
                                     @if (!IsLiveModel && !IsConversationSupport)
                                     {
-                                        <VoiceSpeedSlider SelectedSpeed="@currentVoiceSpeed" SelectedSpeedChanged="OnVoiceSpeedChanged" Disabled="@((voiceAssistant?.IsConnecting ?? false) || (voiceAssistant?.IsRecording ?? false))" />
+                                        <VoiceSpeedSlider SelectedSpeed="@currentVoiceSpeed" SelectedSpeedChanged="OnVoiceSpeedChanged" Disabled="@(_selectedProviderString == "Mistral (OpenRouter)" || (voiceAssistant?.IsConnecting ?? false) || (voiceAssistant?.IsRecording ?? false))" />
                                     }
 
                                     <!-- Tool Selection -->
@@ -327,7 +329,7 @@
                                     }
                                     else
                                     {
-                                        <ChatWidget ShowDebugToolCalls="@showDebugMode" ShowToolCalls="true" InspectableToolCalls="@IsAgentHandoff" Messages="@(IsLiveModel ? _liveMessages : null)" />
+                                        <ChatWidget ShowDebugToolCalls="@showDebugMode" ShowToolCalls="true" InspectableToolCalls="@(IsAgentHandoff || _selectedProviderString == "Mistral (OpenRouter)")" Messages="@(IsLiveModel ? _liveMessages : null)" />
                                     }
                                 </div>
 
@@ -582,7 +584,7 @@
     private bool _isBusy => (voiceAssistant?.IsConnecting ?? false) || (voiceAssistant?.IsRecording ?? false) || _isPttRecording || _isPttProcessing;
 
     // Provider management
-    private List<string> availableProviders = new() { "OpenAI", "Google", "xAI" };
+    private List<string> availableProviders = new() { "OpenAI", "Google", "xAI", "Mistral (OpenRouter)" };
     private string _selectedProviderString = "OpenAI";
     private string selectedProviderString
     {
@@ -649,6 +651,7 @@
     private decimal LiveCost => LiveEstimates.Sum(e => e.KnownCostUsd);
     private bool LiveCostIncomplete => LiveEstimates.Any(e => !e.IsComplete);
     private OpenAiDirectLiveVoiceProvider? _liveProvider;
+    private MistralVoiceProvider? _mistralProvider;
     private readonly List<ChatMessage> _liveMessages = new();
     private readonly HashSet<string> _liveDisplayedCalls = new();
     private readonly Dictionary<string, (int Index, double EndMs)> _liveTranscriptEntries = new();
@@ -684,6 +687,7 @@
             "OpenAI" when IsLiveModel => "Continuous GPT-Live conversation over WebRTC. Select Agent-Handoff to delegate complex work to GPT-6.1 Sol.",
             "OpenAI" => "Choose GPT-Live 1 for continuous conversation, or a Realtime model for turn-based voice.",
             "xAI" => "Latest currently uses Grok Voice 3.0; pin GrokVoice30 for deterministic production rollout.",
+            "Mistral (OpenRouter)" => "Voxtral 3 · Fiona (voice_481) spricht Deutsch. Nach der Sprechpause: Transkription → GPT-6 Luna → TTS. Während der Antwort ist das Mikrofon pausiert.",
             _ => "Obsolete models stay selectable here for manual compatibility checks."
         };
     }
@@ -804,10 +808,12 @@
                 "OpenAI" => VoiceProviderType.OpenAI,
                 "Google" => VoiceProviderType.Google,
                 "xAI" => VoiceProviderType.XAi,
+                "Mistral (OpenRouter)" => VoiceProviderType.Mistral,
                 _ => VoiceProviderType.OpenAI
             };
         }
         var provider = ProviderFactory.CreateProvider(providerType);
+        _mistralProvider = provider as MistralVoiceProvider;
 
         // Create new VoiceAssistant
         voiceAssistant = new VoiceAssistant(HardwareAccess, provider, LogAction);
@@ -884,7 +890,15 @@
 
     private void UpdateAvailableVoicesForProvider()
     {
-        if (_selectedProviderString == "OpenAI")
+        if (_selectedProviderString == "Mistral (OpenRouter)")
+        {
+            availableVoices = new() { "voice_481", "voice_478", "voice_447", "voice_485" };
+            _currentVoiceString = "voice_481";
+            availableModels = new() { new("voxtral-mini-transcribe-3-0", "Voxtral Mini Transcribe 3 + TTS 3"), new("voxtral-small-transcribe-3-0", "Voxtral Small Transcribe 3 + TTS 3") };
+            _currentModelString = "voxtral-mini-transcribe-3-0";
+            currentVoiceSpeed = 1;
+        }
+        else if (_selectedProviderString == "OpenAI")
         {
             availableVoices = Enum.GetValues<AssistantVoice>().Select(v => v.ToString()).ToList();
             _currentVoiceString = nameof(AssistantVoice.Marin);
@@ -1440,7 +1454,18 @@
 
             var instructions = "Du bist ein freundlicher hilfreicher sprachagent. (Antworte in der Anfragesprache, im Zweifel bitte in Deutsch), Nimm an dein Gegenüber ist ein Experte in der Materie über die ihr gerade redet, also neige eher zu sehr fachlichen Antworten und mach die antworten nur auf Nachfrage leichter verständlich. Sprich schnell mit möglichst kurzen pausen, bring emotion in deine Stimme, lache wenn es passt.";
 
-            if (IsLiveModel)
+            if (_selectedProviderString == "Mistral (OpenRouter)")
+            {
+                var tools = enabledTools.ToList();
+                settings = new MistralVoiceSettings {
+                    Instructions = instructions, TranscriptionModel = _currentModelString,
+                    Voice = _currentVoiceString, Tools = tools,
+                    RespondAsync = (history, ct) => MistralBackend.RespondAsync(history, instructions, tools,
+                        message => _mistralProvider?.ReportBackendMessage(message),
+                        usage => _mistralProvider?.ReportBackendUsage(usage), ct)
+                };
+            }
+            else if (IsLiveModel)
             {
                 _liveDisplayedCalls.Clear();
                 _liveTranscriptEntries.Clear();
