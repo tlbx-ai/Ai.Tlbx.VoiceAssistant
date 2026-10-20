@@ -90,7 +90,7 @@
                                     <!-- Voice Selection -->
                                     <div>
                                         <label for="voiceSelect" class="block text-xs font-medium text-gray-600 mb-1">Voice</label>
-                                        <VoiceSelect AvailableVoices="@availableVoices" @bind-SelectedVoice="@currentVoiceString" Disabled="@((voiceAssistant?.IsConnecting ?? false) || (voiceAssistant?.IsRecording ?? false))" />
+                                        <VoiceSelect AvailableVoices="@availableVoices" VoiceLabels="@(_selectedProviderString == "Mistral (OpenRouter)" ? MistralVoiceLabels : null)" @bind-SelectedVoice="@currentVoiceString" Disabled="@((voiceAssistant?.IsConnecting ?? false) || (voiceAssistant?.IsRecording ?? false))" />
                                     </div>
                                     }
 
@@ -615,6 +615,12 @@
     }
     private double currentVoiceSpeed = 1.0;
     private List<string> availableVoices = Enum.GetValues<AssistantVoice>().Select(v => v.ToString()).ToList();
+    private static readonly IReadOnlyDictionary<string, string> MistralVoiceLabels = new Dictionary<string, string> {
+        ["voice_481"] = "Fiona · Deutsch",
+        ["voice_478"] = "Sarah · Englisch",
+        ["voice_447"] = "Yael · Englisch",
+        ["voice_485"] = "Eric · Englisch (USA)"
+    };
     private sealed record ModelOption(string Value, string Label);
 
     // Model management (provider-specific)

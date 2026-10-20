@@ -154,6 +154,8 @@ Always use `Action<LogLevel, string>` for logging delegation and forward logs up
 
 ### Testing Strategy
 
+- Voice selectors show official human-readable voice names and languages when available; retain technical voice IDs only as option values sent to the provider.
+
 - New demo conversation modes must be selectable in the normal demo UI and use its shared ChatWidget. Populate the chat with user/assistant transcripts, agent progress, tool requests with arguments, inspectable complete tool results and full agent answers. Do not create a separate conversation page or replace these events with opaque status text. Browser acceptance must verify these entries in the normal UI.
 - Handoff debug must show public backend text while the model is still streaming, separate it from voice handoff payloads, and preserve full completed backend work for follow-ups. A shortened or paraphrased voice transcript never determines whether the original work exists or is complete.
 
