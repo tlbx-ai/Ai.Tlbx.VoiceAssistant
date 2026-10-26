@@ -68,8 +68,8 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi
         public Action<UsageReport>? OnUsageReceived { get; set; }
 
         /// <summary>
-        /// Receives cumulative confirmed sections. Request-local speaker labels are kept separate
-        /// from reference-backed session identities; incomplete requests never replace confirmed text.
+        /// Receives cumulative confirmed sections with native speaker labels and separate optional
+        /// session identity annotations; incomplete requests never replace confirmed text.
         /// </summary>
         public Action<StructuredTranscript>? OnStructuredTranscriptionReceived { get; set; }
 
@@ -566,19 +566,17 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi
                                 hypothesis.AppendLine();
                             }
 
-                            hypothesis.Append(FormatSegment(segment));
+                            hypothesis.Append(segment.Text);
                             PublishStructuredProgress(snapshot, segment);
                         }
                         break;
 
                     case "transcript.text.done":
-                        string finalText = root.TryGetProperty("text", out var textElement)
+                        string finalText = root.TryGetProperty("text", out var textElement) && textElement.ValueKind == JsonValueKind.String
                             ? textElement.GetString() ?? string.Empty
-                            : string.Empty;
-                        if (string.IsNullOrWhiteSpace(finalText))
-                        {
-                            finalText = hypothesis.ToString();
-                        }
+                            : structuredSegments.Count > 0
+                                ? string.Join(Environment.NewLine, structuredSegments.Select(s => s.Text))
+                                : hypothesis.ToString();
 
                         {
                             PublishCompletedSnapshot(
@@ -628,33 +626,46 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi
         private TranscriptSegment OffsetSegment(SnapshotWorkItem snapshot, TranscriptSegment segment,
             IReadOnlyDictionary<string, string>? identities = null)
         {
-            var speaker = ResolveSpeaker(snapshot, segment.Speaker, identities);
+            var identity = ResolveSpeaker(snapshot, segment.Speaker, identities);
+            var scope = GetNativeSpeakerScope(snapshot, segment.Speaker);
             return new TranscriptSegment
             {
                 Id = $"{snapshot.Revision}:{segment.Id}",
-                Speaker = speaker,
+                Speaker = segment.Speaker,
                 LocalSpeaker = segment.Speaker,
-                SpeakerScope = speaker is null ? TranscriptSpeakerScope.Request : TranscriptSpeakerScope.Session,
-                SpeakerScopeId = GetSpeakerScopeId(snapshot, speaker),
+                SessionSpeakerId = identity,
+                SessionSpeakerScopeId = identity is null ? null : _speakerSessionId,
+                SpeakerScope = scope,
+                SpeakerScopeId = GetNativeSpeakerScopeId(snapshot, scope),
                 Text = segment.Text, ChannelIndex = segment.ChannelIndex,
                 Start = segment.Start + snapshot.AudioStart, End = segment.End + snapshot.AudioStart,
                 Words = segment.Words.Select(word =>
                 {
-                    var local = word.Speaker ?? segment.Speaker;
-                    var identity = ResolveSpeaker(snapshot, local, identities);
+                    var wordIdentity = ResolveSpeaker(snapshot, word.Speaker ?? segment.Speaker, identities);
+                    var wordScope = GetNativeSpeakerScope(snapshot, word.Speaker);
                     return new TranscriptWord
                     {
-                        Text = word.Text, Speaker = identity, LocalSpeaker = local,
-                        SpeakerScope = identity is null ? TranscriptSpeakerScope.Request : TranscriptSpeakerScope.Session,
-                        SpeakerScopeId = GetSpeakerScopeId(snapshot, identity),
+                        Text = word.Text, Speaker = word.Speaker, LocalSpeaker = word.Speaker,
+                        SessionSpeakerId = wordIdentity,
+                        SessionSpeakerScopeId = wordIdentity is null ? null : _speakerSessionId,
+                        SpeakerScope = wordScope,
+                        SpeakerScopeId = GetNativeSpeakerScopeId(snapshot, wordScope),
                         Start = word.Start + snapshot.AudioStart, End = word.End + snapshot.AudioStart
                     };
                 }).ToArray()
             };
         }
 
-        private string GetSpeakerScopeId(SnapshotWorkItem snapshot, string? identity) =>
-            identity is null ? $"{_speakerSessionId}/{snapshot.Revision}" : _speakerSessionId;
+        private static TranscriptSpeakerScope GetNativeSpeakerScope(SnapshotWorkItem snapshot, string? label) =>
+            label is null ? TranscriptSpeakerScope.Unspecified :
+                snapshot.SpeakerReferences.ContainsKey(label) ? TranscriptSpeakerScope.Session : TranscriptSpeakerScope.Request;
+
+        private string? GetNativeSpeakerScopeId(SnapshotWorkItem snapshot, TranscriptSpeakerScope scope) => scope switch
+        {
+            TranscriptSpeakerScope.Session => _speakerSessionId,
+            TranscriptSpeakerScope.Request => $"{_speakerSessionId}/{snapshot.Revision}",
+            _ => null
+        };
 
         private static string? ResolveSpeaker(SnapshotWorkItem snapshot, string? label, IReadOnlyDictionary<string, string>? identities)
         {
@@ -710,7 +721,7 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi
                 if (snapshot.AudioEnd <= TimeSpan.FromSeconds(_confirmedBytes / (double)BYTES_PER_SECOND)) return;
                 var identities = LearnSpeakerReferences(snapshot, segments);
                 var additions = segments.Select(segment => OffsetSegment(snapshot, segment, identities)).ToArray();
-                var text = additions.Length > 0 ? string.Join(Environment.NewLine, additions.Select(FormatSegment)) : providerText;
+                var text = providerText;
                 _confirmedText = JoinText(_confirmedText, text);
                 if (additions.Length > 0) _confirmedSegments.AddRange(additions);
                 else if (!string.IsNullOrEmpty(text)) _confirmedSegments.Add(new TranscriptSegment
@@ -1112,21 +1123,21 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi
             {
                 Id = TryGetSegmentId(root, segment),
                 Speaker = speaker,
-                Text = text.Trim(),
+                Text = text,
                 Start = TryGetSeconds(segment, "start"),
                 End = TryGetSeconds(segment, "end"),
-                Words = ParseWords(segment, speaker)
+                Words = ParseWords(segment)
             };
         }
 
-        private static IReadOnlyList<TranscriptWord> ParseWords(JsonElement segment, string? speaker)
+        private static IReadOnlyList<TranscriptWord> ParseWords(JsonElement segment)
         {
             if (!segment.TryGetProperty("words", out var words) || words.ValueKind != JsonValueKind.Array)
                 return Array.Empty<TranscriptWord>();
             return words.EnumerateArray().Select(word => new TranscriptWord
             {
                 Text = word.TryGetProperty("word", out var text) || word.TryGetProperty("text", out text) ? text.GetString() ?? string.Empty : string.Empty,
-                Speaker = word.TryGetProperty("speaker", out var label) ? label.GetString() : speaker,
+                Speaker = word.TryGetProperty("speaker", out var label) ? label.GetString() : null,
                 Start = TryGetSeconds(word, "start"), End = TryGetSeconds(word, "end")
             }).ToArray();
         }
@@ -1174,11 +1185,6 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi
             coverage.HasValue
                 ? $"{coverage.Value.TotalSeconds.ToString("0.###", CultureInfo.InvariantCulture)}s"
                 : "unknown";
-
-        private static string FormatSegment(TranscriptSegment segment) =>
-            string.IsNullOrWhiteSpace(segment.Speaker)
-                ? segment.Text
-                : $"[{segment.Speaker}] {segment.Text}";
 
         private static TimeSpan? TryGetSeconds(JsonElement element, string propertyName)
         {

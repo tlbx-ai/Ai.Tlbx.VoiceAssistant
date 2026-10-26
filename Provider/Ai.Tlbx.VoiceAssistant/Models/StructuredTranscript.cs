@@ -89,9 +89,13 @@ public sealed class TranscriptSegment
     /// </summary>
     public string? Id { get; init; }
     public string Text { get; init; } = string.Empty;
+    /// <summary>Native provider speaker label; never replaced by a wrapper-generated identity.</summary>
     public string? Speaker { get; init; }
-    /// <summary>Original provider label. A request-local label is not a person identifier.</summary>
+    /// <summary>Alias of the original provider label. A request-local label is not a person identifier.</summary>
     public string? LocalSpeaker { get; init; }
+    /// <summary>Optional cross-request identity annotation. Does not replace Speaker.</summary>
+    public string? SessionSpeakerId { get; init; }
+    public string? SessionSpeakerScopeId { get; init; }
     public TranscriptSpeakerScope SpeakerScope { get; init; }
     /// <summary>Recording ID for session identities, or recording/request ID for local labels.</summary>
     public string? SpeakerScopeId { get; init; }
@@ -106,6 +110,8 @@ public sealed class TranscriptWord
     public string Text { get; init; } = string.Empty;
     public string? Speaker { get; init; }
     public string? LocalSpeaker { get; init; }
+    public string? SessionSpeakerId { get; init; }
+    public string? SessionSpeakerScopeId { get; init; }
     public TranscriptSpeakerScope SpeakerScope { get; init; }
     public string? SpeakerScopeId { get; init; }
     public TimeSpan? Start { get; init; }

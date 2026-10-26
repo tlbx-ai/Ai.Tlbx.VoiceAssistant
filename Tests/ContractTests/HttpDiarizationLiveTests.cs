@@ -29,7 +29,7 @@ static class HttpDiarizationLiveTests
             if (!t.IsSessionFinal)
             {
                 Console.WriteLine($"Live {name}, revision {t.SnapshotRevision}: " + string.Join(" | ", t.Segments.Where(s => s.Id?.StartsWith(t.SnapshotRevision + ":") == true)
-                    .Select(s => $"{s.LocalSpeaker}->{s.Speaker ?? "unresolved"}: {s.Text}")));
+                    .Select(s => $"native:{s.Speaker}; session:{s.SessionSpeakerId ?? "unresolved"}: {s.Text}")));
                 confirmed.Release();
             }
         };
@@ -42,13 +42,14 @@ static class HttpDiarizationLiveTests
         }
         await transcriber.StopAsync(); await run.WaitAsync(TimeSpan.FromSeconds(60));
         var segments = transcriber.LatestStructuredTranscript!.Segments;
-        var speakers = segments.Select(s => s.Speaker).Where(s => s != null).Distinct().ToArray();
+        var speakers = segments.Select(s => s.SessionSpeakerId).Where(s => s != null).Distinct().ToArray();
         HttpDiarizationTests.Check(transcriber.LatestStatus!.IsComplete && speakers.Length == expectedSpeakers,
             $"live {name}: expected {expectedSpeakers} identities, found {speakers.Length}");
-        HttpDiarizationTests.Check(segments.All(s => s.Speaker is not null), $"live {name}: all synthetic speech should have reference-backed identities");
+        HttpDiarizationTests.Check(segments.All(s => s.SessionSpeakerId is not null && s.Speaker is not null && s.Speaker == s.LocalSpeaker),
+            $"live {name}: native labels and independent reference-backed identities are both retained");
         foreach (var marker in expectedSpeakers == 1 ? new[] { "Nordhausen" } : new[] { "Nordhausen", "Berlin" })
         {
-            var identities = segments.Where(s => s.Text.Contains(marker, StringComparison.OrdinalIgnoreCase)).Select(s => s.Speaker).Distinct().ToArray();
+            var identities = segments.Where(s => s.Text.Contains(marker, StringComparison.OrdinalIgnoreCase)).Select(s => s.SessionSpeakerId).Distinct().ToArray();
             HttpDiarizationTests.Check(identities.Length == 1 && identities[0] != null, $"live {name}: voice for {marker} remains stable");
         }
         Console.WriteLine($"Live diarization passed: {name}, {sections.Length} uploads, {speakers.Length} identities, {transcriber.LatestStatus.ConfirmedAudioEnd.TotalSeconds:F2}s confirmed.");

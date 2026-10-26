@@ -8,12 +8,13 @@
 
 ---
 
-## HTTP transcription in 11.7.1
+## HTTP transcription in 11.7.2
 
-Diarization now learns up to four bounded voice references for continuity across uploads.
-Recognized people retain session identities. Unresolved labels remain in `LocalSpeaker`;
-`Speaker` is null until an identity is established. Segment and word metadata expose explicit
-identity scopes. The default diarization upload minimum is five seconds; Stop still sends short tails.
+Native segment and word `Speaker` labels remain unchanged, even beyond four speakers or when
+no session matching is possible. Missing word labels remain absent; provider text is retained.
+Optional `SessionSpeakerId`/`SessionSpeakerScopeId` annotations provide continuity across uploads
+without replacing native data. The four-slot limit applies only to speaker-reference hints.
+The default diarization upload minimum is five seconds; Stop still sends short tails.
 
 Long recordings use bounded, non-overlapping audio sections. Capture stops independently
 of pending HTTP requests; finalization has a deadline. Public status/error callbacks expose

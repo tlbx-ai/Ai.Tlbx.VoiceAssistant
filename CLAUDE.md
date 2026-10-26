@@ -154,7 +154,8 @@ Always use `Action<LogLevel, string>` for logging delegation and forward logs up
 
 ### Testing Strategy
 
-- HTTP diarization changes must test the user outcome across upload boundaries: one unknown voice remains one person, two voices retain identity when speaking order changes, and uncertain local labels never create global people. Require both deterministic regressions and a real provider run with distinct synthetic voices before release; assertions about label formatting alone are insufficient.
+- Wrapper outputs must preserve native provider speaker labels and text, including more speakers than reference slots and absent word labels. Wrapper-derived identities belong only in separate optional annotations; never null, rename, cap or replace native results to fit a library heuristic.
+- HTTP diarization changes must test native output preservation plus independent session annotations: one voice keeps one session identity across uploads, two retain identity when speaking order changes, and unresolved annotations never suppress local provider labels. Require deterministic regressions and a real provider run with distinct synthetic voices before release.
 
 - Voice selectors show official human-readable voice names and languages when available; retain technical voice IDs only as option values sent to the provider.
 

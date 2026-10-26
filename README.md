@@ -20,7 +20,17 @@ Voice conversations, transcription and speech translation for .NET 9/10. Compose
 | Voxtral STT → application backend → TTS | [Mistral configuration](Provider/Ai.Tlbx.VoiceAssistant.Provider.Mistral/README.md) |
 | Company gateways and custom model IDs | [Gateway configuration](tools/gateway-configuration.md) |
 
-## Speaker continuity correction in 11.7.1
+## Native speaker output in 11.7.2
+
+`TranscriptSegment.Speaker` and `TranscriptWord.Speaker` retain the exact provider labels.
+Absent word labels remain absent. `LocalSpeaker` mirrors the native label for compatibility.
+Native segment text and the provider's final text are retained without wrapper-generated labels.
+`ToSpeakerLabeledText()` displays every native speaker, including speakers beyond the reference limit.
+
+Cross-upload matching is an independent annotation: `SessionSpeakerId` with
+`SessionSpeakerScopeId`. It never replaces or clears a native label. For a UI's person groups,
+use these optional session identities. If no session annotation exists, display the native
+`Speaker` with its `SpeakerScope`/`SpeakerScopeId`; a request-local label is not a global person ID.
 
 HTTP diarization now learns up to four short voice references per recording and sends
 them with later uploads. Recognized voices retain session identities (`speaker_1`, etc.)
@@ -30,13 +40,11 @@ References are extracted only from completed, timed, non-overlapping speaker seg
 at least two seconds of usable audio. They remain in memory and go only to the configured
 transcription endpoint. Configured `KnownSpeakerReferences` share the four-reference limit.
 
-`Speaker` contains an established session identity or null. `LocalSpeaker` preserves the
-provider label; `SpeakerScope` and `SpeakerScopeId` identify its domain on both segments
-and words. Short, overlapping, unrecognized or excess speakers remain unassigned instead
-of appearing as new people on every upload. Set `EnableAutomaticSpeakerReferences = false`
+The four-reference limit applies only to matching hints, never to the number of native speakers
+returned or displayed. Short, overlapping, unrecognized or excess speakers retain their
+native labels even when `SessionSpeakerId` is unset. Set `EnableAutomaticSpeakerReferences = false`
 to use only application-supplied references. Configure references before starting a recording.
-Applications should group people by session-scoped identities and keep unassigned speech
-explicitly unassigned. Matching quality still depends on the provider and reference audio.
+Matching quality still depends on the provider and reference audio.
 
 ## Bounded HTTP recording (11.7)
 
@@ -411,7 +419,7 @@ Failed finalization preserves earlier confirmed text and lists the unconfirmed t
 
 For diarization choose `Gpt4oTranscribeDiarize`. Segment timestamps are absolute within the
 session; IDs include the section revision. Automatic voice references establish identities
-across requests, while unresolved local labels stay in `LocalSpeaker` with `Speaker = null`.
+across requests in `SessionSpeakerId`; native labels remain in `Speaker` regardless of matching.
 Configured `KnownSpeakerReferences` preserve their names. Repeated events within a section
 are deduplicated. Sections have no audio overlap, so repeated phrases across boundaries are
 retained. Hard cuts during continuous speech can affect word accuracy. See the

@@ -202,9 +202,10 @@ static class HttpTranscriptionTests
         await transcriber.StopAsync(); await run;
         var segments = transcriber.LatestStructuredTranscript!.Segments;
         Check(requests == 2 && segments.Count == 4 && segments.Select(s => s.Id).Distinct().Count() == 4, "tail acknowledged once; repeated segments deduplicated within requests");
-        Check(segments[0].Speaker is null && segments[2].Speaker is null && segments[3].Speaker == "Known" &&
+        Check(segments[0].Speaker == "A" && segments[2].Speaker == "A" && segments[3].Speaker == "Known" &&
+            segments[0].SessionSpeakerId is null && segments[3].SessionSpeakerId == "Known" &&
             segments[0].LocalSpeaker == "A" && segments[0].SpeakerScope == TranscriptSpeakerScope.Request,
-            "unresolved local labels do not manufacture people; known references remain stable");
+            "native labels remain visible independently of session identity; known references remain stable");
         Check(segments[2].Start == TimeSpan.FromMilliseconds(100) && transcriber.LatestStatus!.IsComplete, "absolute segment times include section offset");
         var oldCallback = hardware.CaptureCallback();
         hardware.Tail = null;

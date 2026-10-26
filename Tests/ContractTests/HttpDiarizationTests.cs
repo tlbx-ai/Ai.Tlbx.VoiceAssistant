@@ -8,9 +8,59 @@ static class HttpDiarizationTests
 {
     public static async Task RunAsync()
     {
+        await VerifyNativeOutputAsync();
         await VerifyMonologueAsync();
         await VerifySwapsAndUnknownsAsync();
         await VerifyReferenceLimitsAsync();
+    }
+
+    private static async Task VerifyNativeOutputAsync()
+    {
+        foreach (bool fullReferences in new[] { false, true })
+        foreach (string finalText in new[] { "Provider final text.", "", " \t " })
+        {
+            var hardware = new HttpTranscriptionTests.Hardware();
+            var options = Options(); options.MaxSectionDuration = TimeSpan.FromSeconds(16);
+            options.EnableAutomaticSpeakerReferences = false;
+            if (fullReferences)
+                for (int i = 0; i < 4; i++) options.KnownSpeakerReferences["known-" + i] = "data:audio/wav;base64,AAAA";
+            using var client = new HttpClient(new HttpTranscriptionTests.Handler((_, _) =>
+            {
+                var events = Enumerable.Range(0, 8).Select(i => "data: " + System.Text.Json.JsonSerializer.Serialize(new
+                {
+                    type = "transcript.text.segment", id = "native-" + i, speaker = ((char)('A' + i)).ToString(),
+                    start = i * 2, end = i * 2 + 2, text = "  native text " + i + "  ",
+                    words = new[] { new { word = "exact", speaker = (string?)("word-" + i), start = i * 2, end = i * 2 + 1 },
+                        new { word = "unspecified", speaker = (string?)null, start = i * 2 + 1, end = i * 2 + 2 } }
+                }) + "\n\n");
+                string body = string.Concat(events) + "data: " + System.Text.Json.JsonSerializer.Serialize(
+                    new { type = "transcript.text.done", text = finalText }) + "\n\n";
+                return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent(body) });
+            }));
+            await using var transcriber = new OpenAiHttpLiveTranscriber(hardware, options, "test", null, client);
+            using var ready = new SemaphoreSlim(0);
+            var progress = new List<TranscriptSegment>();
+            transcriber.OnStructuredTranscriptionProgress = t => progress.AddRange(t.Segments);
+            transcriber.OnStructuredTranscriptionReceived = t => { if (!t.IsSessionFinal) ready.Release(); };
+            var run = transcriber.TranscribeLive(_ => { }); hardware.Emit(Audio(16));
+            await ready.WaitAsync(TimeSpan.FromSeconds(3)); await transcriber.StopAsync(); await run;
+            var transcript = transcriber.LatestStructuredTranscript!;
+            Check(transcript.Segments.Select(s => s.Speaker).SequenceEqual(Enumerable.Range(0, 8).Select(i => ((char)('A' + i)).ToString())),
+                "all eight native speakers must pass through, even without or beyond four references");
+            Check(progress.Select(s => s.Speaker).SequenceEqual(transcript.Segments.Select(s => s.Speaker)), "native progress and completed labels agree");
+            Check(transcript.Text == finalText, "provider final text, including empty or whitespace text, must not be replaced by wrapper formatting");
+            for (int i = 0; i < 8; i++)
+            {
+                var segment = transcript.Segments[i];
+                Check(segment.Text == "  native text " + i + "  ", "native segment text remains exact");
+                Check(segment.Words[0].Speaker == "word-" + i && segment.Words[1].Speaker is null,
+                    "word labels and absent word labels are not replaced by segment or wrapper labels");
+                Check(segment.Words[1].SpeakerScope == TranscriptSpeakerScope.Unspecified && segment.Words[1].SpeakerScopeId is null,
+                    "absent native word labels do not acquire a fabricated native identity scope");
+                Check(transcript.ToSpeakerLabeledText().Contains("[" + (char)('A' + i) + "]  "), "normal rendering retains every native speaker");
+            }
+        }
+        Console.WriteLine("HTTP wrapper: eight native speakers, exact word labels, missing labels, provider text and rendering preserved.");
     }
 
     private static async Task VerifySwapsAndUnknownsAsync()
@@ -49,15 +99,17 @@ static class HttpDiarizationTests
         for (int i = 0; i < 3; i++) { hardware.Emit(Audio(6)); await ready.WaitAsync(TimeSpan.FromSeconds(3)); }
         await transcriber.StopAsync(); await run;
         var segments = transcriber.LatestStructuredTranscript!.Segments;
-        Check(segments[0].Speaker == segments[3].Speaker && segments[1].Speaker == segments[2].Speaker && segments[0].Speaker != segments[1].Speaker,
+        Check(segments[0].SessionSpeakerId == segments[3].SessionSpeakerId && segments[1].SessionSpeakerId == segments[2].SessionSpeakerId && segments[0].SessionSpeakerId != segments[1].SessionSpeakerId,
             "two identities survive reversed speaking order");
-        Check(segments[4].Speaker is null && segments[4].LocalSpeaker == "A" && segments[4].SpeakerScope == TranscriptSpeakerScope.Request,
+        Check(segments[4].Speaker == "A" && segments[4].SessionSpeakerId is null && segments[4].SpeakerScope == TranscriptSpeakerScope.Request,
             "an uncertain local A is not merged into an established person");
-        Check(progress[0].Speaker is null && progress[2].Speaker == segments[2].Speaker, "progress does not claim an identity before enrollment");
-        Check(segments[0].SpeakerScopeId == segments[3].SpeakerScopeId && segments[4].SpeakerScopeId != segments[0].SpeakerScopeId,
+        Check(progress[0].Speaker == "A" && progress[0].SessionSpeakerId is null && progress[2].SessionSpeakerId == segments[2].SessionSpeakerId,
+            "progress retains native labels before session identity enrollment");
+        Check(segments[0].SessionSpeakerScopeId == segments[3].SessionSpeakerScopeId && segments[4].SessionSpeakerScopeId is null,
             "session and request identity scopes are explicit");
         Check(segments.All(s => s.Words.All(w => w.Speaker == s.Speaker && w.LocalSpeaker == s.LocalSpeaker &&
-            w.SpeakerScope == s.SpeakerScope && w.SpeakerScopeId == s.SpeakerScopeId)), "segment and word identities use consistent scopes");
+            w.SpeakerScope == s.SpeakerScope && w.SpeakerScopeId == s.SpeakerScopeId && w.SessionSpeakerId == s.SessionSpeakerId)),
+            "segment and word identities use consistent scopes without replacing provider labels");
         Check(options.KnownSpeakerReferences.Count == 0, "automatic voice references never leak into caller settings or subsequent sessions");
         Console.WriteLine("HTTP diarization: two voices, reversed order, uncertain labels and reference bounds passed.");
     }
@@ -84,8 +136,11 @@ static class HttpDiarizationTests
             for (int i = 0; i < 2; i++)
             { hardware.Emit(scenario == "silence" ? new byte[15 * 48000] : Audio(15)); await ready.WaitAsync(TimeSpan.FromSeconds(3)); }
             await transcriber.StopAsync(); await run;
-            var speakers = transcriber.LatestStructuredTranscript!.Segments.Select(s => s.Speaker).Where(s => s != null).Distinct().ToArray();
+            var segments = transcriber.LatestStructuredTranscript!.Segments;
+            var speakers = segments.Select(s => s.SessionSpeakerId).Where(s => s != null).Distinct().ToArray();
             Check(speakers.Length == (scenario == "limit" ? 4 : 0), "no invented people when enrollment is disabled, ambiguous or full");
+            Check(segments.Select(s => s.Speaker).Distinct().Count() == (scenario == "limit" ? 5 : scenario == "overlap" ? 2 : 1),
+                "reference limits never cap native speaker results");
         }
         Console.WriteLine("HTTP diarization: four-reference cap, overlapping speech, silent clips and opt-out passed.");
     }
@@ -107,7 +162,7 @@ static class HttpDiarizationTests
             await confirmed.WaitAsync(TimeSpan.FromSeconds(3));
         }
         await transcriber.StopAsync(); await run;
-        var people = transcriber.LatestStructuredTranscript!.Segments.Select(s => s.Speaker).Where(s => s != null).Distinct().ToArray();
+        var people = transcriber.LatestStructuredTranscript!.Segments.Select(s => s.SessionSpeakerId).Where(s => s != null).Distinct().ToArray();
         Check(people.Length == 1, $"one continuous voice must remain one person across nine uploads, got {people.Length}");
         Console.WriteLine("HTTP diarization monologue: one person across nine uploads passed.");
     }

@@ -222,7 +222,7 @@ gate: received audio is forwarded immediately, so the setting improves model
 behavior without adding response-completion latency. Applications that require
 deterministic phase filtering should filter transcripts at the application layer.
 
-## HTTP Live Transcription (11.7.1)
+## HTTP Live Transcription (11.7.2)
 
 If you want near-live transcription without using the realtime WebSocket API, use
 `OpenAiHttpLiveTranscriber`. It records microphone audio through the existing
@@ -284,10 +284,15 @@ speaker names remain stable. The total limit is four references, each automatic 
 settings or logs. `DiarizationMinimumSectionDuration` defaults to five seconds, capped by
 the maximum section duration; Stop always processes a short tail.
 
-`Speaker` is a session identity or null. `LocalSpeaker`, `SpeakerScope` and `SpeakerScopeId`
-retain local labels and distinguish them from people, consistently for segments and words.
+`Speaker` retains the native provider label for each segment and word, including speakers beyond
+the four reference slots. Absent word labels remain absent. `LocalSpeaker` mirrors that label;
+`SpeakerScope`/`SpeakerScopeId` describe its native identity domain. Final provider text and native
+segment text are retained; normal speaker rendering includes all native labels.
+
+`SessionSpeakerId`/`SessionSpeakerScopeId` contain separate optional cross-upload annotations.
 Missing/short/overlapping audio, exhausted reference slots or an unrecognized voice can leave
-speech unassigned. Do not number request-local labels as global people. Use
+these annotations unset; native labels are still returned. Use session annotations for person
+groups and native request scopes for unmatched speech. Do not number request-local labels as global people. Use
 `EnableAutomaticSpeakerReferences = false` for only application-supplied references.
 Provider matching remains probabilistic. No confirmed section is retranscribed, including on Stop;
 only the bounded reference clips accompany later requests for speaker matching.
