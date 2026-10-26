@@ -104,7 +104,7 @@ static class LiveCustomConfigurationTests
             // One second of synthetic silence. No microphone or personal audio.
             var snapshot = Activator.CreateInstance(snapshotType, 1, 1L, new byte[48000], true, "", TimeSpan.Zero, TimeSpan.FromSeconds(1))!;
             var send = type.GetMethod("TranscribeSnapshotAsync", BindingFlags.NonPublic | BindingFlags.Instance)!;
-            await (Task)send.Invoke(transcriber, [snapshot, (Action<string>)(_ => { })])!;
+            await (Task)send.Invoke(transcriber, [snapshot, (Action<string>)(_ => { }), CancellationToken.None])!;
             if (!accepted) throw new InvalidOperationException("No successful HTTP response.");
         });
         Console.WriteLine($"Live custom configuration: {7 - failed}/7 passed. No user audio or generated response requested.");

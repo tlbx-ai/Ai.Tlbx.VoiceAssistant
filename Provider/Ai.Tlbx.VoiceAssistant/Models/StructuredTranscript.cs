@@ -30,7 +30,8 @@ public sealed class StructuredTranscript
     /// </summary>
     public bool IsSnapshotComplete { get; init; }
     /// <summary>
-    /// True only for the authoritative state emitted when the complete live session ends.
+    /// True for the terminal state emitted when the live session ends. This does not establish
+    /// complete audio coverage; inspect the provider's completion status and coverage metadata.
     /// </summary>
     public bool IsSessionFinal { get; init; }
     /// <summary>

@@ -31,6 +31,9 @@ try
     node Tests\Browser\translation-contracts.mjs
     Assert-LastCommandSucceeded "Browser translation and visual input contracts"
 
+    node Tests\Browser\audio-capture-contracts.mjs
+    Assert-LastCommandSucceeded "Browser audio capture contracts"
+
     dotnet run --project Demo\Ai.Tlbx.VoiceAssistant.Demo.Console\Ai.Tlbx.VoiceAssistant.Demo.Console.csproj -c $Configuration --no-build -- --smoke-test
     Assert-LastCommandSucceeded "Console demo smoke test"
 

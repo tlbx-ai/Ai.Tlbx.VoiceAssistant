@@ -265,7 +265,7 @@ static class ProxyConfigurationTests
                 options.Connection.ApiKey = $"http-key-{n}";
                 options.ModelId = $"team/transcribe-{n}";
                 var snapshot = Activator.CreateInstance(workItem, 1, (long)n, new byte[4800], false, "", TimeSpan.Zero, TimeSpan.FromMilliseconds(100))!;
-                await (Task)send.Invoke(transcriber, [snapshot, (Action<string>)(_ => { })])!;
+                await (Task)send.Invoke(transcriber, [snapshot, (Action<string>)(_ => { }), CancellationToken.None])!;
                 Check(handler.Uri!.AbsolutePath == $"/{n}/audio/transcriptions" &&
                     handler.Authorization == $"Bearer http-key-{n}" && handler.Body!.Contains(options.ModelId),
                     "HTTP transcriber refreshes endpoint, auth and multipart model");

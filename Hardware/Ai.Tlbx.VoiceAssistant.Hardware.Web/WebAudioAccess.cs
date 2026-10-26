@@ -36,6 +36,8 @@ namespace Ai.Tlbx.VoiceAssistant.Hardware.Web
         // Logging
         private Action<LogLevel, string>? _logAction;
         
+        private long _recordingGeneration;
+
         // Event for audio errors
         public event EventHandler<string>? AudioError;
 
@@ -207,8 +209,9 @@ namespace Ai.Tlbx.VoiceAssistant.Hardware.Web
         }
 
         [JSInvokable]
-        public Task OnAudioDataAvailable(string base64EncodedPcm16Audio)
+        public Task OnAudioDataAvailable(string base64EncodedPcm16Audio, long recordingGeneration = 0)
         {
+            if (recordingGeneration != _recordingGeneration) return Task.CompletedTask;
             // Use counters to reduce logging noise
             _audioDataCallCount++;
             
@@ -251,7 +254,8 @@ namespace Ai.Tlbx.VoiceAssistant.Hardware.Web
             catch (Exception ex)
             {
                 Log(LogLevel.Error, $"Error invoking _audioDataReceivedHandler: {ex.Message}");
-                Log(LogLevel.Error, $"Stack trace: {ex.StackTrace}");
+                AudioError?.Invoke(this, "Microphone audio callback failed.");
+                throw;
             }
 
             return Task.CompletedTask;
@@ -370,7 +374,7 @@ namespace Ai.Tlbx.VoiceAssistant.Hardware.Web
                 {
                     var sampleRateHz = (int)targetSampleRate;
                     Log(LogLevel.Info, $"Starting recording with JS - device: {_selectedMicrophoneId ?? "default"}, targetSampleRate: {sampleRateHz}Hz");
-                    var result = await _audioModule.InvokeAsync<bool>("startRecording", _dotNetReference, 500, _selectedMicrophoneId, sampleRateHz);
+                    var result = await _audioModule.InvokeAsync<bool>("startRecording", _dotNetReference, 500, _selectedMicrophoneId, sampleRateHz, ++_recordingGeneration);
                     
                     if (result)
                     {
@@ -474,14 +478,16 @@ namespace Ai.Tlbx.VoiceAssistant.Hardware.Web
             {
                 // Handle circuit disconnection gracefully
                 CleanupRecording();
-                return true; // Pretend success since we can't actually verify
+                AudioError?.Invoke(this, "Browser disconnected before capture stop acknowledgment.");
+                return false;
             }
             catch (JSException)
             {
                 // Handle JavaScript errors gracefully (e.g., if audio context is already closed or JSON conversion issues)
                 // This is expected when stopping recording in some browser states
                 CleanupRecording();
-                return true; // Consider it stopped
+                AudioError?.Invoke(this, "Browser capture stop failed.");
+                return false;
             }
             catch (Exception ex)
             {
@@ -497,6 +503,7 @@ namespace Ai.Tlbx.VoiceAssistant.Hardware.Web
             
             // Don't dispose the DotNetObjectReference here, as we might use it again
             _audioDataReceivedHandler = null;
+            _recordingGeneration++;
         }
 
         public async Task ClearAudioQueueAsync()

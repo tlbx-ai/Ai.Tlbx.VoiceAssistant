@@ -20,8 +20,6 @@ class AudioRecorderProcessor extends AudioWorkletProcessor {
         this.buffer = new Int16Array(bufferSize);
         this.bufferIndex = 0;
         this.isActive = true;
-        this.isStopping = false;
-        this.stopCountdown = 0;
 
         const cutoff = Math.min(this.targetRate * 0.45, this.sourceRate * 0.45);
         const rc = 1 / (2 * Math.PI * cutoff);
@@ -34,8 +32,18 @@ class AudioRecorderProcessor extends AudioWorkletProcessor {
         this.port.onmessage = (event) => {
             if (event.data?.command === 'stop') {
                 console.log("[AudioProcessor] Received stop command");
-                this.isStopping = true;
-                this.stopCountdown = 3;
+                // Flush synchronously in the message handler, including the last resampler sample.
+                // A suspended context may never run another process() quantum.
+                while (this.sourceCursor < this.resampleBuffer.length) {
+                    this.emitPcmSample(this.resampleBuffer[Math.floor(this.sourceCursor)]);
+                    this.sourceCursor += this.resampleStep;
+                }
+                if (this.bufferIndex > 0) {
+                    this.port.postMessage({ audioData: this.buffer.slice(0, this.bufferIndex) });
+                    this.bufferIndex = 0;
+                }
+                this.isActive = false;
+                this.port.postMessage({ stopped: true });
             }
         };
     }
@@ -80,23 +88,7 @@ class AudioRecorderProcessor extends AudioWorkletProcessor {
     }
 
     process(inputs, outputs) {
-        // Handle graceful shutdown
-        if (this.isStopping) {
-            if (this.stopCountdown > 0) {
-                this.stopCountdown--;
-                if (this.bufferIndex > 0 && this.stopCountdown === 0) {
-                    this.port.postMessage({
-                        audioData: this.buffer.slice(0, this.bufferIndex)
-                    });
-                    this.bufferIndex = 0;
-                }
-            } else {
-                console.log("[AudioProcessor] Graceful shutdown complete");
-                this.port.postMessage({ stopped: true });
-                this.isActive = false;
-                return false;
-            }
-        }
+        if (!this.isActive) return false;
 
         const input = inputs[0]?.[0];
         if (!input || input.length === 0) {

@@ -1,3 +1,4 @@
+import { AudioCaptureDelivery } from './audioCaptureDelivery.js';
 ﻿// webAudioAccess.js
 let mediaStream = null;
 let mediaStreamSource = null;
@@ -8,6 +9,8 @@ let isRecording = false;
 let audioContext = null;
 let audioInitialized = false;
 let recordingInterval = null;
+let captureDelivery = null;
+let captureMonitor = null;
 let audioContextSampleRate = 48000; // Process at 48kHz for better quality, downsample to provider's rate
 let playbackNodeConnected = false;
 let sessionCount = 0;
@@ -621,7 +624,7 @@ function getBaseDeviceName(fullName) {
 }
 
 // --- Recording ---
-async function startRecording(dotNetObj, intervalMs = 500, deviceId = null, targetSampleRate = 24000) {
+async function startRecording(dotNetObj, intervalMs = 500, deviceId = null, targetSampleRate = 24000, recordingGeneration = 0) {
     logNormal(`Attempting to start recording - Session ${sessionCount}`, {
         intervalMs,
         deviceId: deviceId || 'default',
@@ -745,6 +748,19 @@ async function startRecording(dotNetObj, intervalMs = 500, deviceId = null, targ
 
         saveDiagnostics('audio_processing_chain_created');
 
+        const captureReference = dotNetObj;
+        const failCapture = message => {
+            mediaStream?.getTracks().forEach(track => track.stop());
+            Promise.resolve(captureReference.invokeMethodAsync('OnAudioError', message)).catch(error => logNormal('Audio error notification failed', error));
+        };
+        const delivery = new AudioCaptureDelivery(
+            audio => captureReference.invokeMethodAsync('OnAudioDataAvailable', audio, recordingGeneration), failCapture);
+        captureDelivery = delivery;
+        mediaStream.getAudioTracks().forEach(track => track.addEventListener('ended', () => {
+            if (isRecording) delivery.fail('Microphone track ended unexpectedly.');
+        }));
+        audioWorkletNode.onprocessorerror = () => delivery.fail('Microphone worklet failed.');
+
         // Setup message handling from the recorder worklet
         let audioDataCount = 0;
         let lastAudioDataTime = Date.now();
@@ -771,7 +787,7 @@ async function startRecording(dotNetObj, intervalMs = 500, deviceId = null, targ
                 }
                 const base64Audio = btoa(binary);
                 // console.log(`[js] Sending audio chunk: ${base64Audio.substring(0, 30)}...`);
-                dotNetReference?.invokeMethodAsync('OnAudioDataAvailable', base64Audio);
+                delivery.enqueue(base64Audio);
             } else {
                 // Log any other message types from worklet
                 logVerbose('Received non-audio message from worklet', event.data);
@@ -779,7 +795,7 @@ async function startRecording(dotNetObj, intervalMs = 500, deviceId = null, targ
         };
         
         // Set up a timer to detect when audio data stops coming from worklet
-        const audioDataTimer = setInterval(() => {
+        captureMonitor = setInterval(() => {
             if (isRecording && Date.now() - lastAudioDataTime > 2000) { // 2 seconds without data
                 logNormal('Audio data flow stopped from worklet', {
                     lastDataTime: new Date(lastAudioDataTime).toISOString(),
@@ -787,7 +803,8 @@ async function startRecording(dotNetObj, intervalMs = 500, deviceId = null, targ
                     isRecording,
                     audioDataCount
                 });
-                clearInterval(audioDataTimer); // Stop checking once we've detected the issue
+                delivery.fail('Microphone audio flow stopped.');
+                clearInterval(captureMonitor); captureMonitor = null;
             }
         }, 1000); // Check every second
 
@@ -847,128 +864,42 @@ async function startRecording(dotNetObj, intervalMs = 500, deviceId = null, targ
 
 // --- Stop Recording ---
 async function stopRecording() {
-    console.log("Attempting to stop recording.");
-        if (!isRecording) {
-        console.warn("Recording not in progress.");
-            return;
-        }
-        
-    isRecording = false; // Set flag immediately
-
-     // Disconnect the audio graph in the correct order
-     if (mediaStreamSource) {
-         logNormal('Disconnecting MediaStreamSource');
-         try {
-             mediaStreamSource.disconnect();
-         } catch(e) {
-             logNormal('Error disconnecting MediaStreamSource', e);
-         }
-     }
-
-     // Disconnect processing chain nodes
-     if (deEsserNode) {
-         try {
-             deEsserNode.disconnect();
-         } catch(e) {
-             logNormal('Error disconnecting deEsserNode', e);
-         }
-         deEsserNode = null;
-     }
-     if (compressorNode) {
-         try {
-             compressorNode.disconnect();
-         } catch(e) {
-             logNormal('Error disconnecting compressorNode', e);
-         }
-         compressorNode = null;
-     }
-     if (makeupGainNode) {
-         try {
-             makeupGainNode.disconnect();
-         } catch(e) {
-             logNormal('Error disconnecting makeupGainNode', e);
-         }
-         makeupGainNode = null;
-     }
-     
-     // Signal the worklet processor to stop processing new audio and clean up
-     if (audioWorkletNode) {
-         logNormal('Initiating graceful stop of AudioRecorderProcessor node');
-         try {
-              // Store the original onmessage handler
-              const originalHandler = audioWorkletNode.port.onmessage;
-              
-              // Wait for worklet to confirm it has stopped
-              const stopPromise = new Promise((resolve) => {
-                  audioWorkletNode.port.onmessage = (event) => {
-                      // Still process audio data if it comes
-                      if (originalHandler && event.data.audioData) {
-                          originalHandler(event);
-                      }
-                      // Check for stop confirmation
-                      if (event.data.stopped) {
-                          resolve();
-                      }
-                  };
-                  
-                  // Send stop command to processor
-                  audioWorkletNode.port.postMessage({ command: 'stop' });
-                  
-                  // Timeout after 200ms if no response
-                  setTimeout(resolve, 200);
-              });
-              
-              await stopPromise;
-              logNormal('AudioRecorderProcessor confirmed stopped');
-              
-              // Now disconnect
-              audioWorkletNode.disconnect();
-              audioWorkletNode = null; // Clear the reference so it gets recreated next time
-         } catch(e) { 
-             logNormal('Error cleaning up recorder worklet', e);
-         }
-     }
-
-    // Add delay to let the audio subsystem settle
-    await new Promise(resolve => setTimeout(resolve, 100));
-
-    // Stop the media stream tracks properly with additional delay
-    if (mediaStream) {
-        logNormal('Stopping media stream tracks');
-        const tracks = mediaStream.getTracks();
-        
-        // First mute all tracks
-        tracks.forEach(track => {
-            track.enabled = false;
-        });
-        
-        // Wait longer for Bluetooth devices to process the state change
-        await new Promise(resolve => setTimeout(resolve, 150));
-        
-        // Now stop the tracks
-        tracks.forEach(track => {
-            try {
-                track.stop();
-            } catch (e) {
-                logNormal('Error stopping track', e);
-            }
-        });
-        mediaStream = null;
-        mediaStreamSource = null;
-    } else {
-        logVerbose('stopRecording called but mediaStream was already null');
+    if (!isRecording) return true;
+    isRecording = false;
+    if (captureMonitor) { clearInterval(captureMonitor); captureMonitor = null; }
+    // Release the physical microphone before waiting for the provider or .NET delivery.
+    mediaStream?.getTracks().forEach(track => track.stop());
+    mediaStream = null;
+    try { mediaStreamSource?.disconnect(); } catch { }
+    mediaStreamSource = null;
+    for (const node of [deEsserNode, compressorNode, makeupGainNode]) {
+        try { node?.disconnect(); } catch { }
     }
-
-    // Clear interval if it was used (should not be with worklet)
-        if (recordingInterval) {
-            clearInterval(recordingInterval);
-            recordingInterval = null;
-        }
-        
-     // audioChunks = []; // Clear any old chunks if array still exists
-
-    logNormal('Recording stopped successfully');
-    dotNetReference?.invokeMethodAsync('OnRecordingStateChanged', false); // Notify C#
+    deEsserNode = compressorNode = makeupGainNode = null;
+    let stopped = true;
+    const recorder = audioWorkletNode;
+    const delivery = captureDelivery;
+    if (recorder) {
+        const originalHandler = recorder.port.onmessage;
+        stopped = await new Promise(resolve => {
+            const timer = setTimeout(() => resolve(false), 500);
+            recorder.port.onmessage = event => {
+                if (event.data.audioData) originalHandler?.(event);
+                if (event.data.stopped) { clearTimeout(timer); resolve(true); }
+            };
+            recorder.port.postMessage({ command: 'stop' });
+        });
+        if (!stopped) delivery?.fail('Microphone worklet stop was not acknowledged.');
+        try { recorder.disconnect(); } catch { }
+        recorder.port.onmessage = null;
+        audioWorkletNode = null;
+    }
+    const delivered = delivery ? await delivery.drain() : true;
+    captureDelivery = null;
+    if (recordingInterval) { clearInterval(recordingInterval); recordingInterval = null; }
+    try { await dotNetReference?.invokeMethodAsync('OnRecordingStateChanged', false); }
+    catch { return false; }
+    return stopped && delivered;
 }
 
 // --- Audio Playback ---

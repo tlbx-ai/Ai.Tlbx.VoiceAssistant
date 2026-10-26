@@ -8,6 +8,15 @@
 
 ---
 
+## HTTP transcription in 11.7
+
+Long recordings use bounded, non-overlapping audio sections. Capture stops independently
+of pending HTTP requests; finalization has a deadline. Public status/error callbacks expose
+confirmed text, recorded/confirmed audio endpoints, missing ranges and retry metadata.
+Browser audio delivery acknowledges the final .NET callback and reports capture failures.
+See the [current integration guide](https://github.com/tlbx-ai/Ai.Tlbx.VoiceAssistant#long-recordings-with-http-transcription)
+and [all ten packages, including Voxtral](https://github.com/tlbx-ai/Ai.Tlbx.VoiceAssistant#all-packages).
+
 ## Quick Start (Blazor Server)
 
 **1. Install packages:**

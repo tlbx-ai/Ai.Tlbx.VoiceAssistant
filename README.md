@@ -1,6 +1,6 @@
 # AI Voice Assistant Toolkit
 
-**Real-time voice conversations and speech-to-text in .NET — OpenAI, Google Gemini, and xAI Grok in one unified API.**
+Voice conversations, transcription and speech translation for .NET 9/10. Compose a provider, audio hardware and your application tools. Supports OpenAI, Google Gemini, xAI Grok and Mistral Voxtral.
 
 [![NuGet](https://img.shields.io/nuget/v/Ai.Tlbx.VoiceAssistant.svg?label=nuget&color=blue)](https://www.nuget.org/packages/Ai.Tlbx.VoiceAssistant/)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
@@ -8,81 +8,33 @@
 
 ---
 
-## OpenAI voice extensions (11.4)
+## Choose a mode
 
-Voice input transcription now defaults to `GptLiveTranscribe`. Configure
-`InputAudioTranscription.Keywords`, `Languages`, `Prompt` and `Delay`; explicit older models
-remain selectable. `GptTranscribe` is also available for committed-turn input over WebSocket;
-WebRTC rejects that model before creating a session.
+| Goal | API / guide |
+|------|-------------|
+| Voice conversation with tools | `VoiceAssistant` + a provider; [quick start](#quick-start-blazor-server) |
+| Browser audio direct to OpenAI | `OpenAiDirectRealtimeVoiceProvider`; server keeps credentials and tools |
+| GPT-Live with your reasoning/agent backend | [GPT-Live setup and lifecycle](docs/openai-gpt-live.md) |
+| Transcription only, low latency | [Realtime transcription](#realtime-transcription-stream) |
+| Long HTTP recordings with speaker segments | [Sectioned HTTP transcription](#long-recordings-with-http-transcription) |
+| Voxtral STT → application backend → TTS | [Mistral configuration](Provider/Ai.Tlbx.VoiceAssistant.Provider.Mistral/README.md) |
+| Company gateways and custom model IDs | [Gateway configuration](tools/gateway-configuration.md) |
 
-`VoiceAssistant.SendImageAsync(imageUrl, text)` and the optional `IVisualInputProvider` interface
-accept HTTPS images or base64 PNG/JPEG/WebP/GIF data URLs. Realtime sends native image conversation
-items. GPT-Live routes the image into managed Responses or its configured client backend, since
-the Live frontend only consumes audio/text. Managed image requests wait for running responses
-and complete tool batches. With application-owned client delegation, handle `OnClientVisualInput`
-and return concise backend findings through commentary. Managed Live retains its 32-KiB cumulative
-input limit; use an image URL or the client backend for larger inline images.
+## New in 11.7
 
-```csharp
-await assistant.SendImageAsync("https://example.com/photo.jpg", "What is visible here?");
-```
+HTTP live transcription processes bounded sections. Confirmed sections remain as text and
+are never uploaded again. `StopAsync()` stops capture independently of HTTP requests and
+acknowledges the last hardware block. The task returned by `TranscribeLive` completes after
+bounded finalization. `LatestStatus` and `OnStatusChanged` expose completion, partial coverage
+and failure; `OnTranscriptionError` reports retries and request metadata without conversation text.
 
-Stored GPT-Live sessions support `OpenAiLiveSettings.ForkFromSessionId` over WebSocket and WebRTC,
-plus `DownloadRecordingAsync(sessionId, destinationStream)`. Enable `Store` on the source and wait
-for successful finalization first. Forks inherit the source model, instructions and history;
-append current task guidance after startup. Storage must be enabled for the project and is
-unavailable with Zero Data Retention; recordings expire after 30 days.
+The default maximum section is 30 seconds (1.44 MB PCM16); pending audio is capped at
+120 seconds (5.76 MB). If the provider cannot keep up, capture stops with an explicit
+incomplete result. Transcript text/segments grow with the conversation. Applications own
+durable checkpoints and recovery across page/circuit changes.
 
-Continuous speech translation uses `OpenAiTranslationProvider` with `OpenAiTranslationSettings`
-and model `gpt-realtime-translate`, or `WithOpenAiTranslation()` in the fluent builder:
-
-```csharp
-await using var translator = new OpenAiTranslationProvider();
-translator.OnTranscriptDelta = fragment => Console.Write(fragment.Delta);
-translator.OnAudioReceived = pcm => PlayTranslatedPcm(pcm);
-await translator.ConnectAsync(new OpenAiTranslationSettings { TargetLanguage = "en" });
-await translator.ProcessAudioAsync(sourcePcm16Base64); // mono 24 kHz; continuously include silence
-await translator.DisconnectAsync(); // drains final transcripts/audio through session.closed
-```
-
-Translation has continuous source/target fragments rather than assistant turns, tools or
-`response.create`. Send approximately 200-ms PCM chunks, preserve silence and use one session per
-source speaker and output language. `SourceTranscriptionModelId = null` disables source captions;
-`EnableNoiseReduction = false` disables input denoising. Playback consumers can set
-`WaitForPlaybackDrainAsync`; a failed drain is surfaced. Transcript callbacks never invent completed
-turns. `FinalOutputConfirmed` identifies receipt of the terminal server event, not a translation
-quality guarantee.
-
-The translation protocol currently provides no billed usage on `session.closed`. WebSocket
-sessions emit a clearly marked client-measured report with sent/received audio duration; direct
-WebRTC does not invent billed tokens or duration. `ElapsedMs` retains provider caption alignment
-metadata when supplied.
-
-For direct browser media, install the OpenAI.AspNetCore package, register `AddOpenAiDirectTranslation`,
-map `MapOpenAiDirectTranslation`, and use `OpenAiDirectTranslationVoiceProvider.StartBrowserSessionAsync`.
-Authorize your users with `OpenAiDirectTranslationOptions.AuthorizeRequest`; requests also enforce
-same origin, bounded payloads and single-use prepared sessions. Standard and ephemeral API keys
-remain server-side. Browser tracks carry microphone/playback audio, with ordered caption callbacks
-and bounded graceful close. The web demo exposes this at `/translation`.
-
-Sources: [input transcription](https://developers.openai.com/api/docs/guides/realtime-transcription),
-[Realtime images](https://developers.openai.com/api/docs/guides/realtime-conversations#image-inputs),
-[Live delegation](https://developers.openai.com/api/docs/guides/live-delegation),
-[stored sessions](https://developers.openai.com/api/docs/guides/live-conversations#store-and-fork-a-session),
-[translation](https://developers.openai.com/api/docs/guides/realtime-translation).
-
-## GPT-Live (11.0)
-
-`gpt-live-1` is supported by `OpenAiLiveProvider` in the existing OpenAI package.
-It uses continuous full-duplex audio and a separate backend for reasoning/tools.
-Use `WithOpenAiLive()` with `OpenAiLiveSettings`, or construct the provider directly.
-The existing `WithOpenAi()` and direct Realtime WebRTC provider keep their Realtime behavior.
-Since 11.0.2, `OpenAiDirectLiveVoiceProvider` adds direct browser GPT-Live WebRTC with server-side
-tools and usage over an authenticated sideband. See [setup and lifecycle](docs/openai-gpt-live.md#direct-browser-webrtc-1102).
-
-See the [GPT-Live integration and API analysis](docs/openai-gpt-live.md) for client/Responses delegation,
-timed transcripts, startup history, usage accounting, examples, and migration constraints.
-
+Browser capture preserves delivery order, drains the final .NET callback before stop
+acknowledgment, bounds its delivery queue and reports worklet, track and delivery failures.
 
 ## Quick Start (Blazor Server)
 
@@ -184,6 +136,7 @@ app.MapOpenAiDirectRealtimeVoice();
 
 | Package | Purpose | NuGet |
 |---------|---------|-------|
+| `Ai.Tlbx.VoiceAssistant.Provider.Mistral` | Voxtral transcription and speech synthesis via OpenRouter or native Mistral | [NuGet](https://www.nuget.org/packages/Ai.Tlbx.VoiceAssistant.Provider.Mistral/) |
 | `Ai.Tlbx.VoiceAssistant` | Core orchestrator | [![NuGet](https://img.shields.io/nuget/v/Ai.Tlbx.VoiceAssistant.svg)](https://www.nuget.org/packages/Ai.Tlbx.VoiceAssistant/) |
 | `...Provider.OpenAi` | OpenAI realtime voice and transcription | [![NuGet](https://img.shields.io/nuget/v/Ai.Tlbx.VoiceAssistant.Provider.OpenAi.svg)](https://www.nuget.org/packages/Ai.Tlbx.VoiceAssistant.Provider.OpenAi/) |
 | `...Provider.OpenAi.AspNetCore` | Blazor Server direct OpenAI WebRTC transport and server-side tools | [![NuGet](https://img.shields.io/nuget/v/Ai.Tlbx.VoiceAssistant.Provider.OpenAi.AspNetCore.svg)](https://www.nuget.org/packages/Ai.Tlbx.VoiceAssistant.Provider.OpenAi.AspNetCore/) |
@@ -356,9 +309,12 @@ await assistant.StopAsync();
 
 `OnTranscriptionDelta` fires as partial text arrives. `OnTranscriptionCompleted` fires when the utterance is finalized; `VoiceAssistant` also adds the final transcript to chat history as a user message through `OnMessageAdded`.
 
-### Push-to-Talk / Near-Live HTTP Transcription
+### Long recordings with HTTP transcription
 
-Use `OpenAiHttpLiveTranscriber` when you want a hold-to-transcribe UI without keeping a realtime WebSocket session open. It records microphone audio through `IAudioHardwareAccess`, repeatedly uploads the current utterance to OpenAI's HTTP transcription endpoint, and calls back with the latest hypothesis so your UI can replace the current line as the model revises earlier words.
+`OpenAiHttpLiveTranscriber` records through `IAudioHardwareAccess` and uploads only
+unconfirmed, non-overlapping sections. It prefers a quiet boundary when available and
+enforces `MaxSectionDuration`. The text callback receives the cumulative transcript,
+including provisional text; `LatestStatus.Text` contains only confirmed text.
 
 ```csharp
 await using var transcriber = new OpenAiHttpLiveTranscriber(
@@ -369,14 +325,17 @@ await using var transcriber = new OpenAiHttpLiveTranscriber(
         Languages = ["de", "en"],
         Keywords = ["TLBX", "VoiceAssistant"],
         Prompt = "Expect German with business and IT terms",
-        SnapshotInterval = TimeSpan.FromMilliseconds(700),
-        MinimumUtteranceDuration = TimeSpan.FromMilliseconds(350)
+        MaxSectionDuration = TimeSpan.FromSeconds(30),
+        MaxBufferedDuration = TimeSpan.FromSeconds(120),
+        RequestTimeout = TimeSpan.FromSeconds(30),
+        StreamIdleTimeout = TimeSpan.FromSeconds(10),
+        FinalizationTimeout = TimeSpan.FromSeconds(15)
     },
-    apiKey: "sk-...");
+    apiKey: Environment.GetEnvironmentVariable("OPENAI_API_KEY"));
 
 transcriber.OnUsageReceived = usage =>
 {
-    // Every successful snapshot upload is a separate billable transcription request.
+    // Each accepted section upload is a separate billable transcription request.
     Console.WriteLine($"Uploaded audio: {usage.InputAudioDuration?.TotalSeconds:F2}s");
 };
 
@@ -394,24 +353,51 @@ transcriber.OnStructuredTranscriptionReceived = transcript =>
     Console.WriteLine(transcript.ToSpeakerLabeledText());
 };
 
-using var cts = new CancellationTokenSource();
+transcriber.OnStatusChanged = status => Console.WriteLine(
+    $"{status.State}: {status.ConfirmedAudioEnd} / {status.RecordedAudioEnd}");
+transcriber.OnTranscriptionError = error => Console.WriteLine(
+    $"{error.Code}: HTTP {error.HttpStatus}, retry={error.WillRetry}");
 
 var liveTask = transcriber.TranscribeLive(text =>
 {
     Console.Write($"\r{text}");
-}, cts.Token);
+});
 
 // Stop when the user releases the push-to-talk button.
-cts.Cancel();
 await transcriber.StopAsync();
-await liveTask;
+Console.WriteLine(transcriber.LatestStatus?.Text); // confirmed text is immediately usable
+await liveTask; // bounded finalization of unconfirmed audio only
+var result = transcriber.LatestStatus!;
+if (!result.IsComplete)
+    Console.WriteLine($"Partial result: {result.MissingSections.Count} unconfirmed audio ranges.");
 ```
 
-For repeated HTTP snapshots, `IsSnapshotComplete` identifies a completed request and
-`IsSessionFinal` identifies the final session state. `SnapshotRevision`, `AudioStart`, and
-`AudioEnd` identify the request and its audio coverage. The legacy `IsFinal` property retains
-provider/request finality; use `IsSessionFinal` when deciding that the whole recording ended.
-`TranscriptSegment.Id` is provider-scoped and may change across separate snapshot requests.
+Marshal callbacks to your UI dispatcher (for example `InvokeAsync` in Blazor).
+`StopAsync()` waits for hardware stop/final-block acknowledgment, with a separate
+`HardwareStopTimeout` (default 3 seconds). `DisposeAsync()` cancels HTTP/stream work
+and joins the session before releasing resources. Await `liveTask` before reuse.
+
+`SnapshotInterval` controls polling latency. `MinimumUtteranceDuration` suppresses tiny
+requests while recording; Stop still sends short tails. `LeadingTrimDuration` remains
+source-compatible and no longer discards samples. Request deadlines cover upload and body;
+stream idle deadlines bound individual reads. Network, 429 and 5xx failures have bounded
+retries (`MaxRetries`, default 2), respecting `Retry-After`. Auth, format and size failures
+stop without automatic retries. Error callbacks carry section ID, coverage, HTTP status,
+retry decision and provider request ID; logs exclude provider bodies and transcript text.
+
+`IsSnapshotComplete` identifies a completed request. `IsSessionFinal` means the session
+ended; check `LatestStatus.IsComplete` to establish full capture and audio coverage.
+Failed finalization preserves earlier confirmed text and lists the unconfirmed tail in
+`MissingSections`. Applications own durable storage and recovery across page/circuit changes.
+
+For diarization choose `Gpt4oTranscribeDiarize`. Segment timestamps are absolute within the
+session; IDs include the section revision. Anonymous labels are scoped as `section-3/A`,
+because separate requests cannot establish that two `A` labels identify the same person.
+Configured `KnownSpeakerReferences` preserve their names. Repeated events within a section
+are deduplicated. Sections have no audio overlap, so repeated phrases across boundaries are
+retained. Hard cuts during continuous speech can affect word accuracy; cross-section speaker
+identity without references is not inferred. See the
+[OpenAI file transcription contract](https://developers.openai.com/api/docs/guides/speech-to-text).
 
 ### Transcription Models
 
@@ -736,6 +722,82 @@ await assistant.StopAsync();
 
 ---
 
+## OpenAI visual input, storage and translation
+
+Voice input transcription now defaults to `GptLiveTranscribe`. Configure
+`InputAudioTranscription.Keywords`, `Languages`, `Prompt` and `Delay`; explicit older models
+remain selectable. `GptTranscribe` is also available for committed-turn input over WebSocket;
+WebRTC rejects that model before creating a session.
+
+`VoiceAssistant.SendImageAsync(imageUrl, text)` and the optional `IVisualInputProvider` interface
+accept HTTPS images or base64 PNG/JPEG/WebP/GIF data URLs. Realtime sends native image conversation
+items. GPT-Live routes the image into managed Responses or its configured client backend, since
+the Live frontend only consumes audio/text. Managed image requests wait for running responses
+and complete tool batches. With application-owned client delegation, handle `OnClientVisualInput`
+and return concise backend findings through commentary. Managed Live retains its 32-KiB cumulative
+input limit; use an image URL or the client backend for larger inline images.
+
+```csharp
+await assistant.SendImageAsync("https://example.com/photo.jpg", "What is visible here?");
+```
+
+Stored GPT-Live sessions support `OpenAiLiveSettings.ForkFromSessionId` over WebSocket and WebRTC,
+plus `DownloadRecordingAsync(sessionId, destinationStream)`. Enable `Store` on the source and wait
+for successful finalization first. Forks inherit the source model, instructions and history;
+append current task guidance after startup. Storage must be enabled for the project and is
+unavailable with Zero Data Retention; recordings expire after 30 days.
+
+Continuous speech translation uses `OpenAiTranslationProvider` with `OpenAiTranslationSettings`
+and model `gpt-realtime-translate`, or `WithOpenAiTranslation()` in the fluent builder:
+
+```csharp
+await using var translator = new OpenAiTranslationProvider();
+translator.OnTranscriptDelta = fragment => Console.Write(fragment.Delta);
+translator.OnAudioReceived = pcm => PlayTranslatedPcm(pcm);
+await translator.ConnectAsync(new OpenAiTranslationSettings { TargetLanguage = "en" });
+await translator.ProcessAudioAsync(sourcePcm16Base64); // mono 24 kHz; continuously include silence
+await translator.DisconnectAsync(); // drains final transcripts/audio through session.closed
+```
+
+Translation has continuous source/target fragments rather than assistant turns, tools or
+`response.create`. Send approximately 200-ms PCM chunks, preserve silence and use one session per
+source speaker and output language. `SourceTranscriptionModelId = null` disables source captions;
+`EnableNoiseReduction = false` disables input denoising. Playback consumers can set
+`WaitForPlaybackDrainAsync`; a failed drain is surfaced. Transcript callbacks never invent completed
+turns. `FinalOutputConfirmed` identifies receipt of the terminal server event, not a translation
+quality guarantee.
+
+The translation protocol currently provides no billed usage on `session.closed`. WebSocket
+sessions emit a clearly marked client-measured report with sent/received audio duration; direct
+WebRTC does not invent billed tokens or duration. `ElapsedMs` retains provider caption alignment
+metadata when supplied.
+
+For direct browser media, install the OpenAI.AspNetCore package, register `AddOpenAiDirectTranslation`,
+map `MapOpenAiDirectTranslation`, and use `OpenAiDirectTranslationVoiceProvider.StartBrowserSessionAsync`.
+Authorize your users with `OpenAiDirectTranslationOptions.AuthorizeRequest`; requests also enforce
+same origin, bounded payloads and single-use prepared sessions. Standard and ephemeral API keys
+remain server-side. Browser tracks carry microphone/playback audio, with ordered caption callbacks
+and bounded graceful close. The web demo exposes this at `/translation`.
+
+Sources: [input transcription](https://developers.openai.com/api/docs/guides/realtime-transcription),
+[Realtime images](https://developers.openai.com/api/docs/guides/realtime-conversations#image-inputs),
+[Live delegation](https://developers.openai.com/api/docs/guides/live-delegation),
+[stored sessions](https://developers.openai.com/api/docs/guides/live-conversations#store-and-fork-a-session),
+[translation](https://developers.openai.com/api/docs/guides/realtime-translation).
+
+## GPT-Live conversations
+
+`gpt-live-1` is supported by `OpenAiLiveProvider` in the existing OpenAI package.
+It uses continuous full-duplex audio and a separate backend for reasoning/tools.
+Use `WithOpenAiLive()` with `OpenAiLiveSettings`, or construct the provider directly.
+The existing `WithOpenAi()` and direct Realtime WebRTC provider keep their Realtime behavior.
+Since 11.0.2, `OpenAiDirectLiveVoiceProvider` adds direct browser GPT-Live WebRTC with server-side
+tools and usage over an authenticated sideband. See [setup and lifecycle](docs/openai-gpt-live.md#direct-browser-webrtc-1102).
+
+See the [GPT-Live integration and API analysis](docs/openai-gpt-live.md) for client/Responses delegation,
+timed transcripts, startup history, usage accounting, examples, and migration constraints.
+
+
 ## Requirements
 
 - **.NET 9.0 or .NET 10.0**
@@ -754,8 +816,8 @@ MIT — do whatever you want.
 
 <p align="center">
   <a href="https://www.nuget.org/packages/Ai.Tlbx.VoiceAssistant/">NuGet</a> •
-  <a href="https://github.com/AiTlbx/Ai.Tlbx.VoiceAssistant/issues">Issues</a> •
-  <a href="https://github.com/AiTlbx/Ai.Tlbx.VoiceAssistant">GitHub</a>
+  <a href="https://github.com/tlbx-ai/Ai.Tlbx.VoiceAssistant/issues">Issues</a> •
+  <a href="https://github.com/tlbx-ai/Ai.Tlbx.VoiceAssistant">GitHub</a>
 </p>
 
 ## Custom gateways and model aliases

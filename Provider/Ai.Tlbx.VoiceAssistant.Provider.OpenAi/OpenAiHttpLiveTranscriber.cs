@@ -17,8 +17,7 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi
 {
     /// <summary>
     /// Near-live microphone transcription over OpenAI's HTTP transcription API.
-    /// This avoids the realtime WebSocket API by repeatedly uploading the full
-    /// audio captured since the user pressed the push-to-talk button.
+    /// Uploads bounded, non-overlapping PCM sections and retains confirmed text across requests.
     /// </summary>
     public sealed class OpenAiHttpLiveTranscriber : IAsyncDisposable, IStructuredTranscriptionProvider, IStructuredTranscriptionProgressProvider
     {
@@ -38,7 +37,21 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi
         private bool _snapshotInFlight;
         private int _sessionId;
         private long _snapshotRevision;
-        private int _lastSnapshotByteCount;
+        private long _capturedBytes;
+        private long _confirmedBytes;
+        private long _bufferStartBytes;
+        private TaskCompletionSource? _completion;
+        private TaskCompletionSource? _startup;
+        private CancellationTokenSource? _finalizationCts;
+        private Task? _microphoneStop;
+        private bool _acceptAudio;
+        private bool _hardwareFailed;
+        private bool _fatal;
+        private bool _retryExhausted;
+        private bool _disposing;
+        private readonly List<TranscriptSegment> _confirmedSegments = new();
+        private string _confirmedText = string.Empty;
+        private readonly SemaphoreSlim _audioReady = new(0, 1);
         private MemoryStream _capturedAudio = new();
         private string _latestPublishedText = string.Empty;
         private StructuredTranscript? _latestStructuredTranscript;
@@ -104,7 +117,7 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi
             _ownsHttpClient = httpClient == null;
             _httpClient = httpClient ?? new HttpClient
             {
-                Timeout = TimeSpan.FromSeconds(30)
+                Timeout = Timeout.InfiniteTimeSpan
             };
             _apiKey = resolvedApiKey;
         }
@@ -122,168 +135,213 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi
         /// Starts near-live transcription and keeps running until <see cref="StopAsync"/> is called,
         /// the instance is disposed, or the provided cancellation token is cancelled.
         /// </summary>
-        public async Task TranscribeLive(Action<string> onTextChunk, CancellationToken cancellationToken)
+        public Task TranscribeLive(Action<string> onTextChunk, CancellationToken cancellationToken)
         {
             ArgumentNullException.ThrowIfNull(onTextChunk);
-            ThrowIfDisposed();
-            ValidateOptions();
-
-            CancellationTokenSource runCts;
             lock (_sync)
             {
-                if (_isRunning)
-                {
-                    throw new InvalidOperationException("Live transcription is already running.");
-                }
-
-                ResetRunState(clearTranscriptResult: true);
+                ThrowIfDisposed();
+                ValidateOptions();
+                if (_isRunning) throw new InvalidOperationException("Live transcription is already running.");
+                ResetRunState(true);
                 _sessionId++;
                 _runCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-                runCts = _runCts;
+                _completion = new(TaskCreationOptions.RunContinuationsAsynchronously);
+                _startup = new(TaskCreationOptions.RunContinuationsAsynchronously);
+                _finalizationCts = new();
+                _microphoneStop = null;
                 _isRunning = true;
+                _acceptAudio = true;
             }
+            return RunSessionAsync(onTextChunk);
+        }
 
+        /// <summary>Latest lifecycle, confirmed text, audio coverage and missing ranges. Safe to read while finalizing.</summary>
+        public HttpTranscriptionStatus? LatestStatus { get; private set; }
+        public Action<HttpTranscriptionStatus>? OnStatusChanged { get; set; }
+        public Action<HttpTranscriptionError>? OnTranscriptionError { get; set; }
+        public string LatestText { get { lock (_sync) return _latestPublishedText; } }
+        public int BufferedAudioBytes { get { lock (_sync) return (int)_capturedAudio.Length; } }
+
+        private async Task RunSessionAsync(Action<string> onTextChunk)
+        {
+            var runToken = _runCts!.Token;
+            _hardwareAccess.AudioError += OnHardwareError;
             try
             {
-                await _hardwareAccess.InitAudioAsync();
-
-                bool started = await _hardwareAccess.StartRecordingAudio(OnAudioDataReceived, AudioSampleRate.Rate24000);
-                if (!started)
+                PublishStatus(HttpTranscriptionState.Recording);
+                try
                 {
-                    throw new InvalidOperationException("Failed to start microphone recording.");
+                    await _hardwareAccess.InitAudioAsync();
+                    var sessionId = _sessionId;
+                    if (!await _hardwareAccess.StartRecordingAudio((sender, audio) =>
+                    {
+                        lock (_sync) { if (sessionId != _sessionId) return; OnAudioDataReceived(sender, audio); }
+                    }, AudioSampleRate.Rate24000))
+                        throw new InvalidOperationException("Failed to start microphone recording.");
                 }
-
-                await RunLoopAsync(onTextChunk, runCts.Token);
+                finally { _startup!.TrySetResult(); }
+                // Cancellation during initialization still stops the newly opened microphone.
+                using var registration = runToken.Register(() => { _ = StopMicrophoneAsync(); });
+                try
+                {
+                    while (!runToken.IsCancellationRequested && !_fatal)
+                    {
+                        await _audioReady.WaitAsync(Options.SnapshotInterval, runToken);
+                        var snapshot = TryCreateSnapshot(false);
+                        if (snapshot.HasValue && !await ProcessSnapshotAsync(snapshot.Value, onTextChunk, runToken)) break;
+                    }
+                }
+                catch (OperationCanceledException) when (runToken.IsCancellationRequested) { }
+                await StopMicrophoneAsync();
+                PublishStatus(HttpTranscriptionState.Finalizing);
+                _finalizationCts!.CancelAfter(Options.FinalizationTimeout);
+                while (!_fatal && !_disposing && !_retryExhausted)
+                {
+                    var tail = TryCreateSnapshot(true);
+                    if (!tail.HasValue) break;
+                    if (!await ProcessSnapshotAsync(tail.Value, onTextChunk, _finalizationCts.Token)) break;
+                }
+            }
+            catch (OperationCanceledException) when (_finalizationCts?.IsCancellationRequested == true)
+            {
+                ReportError(new HttpTranscriptionError { Code = "finalization_cancelled", IsFatal = false,
+                    Message = "Finalization deadline or disposal ended the unconfirmed tail." });
+            }
+            catch (Exception ex)
+            {
+                ReportError(new HttpTranscriptionError { Code = "session_failed", IsFatal = true, Message = ex.GetType().Name });
+                _fatal = true;
             }
             finally
             {
-                await StopRecordingSafeAsync();
-
+                await StopMicrophoneAsync();
+                _hardwareAccess.AudioError -= OnHardwareError;
+                PublishSessionFinal(onTextChunk);
+                PublishStatus(_fatal ? HttpTranscriptionState.Failed :
+                    _hardwareFailed || _confirmedBytes < _capturedBytes ? HttpTranscriptionState.Partial : HttpTranscriptionState.Completed);
                 lock (_sync)
                 {
                     _isRunning = false;
-
-                    _runCts?.Dispose();
+                    _acceptAudio = false;
+                    _capturedAudio.SetLength(0);
+                    _runCts!.Dispose();
                     _runCts = null;
-
-                    ResetRunState(clearTranscriptResult: false);
+                    _finalizationCts!.Dispose();
+                    _finalizationCts = null;
+                    _completion!.TrySetResult();
                 }
             }
         }
 
-        public Task StopAsync()
+        /// <summary>Stops capture and acknowledges the last hardware block; await TranscribeLive for bounded finalization.</summary>
+        public async Task StopAsync()
+        {
+            lock (_sync) { _runCts?.Cancel(); }
+            await StopMicrophoneAsync();
+        }
+
+        private Task StopMicrophoneAsync()
         {
             lock (_sync)
             {
-                _runCts?.Cancel();
+                if (!_isRunning) return Task.CompletedTask;
+                return _microphoneStop ??= StopMicrophoneCoreAsync();
             }
-
-            return Task.CompletedTask;
         }
 
-        private async Task RunLoopAsync(Action<string> onTextChunk, CancellationToken cancellationToken)
+        private async Task StopMicrophoneCoreAsync()
         {
+            // Publish the shared stop task before hardware callbacks can re-enter StopAsync.
+            await Task.Yield();
+            await _startup!.Task;
             try
             {
-                while (true)
-                {
-                    await Task.Delay(Options.SnapshotInterval, cancellationToken);
-
-                    var snapshot = TryCreateSnapshot(forceFinal: false);
-                    if (snapshot.HasValue)
-                    {
-                        await ProcessSnapshotAsync(snapshot.Value, onTextChunk);
-                    }
-                }
+                if (!await _hardwareAccess.StopRecordingAudio().WaitAsync(Options.HardwareStopTimeout))
+                    throw new IOException("Hardware did not acknowledge capture stop.");
             }
-            catch (OperationCanceledException)
+            catch (Exception ex)
             {
+                _hardwareFailed = true;
+                ReportError(new HttpTranscriptionError { Code = "hardware_stop_unconfirmed", IsFatal = false, Message = ex.GetType().Name });
             }
+            finally { lock (_sync) _acceptAudio = false; }
+        }
 
-            // Stop recording before the final upload so the tail of the utterance is included.
-            await StopRecordingSafeAsync();
-
-            var finalSnapshot = TryCreateSnapshot(forceFinal: true);
-            if (finalSnapshot.HasValue)
-            {
-                await ProcessSnapshotAsync(finalSnapshot.Value, onTextChunk);
-            }
+        private void OnHardwareError(object? sender, string message)
+        {
+            _hardwareFailed = true;
+            ReportError(new HttpTranscriptionError { Code = "hardware_failed", IsFatal = true, Message = "Audio capture or delivery failed." });
+            lock (_sync) _runCts?.Cancel();
         }
 
         private SnapshotWorkItem? TryCreateSnapshot(bool forceFinal)
         {
             lock (_sync)
             {
-                if (_snapshotInFlight)
+                int available = (int)_capturedAudio.Length;
+                if (_snapshotInFlight || available == 0) return null;
+                if (!forceFinal && available < DurationToBytes(Options.MinimumUtteranceDuration)) return null;
+                int count = Math.Min(available, DurationToBytes(Options.MaxSectionDuration));
+                // Prefer a short quiet window near the end; never re-send a confirmed sample.
+                var buffer = _capturedAudio.GetBuffer();
+                int window = DurationToBytes(Options.SilenceDuration);
+                for (int end = count; end >= Math.Max(window, count / 2); end -= 960)
                 {
-                    return null;
-                }
-
-                int capturedBytes = (int)_capturedAudio.Length;
-                if (capturedBytes == 0)
-                {
-                    return null;
-                }
-
-                if (!forceFinal)
-                {
-                    if (capturedBytes < DurationToBytes(Options.MinimumUtteranceDuration))
+                    bool quiet = true;
+                    for (int pos = end - window; pos < end; pos += 2)
                     {
-                        return null;
+                        short sample = (short)(buffer[pos] | buffer[pos + 1] << 8);
+                        if (Math.Abs((int)sample) > 300) { quiet = false; break; }
                     }
-
-                    if (capturedBytes <= _lastSnapshotByteCount)
-                    {
-                        return null;
-                    }
+                    if (quiet) { count = end; break; }
                 }
-
-                byte[] fullAudio = _capturedAudio.ToArray();
-                byte[] effectiveAudio = TrimLeadingAudio(fullAudio, Options.LeadingTrimDuration);
-                if (effectiveAudio.Length == 0)
-                {
-                    return null;
-                }
-
+                var audio = new byte[count];
+                Buffer.BlockCopy(buffer, 0, audio, 0, count);
                 _snapshotInFlight = true;
-                _lastSnapshotByteCount = capturedBytes;
-                _snapshotRevision++;
-
-                return new SnapshotWorkItem(
-                    _sessionId,
-                    _snapshotRevision,
-                    effectiveAudio,
-                    forceFinal,
-                    _latestPublishedText,
-                    TimeSpan.FromSeconds((capturedBytes - effectiveAudio.Length) / (double)BYTES_PER_SECOND),
-                    TimeSpan.FromSeconds(capturedBytes / (double)BYTES_PER_SECOND));
+                return new SnapshotWorkItem(_sessionId, ++_snapshotRevision, audio, forceFinal, _confirmedText,
+                    TimeSpan.FromSeconds(_bufferStartBytes / (double)BYTES_PER_SECOND),
+                    TimeSpan.FromSeconds((_bufferStartBytes + count) / (double)BYTES_PER_SECOND));
             }
         }
 
-        private async Task ProcessSnapshotAsync(SnapshotWorkItem snapshot, Action<string> onTextChunk)
+        private async Task<bool> ProcessSnapshotAsync(SnapshotWorkItem snapshot, Action<string> onTextChunk, CancellationToken token)
         {
             try
             {
-                await TranscribeSnapshotAsync(snapshot, onTextChunk);
-            }
-            catch (Exception ex)
-            {
-                _logAction(LogLevel.Error, $"HTTP live transcription snapshot failed: {ex.Message}");
-                if (snapshot.IsFinal)
+                for (int attempt = 0; ; attempt++)
                 {
-                    PublishLastConfirmedAsSessionFinal(snapshot, onTextChunk, "final snapshot failed");
+                    try
+                    {
+                        using var requestCts = CancellationTokenSource.CreateLinkedTokenSource(token);
+                        requestCts.CancelAfter(Options.RequestTimeout);
+                        await TranscribeSnapshotAsync(snapshot, onTextChunk, requestCts.Token);
+                        return true;
+                    }
+                    catch (OperationCanceledException) when (token.IsCancellationRequested) { throw; }
+                    catch (Exception ex)
+                    {
+                        var http = ex as TranscriptionRequestException;
+                        bool retryable = ex is HttpRequestException or IOException or OperationCanceledException || http?.Retryable == true;
+                        bool retry = retryable && attempt < Options.MaxRetries;
+                        ReportError(new HttpTranscriptionError
+                        {
+                            Code = ex is OperationCanceledException ? "request_timeout" : "section_failed",
+                            IsFatal = !retryable, WillRetry = retry, Attempt = attempt + 1,
+                            SectionId = snapshot.Revision, AudioStart = snapshot.AudioStart, AudioEnd = snapshot.AudioEnd,
+                            HttpStatus = http?.Status, RetryAfter = http?.RetryAfter, ProviderRequestId = http?.RequestId,
+                            Message = ex.GetType().Name
+                        });
+                        if (!retry) { _fatal |= !retryable; _retryExhausted = retryable; return false; }
+                        var delay = http?.RetryAfter ?? TimeSpan.FromMilliseconds(Options.RetryDelay.TotalMilliseconds * Math.Pow(2, attempt));
+                        await Task.Delay(delay, token);
+                    }
                 }
             }
-            finally
-            {
-                lock (_sync)
-                {
-                    _snapshotInFlight = false;
-                }
-            }
+            finally { lock (_sync) _snapshotInFlight = false; }
         }
 
-        private async Task TranscribeSnapshotAsync(SnapshotWorkItem snapshot, Action<string> onTextChunk)
+        private async Task TranscribeSnapshotAsync(SnapshotWorkItem snapshot, Action<string> onTextChunk, CancellationToken cancellationToken)
         {
             _logAction(LogLevel.Info,
                 $"Processing transcription snapshot {snapshot.Revision}: audio_end={FormatCoverage(snapshot.AudioEnd)}, final={snapshot.IsFinal}.");
@@ -372,12 +430,16 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi
             using var response = await _httpClient.SendAsync(
                 request,
                 HttpCompletionOption.ResponseHeadersRead,
-                CancellationToken.None);
+                cancellationToken);
 
             if (!response.IsSuccessStatusCode)
             {
-                string body = await response.Content.ReadAsStringAsync();
-                throw new InvalidOperationException($"OpenAI transcription failed: {response.StatusCode} - {body}");
+                var status = (int)response.StatusCode;
+                var retryAfter = response.Headers.RetryAfter?.Delta ??
+                    (response.Headers.RetryAfter?.Date is DateTimeOffset date ? date - DateTimeOffset.UtcNow : null);
+                throw new TranscriptionRequestException(status, status == 429 || status >= 500,
+                    retryAfter > TimeSpan.Zero ? retryAfter : null,
+                    response.Headers.TryGetValues("x-request-id", out var ids) ? ids.FirstOrDefault() : null);
             }
 
             OnUsageReceived?.Invoke(new UsageReport
@@ -390,7 +452,7 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi
                 IsEstimated = true
             });
 
-            await using var responseStream = await response.Content.ReadAsStreamAsync();
+            await using var responseStream = await response.Content.ReadAsStreamAsync(cancellationToken);
             using var reader = new StreamReader(responseStream);
             var hypothesis = new StringBuilder();
             var structuredSegments = new List<TranscriptSegment>();
@@ -401,7 +463,11 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi
 
             while (true)
             {
-                string? line = await reader.ReadLineAsync();
+                using var idleCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+                idleCts.CancelAfter(Options.StreamIdleTimeout);
+                string? line = await reader.ReadLineAsync(idleCts.Token);
+                if (line?.Length > 1_000_000 || currentData.Length > 1_000_000)
+                    throw new InvalidOperationException("Transcription stream event exceeds its size limit.");
                 if (line == null)
                 {
                     break;
@@ -412,6 +478,7 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi
                     snapshotCompleted |= ApplyStreamingEvent(snapshot, currentEvent, currentData.ToString(), hypothesis, structuredSegments, structuredSegmentKeys, onTextChunk);
                     currentEvent = null;
                     currentData.Clear();
+                    if (snapshotCompleted) break;
                     continue;
                 }
 
@@ -434,10 +501,7 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi
 
             snapshotCompleted |= ApplyStreamingEvent(snapshot, currentEvent, currentData.ToString(), hypothesis, structuredSegments, structuredSegmentKeys, onTextChunk);
 
-            if (snapshot.IsFinal && !snapshotCompleted)
-            {
-                PublishLastConfirmedAsSessionFinal(snapshot, onTextChunk, "final snapshot ended before transcript.text.done");
-            }
+            if (!snapshotCompleted) throw new IOException("Stream ended without transcript.text.done.");
         }
 
         private bool ApplyStreamingEvent(
@@ -508,7 +572,6 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi
                             finalText = hypothesis.ToString();
                         }
 
-                        if (!string.IsNullOrWhiteSpace(finalText) || structuredSegments.Count > 0)
                         {
                             PublishCompletedSnapshot(
                                 snapshot,
@@ -518,12 +581,11 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi
                                 onTextChunk);
                             return true;
                         }
-                        return false;
                 }
             }
             catch (JsonException)
             {
-                _logAction(LogLevel.Warn, $"Could not parse transcription stream event: {data}");
+                _logAction(LogLevel.Warn, "Could not parse transcription stream event.");
             }
 
             return false;
@@ -546,7 +608,7 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi
                     IsSessionFinal = false,
                     AudioStart = snapshot.AudioStart,
                     AudioEnd = snapshot.AudioEnd,
-                    Segments = new[] { segment }
+                    Segments = new[] { OffsetSegment(snapshot, segment) }
                 });
             }
             catch (Exception ex)
@@ -555,154 +617,108 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi
             }
         }
 
-        private void PublishCompletedSnapshot(
-            SnapshotWorkItem snapshot,
-            IReadOnlyList<TranscriptSegment> segments,
-            string providerText,
-            string? detectedLanguage,
-            Action<string> onTextChunk)
+        private TranscriptSegment OffsetSegment(SnapshotWorkItem snapshot, TranscriptSegment segment) => new()
         {
-            StructuredTranscript? transcriptToPublish = null;
-            string? textToPublish = null;
-            string? rejectionReason = null;
+            Id = $"{snapshot.Revision}:{segment.Id}",
+            // Anonymous labels are request-local. Never claim A in two requests is the same person.
+            Speaker = segment.Speaker is null ? null : Options.KnownSpeakerReferences.ContainsKey(segment.Speaker)
+                ? segment.Speaker : $"section-{snapshot.Revision}/{segment.Speaker}",
+            Text = segment.Text, ChannelIndex = segment.ChannelIndex,
+            Start = segment.Start + snapshot.AudioStart, End = segment.End + snapshot.AudioStart,
+            Words = segment.Words.Select(word => new TranscriptWord
+            {
+                Text = word.Text, Speaker = word.Speaker,
+                Start = word.Start + snapshot.AudioStart, End = word.End + snapshot.AudioStart
+            }).ToArray()
+        };
 
+        private void PublishCompletedSnapshot(SnapshotWorkItem snapshot, IReadOnlyList<TranscriptSegment> segments,
+            string providerText, string? detectedLanguage, Action<string> onTextChunk)
+        {
+            StructuredTranscript transcript;
             lock (_sync)
             {
-                if (snapshot.SessionId != _sessionId)
-                {
-                    return;
-                }
-
-                var previous = _latestStructuredTranscript;
-                var candidateCoverageStart = GetSegmentCoverageStart(segments);
-                var candidateCoverage = GetSegmentCoverageEnd(segments);
-                var previousCoverageStart = previous is null ? null : GetSegmentCoverageStart(previous.Segments);
-                var previousCoverage = previous is null ? null : GetSegmentCoverageEnd(previous.Segments);
-                var hasTimedSegments = candidateCoverage.HasValue;
-                var previousHasTimedSegments = previousCoverage.HasValue;
-
-                if (segments.Count > 0 && previousHasTimedSegments &&
-                    (!hasTimedSegments ||
-                     candidateCoverage!.Value < previousCoverage!.Value ||
-                     (previousCoverageStart.HasValue &&
-                      (!candidateCoverageStart.HasValue || candidateCoverageStart.Value > previousCoverageStart.Value))))
-                {
-                    rejectionReason = $"segment coverage {FormatCoverageRange(candidateCoverageStart, candidateCoverage)} does not contain confirmed {FormatCoverageRange(previousCoverageStart, previousCoverage)}";
-                }
-                else if (segments.Count == 0 && previous is not null && HasStructuredDetail(previous.Segments))
-                {
-                    rejectionReason = "text-only fallback cannot replace a confirmed structured snapshot";
-                }
-                else
-                {
-                    string acceptedText;
-                    IReadOnlyList<TranscriptSegment> acceptedSegments;
-
-                    if (segments.Count > 0)
-                    {
-                        acceptedSegments = segments.ToArray();
-                        acceptedText = string.IsNullOrWhiteSpace(providerText)
-                            ? string.Join(Environment.NewLine, acceptedSegments.Select(FormatSegment))
-                            : providerText;
-                    }
-                    else
-                    {
-                        var mergedText = MergeSnapshotHypothesis(snapshot.DisplayFloor, _latestPublishedText, providerText);
-                        if (string.IsNullOrWhiteSpace(mergedText))
-                        {
-                            rejectionReason = "text snapshot did not advance the confirmed session state";
-                            acceptedSegments = Array.Empty<TranscriptSegment>();
-                            acceptedText = string.Empty;
-                        }
-                        else
-                        {
-                            acceptedText = mergedText;
-                            acceptedSegments = new[] { new TranscriptSegment { Text = mergedText } };
-                        }
-                    }
-
-                    if (rejectionReason is null)
-                    {
-                        transcriptToPublish = new StructuredTranscript
-                        {
-                            ProviderId = "openai",
-                            ModelId = Options.GetModelId(),
-                            Text = acceptedText,
-                            Language = detectedLanguage ?? Options.Language,
-                            Duration = snapshot.AudioEnd - snapshot.AudioStart,
-                            // Legacy IsFinal remains request-finality. Use IsSessionFinal for session completion.
-                            IsFinal = true,
-                            IsSpeechFinal = true,
-                            SnapshotRevision = snapshot.Revision,
-                            IsSnapshotComplete = true,
-                            IsSessionFinal = snapshot.IsFinal,
-                            AudioStart = snapshot.AudioStart,
-                            AudioEnd = snapshot.AudioEnd,
-                            Segments = acceptedSegments
-                        };
-                        _latestStructuredTranscript = transcriptToPublish;
-                        if (!string.Equals(_latestPublishedText, acceptedText, StringComparison.Ordinal))
-                        {
-                            _latestPublishedText = acceptedText;
-                            textToPublish = acceptedText;
-                        }
-                    }
-                }
+                if (snapshot.SessionId != _sessionId) return;
+                if (snapshot.AudioEnd <= TimeSpan.FromSeconds(_confirmedBytes / (double)BYTES_PER_SECOND)) return;
+                var additions = segments.Select(segment => OffsetSegment(snapshot, segment)).ToArray();
+                var text = additions.Length > 0 ? string.Join(Environment.NewLine, additions.Select(FormatSegment)) : providerText;
+                _confirmedText = JoinText(_confirmedText, text);
+                if (additions.Length > 0) _confirmedSegments.AddRange(additions);
+                else if (!string.IsNullOrEmpty(text)) _confirmedSegments.Add(new TranscriptSegment
+                { Id = $"{snapshot.Revision}", Text = text, Start = snapshot.AudioStart, End = snapshot.AudioEnd });
+                _confirmedBytes = (long)Math.Round(snapshot.AudioEnd.TotalSeconds * BYTES_PER_SECOND);
+                int remaining = (int)_capturedAudio.Length - snapshot.Audio.Length;
+                if (remaining < 0) throw new InvalidOperationException("Audio buffer coverage mismatch.");
+                var buffer = _capturedAudio.GetBuffer();
+                Buffer.BlockCopy(buffer, snapshot.Audio.Length, buffer, 0, remaining);
+                _capturedAudio.SetLength(remaining);
+                _capturedAudio.Position = remaining;
+                _bufferStartBytes = _confirmedBytes;
+                _latestPublishedText = _confirmedText;
+                transcript = CreateTranscript(false, detectedLanguage);
+                _latestStructuredTranscript = transcript;
             }
-
-            if (rejectionReason is not null)
-            {
-                _logAction(LogLevel.Warn,
-                    $"Discarded completed transcription snapshot {snapshot.Revision}: {rejectionReason}.");
-                if (snapshot.IsFinal)
-                {
-                    PublishLastConfirmedAsSessionFinal(snapshot, onTextChunk, rejectionReason);
-                }
-                return;
-            }
-
-            _logAction(LogLevel.Info,
-                $"Accepted completed transcription snapshot {snapshot.Revision}: segments={transcriptToPublish!.Segments.Count}, segment_end={FormatCoverage(GetSegmentCoverageEnd(transcriptToPublish.Segments))}, session_final={transcriptToPublish.IsSessionFinal}.");
-            PublishCallbacks(transcriptToPublish!, textToPublish, onTextChunk);
+            PublishCallbacks(transcript, transcript.Text, onTextChunk);
+            PublishStatus(_acceptAudio ? HttpTranscriptionState.Recording : HttpTranscriptionState.Finalizing);
         }
 
-        private void PublishLastConfirmedAsSessionFinal(
-            SnapshotWorkItem snapshot,
-            Action<string> onTextChunk,
-            string reason)
+        private StructuredTranscript CreateTranscript(bool final, string? language = null) => new()
         {
-            StructuredTranscript? finalTranscript;
+            ProviderId = "openai", ModelId = Options.GetModelId(), Text = _confirmedText,
+            Language = language ?? Options.Language, Duration = TimeSpan.FromSeconds(_confirmedBytes / (double)BYTES_PER_SECOND),
+            IsFinal = true, IsSpeechFinal = true, SnapshotRevision = _snapshotRevision,
+            IsSnapshotComplete = true, IsSessionFinal = final,
+            AudioStart = TimeSpan.Zero, AudioEnd = TimeSpan.FromSeconds(_confirmedBytes / (double)BYTES_PER_SECOND),
+            Segments = _confirmedSegments.ToArray()
+        };
+
+        private void PublishSessionFinal(Action<string> onTextChunk)
+        {
+            StructuredTranscript transcript;
             lock (_sync)
             {
-                var previous = _latestStructuredTranscript;
-                if (previous is null || previous.IsSessionFinal)
-                {
-                    return;
-                }
-
-                finalTranscript = new StructuredTranscript
-                {
-                    ProviderId = previous.ProviderId,
-                    ModelId = previous.ModelId,
-                    Text = previous.Text,
-                    Language = previous.Language,
-                    Duration = previous.Duration,
-                    IsFinal = true,
-                    IsSpeechFinal = true,
-                    SnapshotRevision = previous.SnapshotRevision,
-                    IsSnapshotComplete = true,
-                    IsSessionFinal = true,
-                    AudioStart = previous.AudioStart,
-                    AudioEnd = previous.AudioEnd,
-                    EndOfTurnConfidence = previous.EndOfTurnConfidence,
-                    Segments = previous.Segments
-                };
-                _latestStructuredTranscript = finalTranscript;
+                _latestPublishedText = _confirmedText;
+                transcript = CreateTranscript(true);
+                _latestStructuredTranscript = transcript;
             }
+            PublishCallbacks(transcript, transcript.Text, onTextChunk);
+        }
 
-            _logAction(LogLevel.Warn,
-                $"Final transcription snapshot {snapshot.Revision} was not authoritative ({reason}); preserving confirmed snapshot {finalTranscript.SnapshotRevision}.");
-            PublishCallbacks(finalTranscript, null, onTextChunk);
+        private void PublishStatus(HttpTranscriptionState state)
+        {
+            HttpTranscriptionStatus status;
+            lock (_sync)
+            {
+                var captured = TimeSpan.FromSeconds(_capturedBytes / (double)BYTES_PER_SECOND);
+                var confirmed = TimeSpan.FromSeconds(_confirmedBytes / (double)BYTES_PER_SECOND);
+                status = new HttpTranscriptionStatus
+                {
+                    State = state, Text = _confirmedText, RecordedAudioEnd = captured, ConfirmedAudioEnd = confirmed,
+                    CaptureStopConfirmed = !_acceptAudio && !_hardwareFailed,
+                    MissingSections = confirmed < captured ? new[] { new TranscriptionAudioRange(confirmed, captured) } : Array.Empty<TranscriptionAudioRange>()
+                };
+                LatestStatus = status;
+            }
+            try { OnStatusChanged?.Invoke(status); }
+            catch { _logAction(LogLevel.Warn, "Transcription status callback failed."); }
+        }
+
+        private void ReportError(HttpTranscriptionError error)
+        {
+            _logAction(error.IsFatal ? LogLevel.Error : LogLevel.Warn, $"HTTP transcription: {error.Code}; section={error.SectionId}; status={error.HttpStatus}; retry={error.WillRetry}.");
+            try { OnTranscriptionError?.Invoke(error); }
+            catch { _logAction(LogLevel.Warn, "Transcription error callback failed."); }
+        }
+
+        private static string JoinText(string prefix, string text) => string.IsNullOrEmpty(prefix) ? text :
+            string.IsNullOrEmpty(text) ? prefix : prefix + Environment.NewLine + text;
+
+        private sealed class TranscriptionRequestException(int status, bool retryable, TimeSpan? retryAfter, string? requestId) : Exception
+        {
+            public int Status { get; } = status;
+            public bool Retryable { get; } = retryable;
+            public TimeSpan? RetryAfter { get; } = retryAfter;
+            public string? RequestId { get; } = requestId;
         }
 
         private void PublishCallbacks(
@@ -766,10 +782,7 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi
                     return;
                 }
 
-                string? mergedHypothesis = MergeSnapshotHypothesis(
-                    snapshot.DisplayFloor,
-                    _latestPublishedText,
-                    latestHypothesis);
+                string? mergedHypothesis = JoinText(snapshot.DisplayFloor, latestHypothesis);
 
                 if (string.IsNullOrEmpty(mergedHypothesis))
                 {
@@ -804,17 +817,38 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi
 
                 lock (_sync)
                 {
+                    if (!_acceptAudio) return;
+                    if ((chunk.Length & 1) != 0) throw new InvalidOperationException("PCM16 data must be sample-aligned.");
+                    _capturedBytes += chunk.Length;
+                    if (_capturedAudio.Length + chunk.Length > DurationToBytes(Options.MaxBufferedDuration))
+                    {
+                        _fatal = true;
+                        ReportError(new HttpTranscriptionError { Code = "audio_buffer_full", IsFatal = true,
+                            Message = "Provider cannot keep up with capture; unconfirmed tail is incomplete." });
+                        _runCts?.Cancel();
+                        return;
+                    }
                     _capturedAudio.Write(chunk, 0, chunk.Length);
+                    if (_capturedAudio.Length >= DurationToBytes(Options.MaxSectionDuration) && _audioReady.CurrentCount == 0)
+                        _audioReady.Release();
                 }
             }
             catch (Exception ex)
             {
-                _logAction(LogLevel.Error, $"Error receiving microphone audio for HTTP live transcription: {ex.Message}");
+                OnHardwareError(this, ex.GetType().Name);
             }
         }
 
         private void ValidateOptions()
         {
+            if (Options.MaxSectionDuration < TimeSpan.FromMilliseconds(1) || Options.MaxSectionDuration > TimeSpan.FromMinutes(5) ||
+                Options.MaxBufferedDuration < Options.MaxSectionDuration || Options.MaxBufferedDuration > TimeSpan.FromMinutes(30) ||
+                Options.MaxRetries < 0 || Options.MaxRetries > 10 || Options.RetryDelay < TimeSpan.Zero ||
+                Options.RequestTimeout <= TimeSpan.Zero || Options.StreamIdleTimeout <= TimeSpan.Zero ||
+                Options.FinalizationTimeout <= TimeSpan.Zero || Options.HardwareStopTimeout <= TimeSpan.Zero ||
+                Options.MinimumUtteranceDuration > Options.MaxSectionDuration)
+                throw new InvalidOperationException("Invalid section, buffer, retry or timeout limits.");
+
             if (!Options.TranscriptionModel.SupportsHttpStreamingTranscription())
             {
                 throw new InvalidOperationException($"{Options.TranscriptionModel} does not support streamed HTTP transcription responses.");
@@ -889,7 +923,12 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi
         {
             _snapshotInFlight = false;
             _snapshotRevision = 0;
-            _lastSnapshotByteCount = 0;
+            _capturedBytes = _confirmedBytes = _bufferStartBytes = 0;
+            _hardwareFailed = _fatal = _retryExhausted = false;
+            _confirmedText = string.Empty;
+            _confirmedSegments.Clear();
+            LatestStatus = null;
+            while (_audioReady.Wait(0)) { }
             _latestPublishedText = string.Empty;
             if (clearTranscriptResult)
             {
@@ -902,31 +941,7 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi
 
         private static int DurationToBytes(TimeSpan duration)
         {
-            return (int)Math.Max(0, Math.Round(duration.TotalSeconds * BYTES_PER_SECOND));
-        }
-
-        private static byte[] TrimLeadingAudio(byte[] audio, TimeSpan trimDuration)
-        {
-            int trimBytes = DurationToBytes(trimDuration);
-            if (trimBytes <= 0)
-            {
-                return audio;
-            }
-
-            // Keep sample alignment for PCM16.
-            if ((trimBytes & 1) == 1)
-            {
-                trimBytes--;
-            }
-
-            if (trimBytes >= audio.Length)
-            {
-                return Array.Empty<byte>();
-            }
-
-            byte[] trimmed = new byte[audio.Length - trimBytes];
-            Buffer.BlockCopy(audio, trimBytes, trimmed, 0, trimmed.Length);
-            return trimmed;
+            return (int)Math.Max(0, Math.Round(duration.TotalSeconds * BYTES_PER_SECOND)) & ~1;
         }
 
         private static byte[] BuildWav(byte[] pcmData, int sampleRate)
@@ -960,116 +975,32 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi
             return ms.ToArray();
         }
 
-        private async Task StopRecordingSafeAsync()
-        {
-            try
-            {
-                await _hardwareAccess.StopRecordingAudio();
-            }
-            catch (Exception ex)
-            {
-                _logAction(LogLevel.Warn, $"Stopping microphone recording failed: {ex.Message}");
-            }
-        }
-
         private void ThrowIfDisposed()
         {
-            if (_isDisposed)
-            {
-                throw new ObjectDisposedException(nameof(OpenAiHttpLiveTranscriber));
-            }
+            if (_isDisposed || _disposing) throw new ObjectDisposedException(nameof(OpenAiHttpLiveTranscriber));
         }
 
         public async ValueTask DisposeAsync()
         {
-            if (_isDisposed)
+            Task? completion;
+            lock (_sync)
             {
-                return;
+                if (_isDisposed) return;
+                _disposing = true;
+                _runCts?.Cancel();
+                _finalizationCts?.Cancel();
+                completion = _completion?.Task;
             }
-
-            try
+            await StopMicrophoneAsync();
+            if (completion is not null) await completion;
+            lock (_sync)
             {
-                await StopAsync();
-                await StopRecordingSafeAsync();
-            }
-            finally
-            {
-                lock (_sync)
-                {
-                    _runCts?.Dispose();
-                    _capturedAudio.Dispose();
-                    _isDisposed = true;
-                }
-
+                if (_isDisposed) return;
+                _capturedAudio.Dispose();
+                _audioReady.Dispose();
+                _isDisposed = true;
                 if (_ownsHttpClient) _httpClient.Dispose();
             }
-        }
-
-        private static string? MergeSnapshotHypothesis(string displayFloor, string currentPublished, string latestHypothesis)
-        {
-            if (string.IsNullOrWhiteSpace(latestHypothesis))
-            {
-                return null;
-            }
-
-            if (string.IsNullOrEmpty(displayFloor))
-            {
-                return latestHypothesis;
-            }
-
-            if (latestHypothesis.StartsWith(currentPublished, StringComparison.Ordinal))
-            {
-                return latestHypothesis;
-            }
-
-            if (currentPublished.StartsWith(latestHypothesis, StringComparison.Ordinal))
-            {
-                return null;
-            }
-
-            if (latestHypothesis.StartsWith(displayFloor, StringComparison.Ordinal))
-            {
-                return latestHypothesis;
-            }
-
-            if (displayFloor.StartsWith(latestHypothesis, StringComparison.Ordinal))
-            {
-                return null;
-            }
-
-            if (latestHypothesis.Length < displayFloor.Length)
-            {
-                return null;
-            }
-
-            if (HasStrongPrefixOverlap(displayFloor, latestHypothesis) ||
-                HasStrongPrefixOverlap(currentPublished, latestHypothesis))
-            {
-                return latestHypothesis;
-            }
-
-            return latestHypothesis.Length > currentPublished.Length + 12
-                ? latestHypothesis
-                : null;
-        }
-
-        private static bool HasStrongPrefixOverlap(string left, string right)
-        {
-            if (string.IsNullOrEmpty(left) || string.IsNullOrEmpty(right))
-            {
-                return false;
-            }
-
-            int commonPrefixLength = GetCommonPrefixLength(left, right);
-            int shorterLength = Math.Min(left.Length, right.Length);
-
-            if (shorterLength <= 8)
-            {
-                return commonPrefixLength == shorterLength;
-            }
-
-            return commonPrefixLength >= Math.Min(12, shorterLength) ||
-                (commonPrefixLength * 4) >= (shorterLength * 3);
         }
 
         private static TranscriptSegment? TryParseDiarizedSegment(JsonElement root)
@@ -1152,36 +1083,10 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi
             return result;
         }
 
-        private static TimeSpan? GetSegmentCoverageStart(IReadOnlyList<TranscriptSegment> segments)
-        {
-            TimeSpan? result = null;
-            foreach (var segment in segments)
-            {
-                if (segment.Start.HasValue && (!result.HasValue || segment.Start.Value < result.Value))
-                {
-                    result = segment.Start;
-                }
-            }
-
-            return result;
-        }
-
-        private static bool HasStructuredDetail(IReadOnlyList<TranscriptSegment> segments) =>
-            segments.Any(segment =>
-                !string.IsNullOrWhiteSpace(segment.Id) ||
-                !string.IsNullOrWhiteSpace(segment.Speaker) ||
-                segment.ChannelIndex.HasValue ||
-                segment.Start.HasValue ||
-                segment.End.HasValue ||
-                segment.Words.Count > 0);
-
         private static string FormatCoverage(TimeSpan? coverage) =>
             coverage.HasValue
                 ? $"{coverage.Value.TotalSeconds.ToString("0.###", CultureInfo.InvariantCulture)}s"
                 : "unknown";
-
-        private static string FormatCoverageRange(TimeSpan? start, TimeSpan? end) =>
-            $"{FormatCoverage(start)}..{FormatCoverage(end)}";
 
         private static string FormatSegment(TranscriptSegment segment) =>
             string.IsNullOrWhiteSpace(segment.Speaker)
@@ -1193,19 +1098,6 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi
             return element.TryGetProperty(propertyName, out var value) && value.TryGetDouble(out var seconds)
                 ? TimeSpan.FromSeconds(seconds)
                 : null;
-        }
-
-        private static int GetCommonPrefixLength(string left, string right)
-        {
-            int max = Math.Min(left.Length, right.Length);
-            int index = 0;
-
-            while (index < max && left[index] == right[index])
-            {
-                index++;
-            }
-
-            return index;
         }
 
         private readonly record struct SnapshotWorkItem(

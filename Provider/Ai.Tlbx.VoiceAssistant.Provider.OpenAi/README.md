@@ -222,42 +222,68 @@ gate: received audio is forwarded immediately, so the setting improves model
 behavior without adding response-completion latency. Applications that require
 deterministic phase filtering should filter transcripts at the application layer.
 
-## HTTP Live Transcription
+## HTTP Live Transcription (11.7)
 
 If you want near-live transcription without using the realtime WebSocket API, use
 `OpenAiHttpLiveTranscriber`. It records microphone audio through the existing
-`IAudioHardwareAccess` abstraction and repeatedly uploads the current utterance
-to the HTTP transcription endpoint.
+`IAudioHardwareAccess` abstraction and uploads bounded, non-overlapping sections
+to the HTTP transcription endpoint. Confirmed audio is discarded; its text remains available.
 
 ```csharp
-var transcriber = new OpenAiHttpLiveTranscriber(
+await using var transcriber = new OpenAiHttpLiveTranscriber(
     audioHardware,
     new OpenAiHttpLiveTranscriptionOptions
     {
-        TranscriptionModel = OpenAiTranscriptionModel.Gpt4oMiniTranscribe,
+        TranscriptionModel = OpenAiTranscriptionModel.GptTranscribe,
         Language = "de",
+        MaxSectionDuration = TimeSpan.FromSeconds(30),
+        MaxBufferedDuration = TimeSpan.FromSeconds(120),
+        RequestTimeout = TimeSpan.FromSeconds(30),
+        StreamIdleTimeout = TimeSpan.FromSeconds(10),
+        FinalizationTimeout = TimeSpan.FromSeconds(15),
         Prompt = "Expect German with business and IT terms"
     },
     apiKey);
 
 transcriber.OnUsageReceived = usage =>
 {
-    // Each successful full-snapshot upload is reported independently.
+    // Each accepted section upload is reported independently.
     Console.WriteLine($"Uploaded audio: {usage.InputAudioDuration?.TotalSeconds:F2}s");
 };
 
-var cts = new CancellationTokenSource();
+transcriber.OnStatusChanged = status => Console.WriteLine(status.State);
+transcriber.OnTranscriptionError = error => Console.WriteLine($"{error.Code}: {error.HttpStatus}, retry={error.WillRetry}");
 
-await transcriber.TranscribeLive(chunk =>
+var recording = transcriber.TranscribeLive(chunk =>
 {
     Console.Write($"\r{chunk}");
-}, cts.Token);
+});
+// Later, on user Stop:
+await transcriber.StopAsync(); // hardware stop and final-block acknowledgment
+Console.WriteLine(transcriber.LatestStatus?.Text); // confirmed text is immediately usable
+await recording; // bounded finalization of only the unconfirmed tail
+Console.WriteLine($"Complete: {transcriber.LatestStatus!.IsComplete}");
 ```
 
-This path is near-live, not true realtime: it uses short repeated HTTP uploads,
-so partials may arrive a bit later. The callback receives the latest current
-hypothesis for the active push-to-talk segment, which lets a UI replace the
-current line as the model revises earlier words.
+The text callback receives cumulative text including provisional updates. Structured callbacks
+publish cumulative confirmed text and absolute-time segments. `LatestStatus.MissingSections`
+identifies unconfirmed ranges; `IsSessionFinal` on a transcript means the session ended and
+does not guarantee complete capture. Check `LatestStatus.IsComplete` for that distinction.
+
+`StopAsync()` is independent of provider processing. `HardwareStopTimeout` defaults to
+3 seconds. `DisposeAsync()` cancels provider work and joins the session; await `recording`
+before reuse. Pending PCM is capped at 120 seconds; overflow stops capture explicitly.
+Network/429/5xx failures have bounded retries with `Retry-After`; auth, format and size
+failures are fatal. Request deadlines include upload and body; stream reads have idle deadlines.
+Error events contain section/coverage/request IDs and HTTP metadata, without provider bodies.
+
+Anonymous speaker labels are section-scoped (`section-2/A`); configured known-speaker names
+preserve identity across sections. No confirmed audio is resent, including on Stop.
+There is no overlap or heuristic removal of repeated words. Quiet boundaries are preferred;
+hard cuts during uninterrupted speech may affect recognition. `LeadingTrimDuration` remains
+source-compatible and no longer drops samples. Applications own checkpoints, circuit recovery
+and cross-section speaker matching beyond known references. See the
+[full HTTP guide](https://github.com/tlbx-ai/Ai.Tlbx.VoiceAssistant#long-recordings-with-http-transcription).
 
 For low-latency live transcript deltas use `GptLiveTranscribe`, the current
 default. It supports prompt, keyword and multiple-language hints plus a tunable

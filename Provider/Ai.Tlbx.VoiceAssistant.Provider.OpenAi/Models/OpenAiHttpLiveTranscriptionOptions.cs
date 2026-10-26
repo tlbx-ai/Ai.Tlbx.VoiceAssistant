@@ -50,14 +50,30 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi.Models
         public bool IncludeLogProbabilities { get; set; }
 
         /// <summary>
-        /// How often a growing utterance snapshot should be uploaded while speech is active.
-        /// Lower values reduce latency but increase request volume.
+        /// Hard duration limit for one non-overlapping upload; at most five minutes.
         /// </summary>
+        public TimeSpan MaxSectionDuration { get; set; } = TimeSpan.FromSeconds(30);
+        /// <summary>Maximum pending PCM duration before capture stops with an explicit failure.</summary>
+        public TimeSpan MaxBufferedDuration { get; set; } = TimeSpan.FromSeconds(120);
+        /// <summary>Deadline for upload, headers and complete response body, per attempt.</summary>
+        public TimeSpan RequestTimeout { get; set; } = TimeSpan.FromSeconds(30);
+        /// <summary>Maximum wait for one response-stream read.</summary>
+        public TimeSpan StreamIdleTimeout { get; set; } = TimeSpan.FromSeconds(10);
+        /// <summary>Total deadline to drain all unconfirmed sections after capture stops.</summary>
+        public TimeSpan FinalizationTimeout { get; set; } = TimeSpan.FromSeconds(15);
+        /// <summary>Deadline for hardware stop and its final audio-delivery acknowledgment.</summary>
+        public TimeSpan HardwareStopTimeout { get; set; } = TimeSpan.FromSeconds(3);
+        /// <summary>Retries after the first attempt for network, 429 and 5xx failures.</summary>
+        public int MaxRetries { get; set; } = 2;
+        /// <summary>Initial exponential retry delay when no Retry-After is supplied.</summary>
+        public TimeSpan RetryDelay { get; set; } = TimeSpan.FromMilliseconds(500);
+
+        /// <summary>Polling delay for new audio. Full sections wake the loop immediately.</summary>
         public TimeSpan SnapshotInterval { get; set; } = TimeSpan.FromMilliseconds(700);
 
         /// <summary>
-        /// How much audio at the very beginning to trim from each upload.
-        /// Useful for suppressing button click noise in push-to-talk scenarios.
+        /// Reserved compatibility setting; sectioned transcription preserves all captured audio.
+        /// No samples are discarded, so coverage remains contiguous.
         /// </summary>
         public TimeSpan LeadingTrimDuration { get; set; } = TimeSpan.FromMilliseconds(120);
 
