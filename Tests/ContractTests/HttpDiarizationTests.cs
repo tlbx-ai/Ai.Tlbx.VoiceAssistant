@@ -1,0 +1,145 @@
+using System.Net;
+using System.Text;
+using Ai.Tlbx.VoiceAssistant.Models;
+using Ai.Tlbx.VoiceAssistant.Provider.OpenAi;
+using Ai.Tlbx.VoiceAssistant.Provider.OpenAi.Models;
+
+static class HttpDiarizationTests
+{
+    public static async Task RunAsync()
+    {
+        await VerifyMonologueAsync();
+        await VerifySwapsAndUnknownsAsync();
+        await VerifyReferenceLimitsAsync();
+    }
+
+    private static async Task VerifySwapsAndUnknownsAsync()
+    {
+        var hardware = new HttpTranscriptionTests.Hardware();
+        var options = Options(); options.MaxSectionDuration = TimeSpan.FromSeconds(6);
+        int requestIndex = 0;
+        using var client = new HttpClient(new HttpTranscriptionTests.Handler(async (request, token) =>
+        {
+            var names = await NamesAsync(request, token);
+            var references = ((MultipartFormDataContent)request.Content!).Where(p => p.Headers.ContentDisposition?.Name?.Trim('"') == "known_speaker_references[]");
+            foreach (var reference in references)
+            {
+                var url = await reference.ReadAsStringAsync(token);
+                var wav = Convert.FromBase64String(url.Split(',')[1]);
+                Check(wav.Length >= 2 * 48000 + 44 && wav.Length <= 5 * 48000 + 44, "reference clips are bounded and use valid provider durations");
+            }
+            requestIndex++;
+            if (requestIndex == 1)
+            {
+                Check(names.Length == 0, "first request needs no user-provided references");
+                return Segments(("A", 0, 3, "first person"), ("B", 3, 6, "second person"));
+            }
+            Check(names.Length == 2, "learned voice references accompany the next upload");
+            // Provider identifies the reverse order by reference, not by local A/B order.
+            if (requestIndex == 2) return Segments((names[1], 0, 3, "second person"), (names[0], 3, 6, "first person"));
+            // Too short to enroll, and a local A does not inherit the first request's A.
+            return Segments(("A", 0, 0.5, "uncertain voice"));
+        }));
+        await using var transcriber = new OpenAiHttpLiveTranscriber(hardware, options, "test", null, client);
+        using var ready = new SemaphoreSlim(0);
+        var progress = new List<TranscriptSegment>();
+        transcriber.OnStructuredTranscriptionProgress = t => progress.AddRange(t.Segments);
+        transcriber.OnStructuredTranscriptionReceived = t => { if (!t.IsSessionFinal) ready.Release(); };
+        var run = transcriber.TranscribeLive(_ => { });
+        for (int i = 0; i < 3; i++) { hardware.Emit(Audio(6)); await ready.WaitAsync(TimeSpan.FromSeconds(3)); }
+        await transcriber.StopAsync(); await run;
+        var segments = transcriber.LatestStructuredTranscript!.Segments;
+        Check(segments[0].Speaker == segments[3].Speaker && segments[1].Speaker == segments[2].Speaker && segments[0].Speaker != segments[1].Speaker,
+            "two identities survive reversed speaking order");
+        Check(segments[4].Speaker is null && segments[4].LocalSpeaker == "A" && segments[4].SpeakerScope == TranscriptSpeakerScope.Request,
+            "an uncertain local A is not merged into an established person");
+        Check(progress[0].Speaker is null && progress[2].Speaker == segments[2].Speaker, "progress does not claim an identity before enrollment");
+        Check(segments[0].SpeakerScopeId == segments[3].SpeakerScopeId && segments[4].SpeakerScopeId != segments[0].SpeakerScopeId,
+            "session and request identity scopes are explicit");
+        Check(segments.All(s => s.Words.All(w => w.Speaker == s.Speaker && w.LocalSpeaker == s.LocalSpeaker &&
+            w.SpeakerScope == s.SpeakerScope && w.SpeakerScopeId == s.SpeakerScopeId)), "segment and word identities use consistent scopes");
+        Check(options.KnownSpeakerReferences.Count == 0, "automatic voice references never leak into caller settings or subsequent sessions");
+        Console.WriteLine("HTTP diarization: two voices, reversed order, uncertain labels and reference bounds passed.");
+    }
+
+    private static async Task VerifyReferenceLimitsAsync()
+    {
+        foreach (var scenario in new[] { "limit", "overlap", "disabled", "silence" })
+        {
+            var hardware = new HttpTranscriptionTests.Hardware();
+            var options = Options(); options.MaxSectionDuration = TimeSpan.FromSeconds(15);
+            options.EnableAutomaticSpeakerReferences = scenario != "disabled";
+            int requests = 0;
+            using var client = new HttpClient(new HttpTranscriptionTests.Handler(async (request, token) =>
+            {
+                var names = await NamesAsync(request, token);
+                if (++requests == 2) Check(names.Length == (scenario == "limit" ? 4 : 0), "reference count is bounded and unsafe clips are not enrolled");
+                return scenario == "limit" ? Segments(("A", 0, 3, "one"), ("B", 3, 6, "two"), ("C", 6, 9, "three"), ("D", 9, 12, "four"), ("E", 12, 15, "five")) :
+                    scenario == "overlap" ? Segments(("A", 0, 3, "one"), ("B", 2, 5, "overlap")) : Segments(("A", 0, 3, "one"));
+            }));
+            await using var transcriber = new OpenAiHttpLiveTranscriber(hardware, options, "test", null, client);
+            using var ready = new SemaphoreSlim(0);
+            transcriber.OnStructuredTranscriptionReceived = t => { if (!t.IsSessionFinal) ready.Release(); };
+            var run = transcriber.TranscribeLive(_ => { });
+            for (int i = 0; i < 2; i++)
+            { hardware.Emit(scenario == "silence" ? new byte[15 * 48000] : Audio(15)); await ready.WaitAsync(TimeSpan.FromSeconds(3)); }
+            await transcriber.StopAsync(); await run;
+            var speakers = transcriber.LatestStructuredTranscript!.Segments.Select(s => s.Speaker).Where(s => s != null).Distinct().ToArray();
+            Check(speakers.Length == (scenario == "limit" ? 4 : 0), "no invented people when enrollment is disabled, ambiguous or full");
+        }
+        Console.WriteLine("HTTP diarization: four-reference cap, overlapping speech, silent clips and opt-out passed.");
+    }
+    public static async Task VerifyMonologueAsync()
+    {
+        var hardware = new HttpTranscriptionTests.Hardware();
+        using var client = new HttpClient(new HttpTranscriptionTests.Handler(async (request, token) =>
+        {
+            var names = await NamesAsync(request, token);
+            return Segments((names.FirstOrDefault() ?? "A", 0, 3, "continuous speaker"));
+        }));
+        await using var transcriber = new OpenAiHttpLiveTranscriber(hardware, Options(), "test", null, client);
+        using var confirmed = new SemaphoreSlim(0);
+        transcriber.OnStructuredTranscriptionReceived = t => { if (!t.IsSessionFinal) confirmed.Release(); };
+        var run = transcriber.TranscribeLive(_ => { });
+        for (int i = 0; i < 9; i++)
+        {
+            hardware.Emit(Audio(3));
+            await confirmed.WaitAsync(TimeSpan.FromSeconds(3));
+        }
+        await transcriber.StopAsync(); await run;
+        var people = transcriber.LatestStructuredTranscript!.Segments.Select(s => s.Speaker).Where(s => s != null).Distinct().ToArray();
+        Check(people.Length == 1, $"one continuous voice must remain one person across nine uploads, got {people.Length}");
+        Console.WriteLine("HTTP diarization monologue: one person across nine uploads passed.");
+    }
+
+    internal static OpenAiHttpLiveTranscriptionOptions Options() => new()
+    {
+        TranscriptionModel = OpenAiTranscriptionModel.Gpt4oTranscribeDiarize,
+        MaxSectionDuration = TimeSpan.FromSeconds(3), SnapshotInterval = TimeSpan.FromMilliseconds(1),
+        RequestTimeout = TimeSpan.FromSeconds(2), FinalizationTimeout = TimeSpan.FromSeconds(1)
+    };
+    internal static byte[] Audio(int seconds)
+    {
+        var bytes = new byte[48000 * seconds];
+        for (int i = 0; i < bytes.Length; i += 2) { bytes[i] = 0xE8; bytes[i + 1] = 3; }
+        return bytes;
+    }
+    internal static async Task<string[]> NamesAsync(HttpRequestMessage request, CancellationToken token) =>
+        await Task.WhenAll(((MultipartFormDataContent)request.Content!).Where(p =>
+            p.Headers.ContentDisposition?.Name?.Trim('"') == "known_speaker_names[]").Select(p => p.ReadAsStringAsync(token)));
+    internal static HttpResponseMessage Segments(params (string speaker, double start, double end, string text)[] segments)
+    {
+        var body = new StringBuilder();
+        for (int i = 0; i < segments.Length; i++)
+        {
+            var s = segments[i];
+            body.Append("data: ").Append(System.Text.Json.JsonSerializer.Serialize(new
+            { type = "transcript.text.segment", id = "segment-" + i, speaker = s.speaker, start = s.start, end = s.end, text = s.text,
+                words = new[] { new { word = s.text, speaker = s.speaker, start = s.start, end = s.end } } })).Append("\n\n");
+        }
+        body.Append("data: {\"type\":\"transcript.text.done\",\"text\":\"complete\"}\n\n");
+        return new(HttpStatusCode.OK) { Content = new StringContent(body.ToString(), Encoding.UTF8, "text/event-stream") };
+    }
+    internal static void Check(bool condition, string message)
+    { if (!condition) throw new Exception("Diarization regression: " + message); }
+}

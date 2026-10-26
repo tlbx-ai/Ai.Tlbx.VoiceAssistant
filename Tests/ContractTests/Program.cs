@@ -22,6 +22,8 @@ if (args.Contains("--voice-expansion-live", StringComparer.Ordinal)) { await Ope
 if (args.Contains("--voice-expansion-vision", StringComparer.Ordinal)) { await OpenAiVoiceExpansionTests.RunVisionAsync(); return; }
 if (args.Contains("--voice-expansion-storage", StringComparer.Ordinal)) { await OpenAiVoiceExpansionTests.RunStorageAsync(); return; }
 if (args.Contains("--http-live")) { await HttpTranscriptionTests.RunLiveAsync(args[1]); return; }
+if (args.Contains("--diarization-only")) { await HttpDiarizationTests.RunAsync(); return; }
+if (args.Contains("--diarization-live")) { await HttpDiarizationLiveTests.RunAsync(args[1]); return; }
 if (args.Contains("--http-stop-repro")) { await HttpTranscriptionTests.RunAsync(); return; }
 await MistralTests.RunAsync();
 if (args.Contains("--mistral-only", StringComparer.Ordinal)) return;

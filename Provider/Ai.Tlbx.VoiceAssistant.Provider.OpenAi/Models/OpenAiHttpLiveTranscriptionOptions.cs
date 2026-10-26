@@ -44,6 +44,13 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi.Models
         /// </summary>
         public Dictionary<string, string> KnownSpeakerReferences { get; set; } = new();
 
+        /// <summary>Learn up to four total speaker references from clean, timed segments (2-5 seconds).
+        /// References remain in this recording's memory and are sent only to its configured transcription endpoint.</summary>
+        public bool EnableAutomaticSpeakerReferences { get; set; } = true;
+
+        /// <summary>Minimum new audio before a diarization upload, capped by MaxSectionDuration. Stop still sends short tails.</summary>
+        public TimeSpan DiarizationMinimumSectionDuration { get; set; } = TimeSpan.FromSeconds(5);
+
         /// <summary>
         /// Include token log probabilities when supported by the selected model and response format.
         /// </summary>

@@ -222,7 +222,7 @@ gate: received audio is forwarded immediately, so the setting improves model
 behavior without adding response-completion latency. Applications that require
 deterministic phase filtering should filter transcripts at the application layer.
 
-## HTTP Live Transcription (11.7)
+## HTTP Live Transcription (11.7.1)
 
 If you want near-live transcription without using the realtime WebSocket API, use
 `OpenAiHttpLiveTranscriber`. It records microphone audio through the existing
@@ -277,12 +277,24 @@ Network/429/5xx failures have bounded retries with `Retry-After`; auth, format a
 failures are fatal. Request deadlines include upload and body; stream reads have idle deadlines.
 Error events contain section/coverage/request IDs and HTTP metadata, without provider bodies.
 
-Anonymous speaker labels are section-scoped (`section-2/A`); configured known-speaker names
-preserve identity across sections. No confirmed audio is resent, including on Stop.
+The library learns short speaker references from completed, timed, non-overlapping segments
+and supplies them to later requests. Recognized voices retain session IDs; configured known
+speaker names remain stable. The total limit is four references, each automatic clip is
+2-5 seconds, and references are cleared after the recording. They are never added to caller
+settings or logs. `DiarizationMinimumSectionDuration` defaults to five seconds, capped by
+the maximum section duration; Stop always processes a short tail.
+
+`Speaker` is a session identity or null. `LocalSpeaker`, `SpeakerScope` and `SpeakerScopeId`
+retain local labels and distinguish them from people, consistently for segments and words.
+Missing/short/overlapping audio, exhausted reference slots or an unrecognized voice can leave
+speech unassigned. Do not number request-local labels as global people. Use
+`EnableAutomaticSpeakerReferences = false` for only application-supplied references.
+Provider matching remains probabilistic. No confirmed section is retranscribed, including on Stop;
+only the bounded reference clips accompany later requests for speaker matching.
 There is no overlap or heuristic removal of repeated words. Quiet boundaries are preferred;
 hard cuts during uninterrupted speech may affect recognition. `LeadingTrimDuration` remains
 source-compatible and no longer drops samples. Applications own checkpoints, circuit recovery
-and cross-section speaker matching beyond known references. See the
+and any speaker matching beyond the four reference slots. See the
 [full HTTP guide](https://github.com/tlbx-ai/Ai.Tlbx.VoiceAssistant#long-recordings-with-http-transcription).
 
 For low-latency live transcript deltas use `GptLiveTranscribe`, the current

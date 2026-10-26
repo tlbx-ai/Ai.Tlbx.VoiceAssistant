@@ -154,6 +154,8 @@ Always use `Action<LogLevel, string>` for logging delegation and forward logs up
 
 ### Testing Strategy
 
+- HTTP diarization changes must test the user outcome across upload boundaries: one unknown voice remains one person, two voices retain identity when speaking order changes, and uncertain local labels never create global people. Require both deterministic regressions and a real provider run with distinct synthetic voices before release; assertions about label formatting alone are insufficient.
+
 - Voice selectors show official human-readable voice names and languages when available; retain technical voice IDs only as option values sent to the provider.
 
 - New demo conversation modes must be selectable in the normal demo UI and use its shared ChatWidget. Populate the chat with user/assistant transcripts, agent progress, tool requests with arguments, inspectable complete tool results and full agent answers. Do not create a separate conversation page or replace these events with opaque status text. Browser acceptance must verify these entries in the normal UI.

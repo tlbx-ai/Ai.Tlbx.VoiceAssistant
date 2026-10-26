@@ -90,6 +90,11 @@ public sealed class TranscriptSegment
     public string? Id { get; init; }
     public string Text { get; init; } = string.Empty;
     public string? Speaker { get; init; }
+    /// <summary>Original provider label. A request-local label is not a person identifier.</summary>
+    public string? LocalSpeaker { get; init; }
+    public TranscriptSpeakerScope SpeakerScope { get; init; }
+    /// <summary>Recording ID for session identities, or recording/request ID for local labels.</summary>
+    public string? SpeakerScopeId { get; init; }
     public int? ChannelIndex { get; init; }
     public TimeSpan? Start { get; init; }
     public TimeSpan? End { get; init; }
@@ -100,6 +105,12 @@ public sealed class TranscriptWord
 {
     public string Text { get; init; } = string.Empty;
     public string? Speaker { get; init; }
+    public string? LocalSpeaker { get; init; }
+    public TranscriptSpeakerScope SpeakerScope { get; init; }
+    public string? SpeakerScopeId { get; init; }
     public TimeSpan? Start { get; init; }
     public TimeSpan? End { get; init; }
 }
+
+/// <summary>Unspecified for providers without scope metadata. Request labels cannot identify people across uploads.</summary>
+public enum TranscriptSpeakerScope { Unspecified, Request, Session }

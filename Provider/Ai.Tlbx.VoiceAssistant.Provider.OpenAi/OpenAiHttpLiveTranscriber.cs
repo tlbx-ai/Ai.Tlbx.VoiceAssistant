@@ -52,6 +52,9 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi
         private readonly List<TranscriptSegment> _confirmedSegments = new();
         private string _confirmedText = string.Empty;
         private readonly SemaphoreSlim _audioReady = new(0, 1);
+        private readonly Dictionary<string, string> _speakerReferences = new(StringComparer.Ordinal);
+        private string _speakerSessionId = string.Empty;
+        private int _nextSpeakerId;
         private MemoryStream _capturedAudio = new();
         private string _latestPublishedText = string.Empty;
         private StructuredTranscript? _latestStructuredTranscript;
@@ -65,8 +68,8 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi
         public Action<UsageReport>? OnUsageReceived { get; set; }
 
         /// <summary>
-        /// Receives only complete, authoritative session snapshots. Replays from a newer request are
-        /// withheld until that request completes and proves at least the previously confirmed audio coverage.
+        /// Receives cumulative confirmed sections. Request-local speaker labels are kept separate
+        /// from reference-backed session identities; incomplete requests never replace confirmed text.
         /// </summary>
         public Action<StructuredTranscript>? OnStructuredTranscriptionReceived { get; set; }
 
@@ -225,6 +228,7 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi
                     _isRunning = false;
                     _acceptAudio = false;
                     _capturedAudio.SetLength(0);
+                    _speakerReferences.Clear();
                     _runCts!.Dispose();
                     _runCts = null;
                     _finalizationCts!.Dispose();
@@ -281,7 +285,10 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi
             {
                 int available = (int)_capturedAudio.Length;
                 if (_snapshotInFlight || available == 0) return null;
-                if (!forceFinal && available < DurationToBytes(Options.MinimumUtteranceDuration)) return null;
+                var minimum = Options.TranscriptionModel.SupportsDiarizedJson()
+                    ? TimeSpan.FromTicks(Math.Min(Options.DiarizationMinimumSectionDuration.Ticks, Options.MaxSectionDuration.Ticks))
+                    : Options.MinimumUtteranceDuration;
+                if (!forceFinal && available < DurationToBytes(minimum)) return null;
                 int count = Math.Min(available, DurationToBytes(Options.MaxSectionDuration));
                 // Prefer a short quiet window near the end; never re-send a confirmed sample.
                 var buffer = _capturedAudio.GetBuffer();
@@ -301,7 +308,8 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi
                 _snapshotInFlight = true;
                 return new SnapshotWorkItem(_sessionId, ++_snapshotRevision, audio, forceFinal, _confirmedText,
                     TimeSpan.FromSeconds(_bufferStartBytes / (double)BYTES_PER_SECOND),
-                    TimeSpan.FromSeconds((_bufferStartBytes + count) / (double)BYTES_PER_SECOND));
+                    TimeSpan.FromSeconds((_bufferStartBytes + count) / (double)BYTES_PER_SECOND))
+                { SpeakerReferences = new Dictionary<string, string>(_speakerReferences, StringComparer.Ordinal) };
             }
         }
 
@@ -414,7 +422,7 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi
 
             if (useDiarizedJson)
             {
-                foreach (var reference in Options.KnownSpeakerReferences)
+                foreach (var reference in snapshot.SpeakerReferences)
                 {
                     form.Add(new StringContent(reference.Key), "known_speaker_names[]");
                     form.Add(new StringContent(reference.Value), "known_speaker_references[]");
@@ -617,20 +625,80 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi
             }
         }
 
-        private TranscriptSegment OffsetSegment(SnapshotWorkItem snapshot, TranscriptSegment segment) => new()
+        private TranscriptSegment OffsetSegment(SnapshotWorkItem snapshot, TranscriptSegment segment,
+            IReadOnlyDictionary<string, string>? identities = null)
         {
-            Id = $"{snapshot.Revision}:{segment.Id}",
-            // Anonymous labels are request-local. Never claim A in two requests is the same person.
-            Speaker = segment.Speaker is null ? null : Options.KnownSpeakerReferences.ContainsKey(segment.Speaker)
-                ? segment.Speaker : $"section-{snapshot.Revision}/{segment.Speaker}",
-            Text = segment.Text, ChannelIndex = segment.ChannelIndex,
-            Start = segment.Start + snapshot.AudioStart, End = segment.End + snapshot.AudioStart,
-            Words = segment.Words.Select(word => new TranscriptWord
+            var speaker = ResolveSpeaker(snapshot, segment.Speaker, identities);
+            return new TranscriptSegment
             {
-                Text = word.Text, Speaker = word.Speaker,
-                Start = word.Start + snapshot.AudioStart, End = word.End + snapshot.AudioStart
-            }).ToArray()
-        };
+                Id = $"{snapshot.Revision}:{segment.Id}",
+                Speaker = speaker,
+                LocalSpeaker = segment.Speaker,
+                SpeakerScope = speaker is null ? TranscriptSpeakerScope.Request : TranscriptSpeakerScope.Session,
+                SpeakerScopeId = GetSpeakerScopeId(snapshot, speaker),
+                Text = segment.Text, ChannelIndex = segment.ChannelIndex,
+                Start = segment.Start + snapshot.AudioStart, End = segment.End + snapshot.AudioStart,
+                Words = segment.Words.Select(word =>
+                {
+                    var local = word.Speaker ?? segment.Speaker;
+                    var identity = ResolveSpeaker(snapshot, local, identities);
+                    return new TranscriptWord
+                    {
+                        Text = word.Text, Speaker = identity, LocalSpeaker = local,
+                        SpeakerScope = identity is null ? TranscriptSpeakerScope.Request : TranscriptSpeakerScope.Session,
+                        SpeakerScopeId = GetSpeakerScopeId(snapshot, identity),
+                        Start = word.Start + snapshot.AudioStart, End = word.End + snapshot.AudioStart
+                    };
+                }).ToArray()
+            };
+        }
+
+        private string GetSpeakerScopeId(SnapshotWorkItem snapshot, string? identity) =>
+            identity is null ? $"{_speakerSessionId}/{snapshot.Revision}" : _speakerSessionId;
+
+        private static string? ResolveSpeaker(SnapshotWorkItem snapshot, string? label, IReadOnlyDictionary<string, string>? identities)
+        {
+            if (string.IsNullOrWhiteSpace(label)) return null;
+            if (snapshot.SpeakerReferences.ContainsKey(label)) return label;
+            return identities is not null && identities.TryGetValue(label, out var identity) ? identity : null;
+        }
+
+        private IReadOnlyDictionary<string, string> LearnSpeakerReferences(SnapshotWorkItem snapshot, IReadOnlyList<TranscriptSegment> segments)
+        {
+            var identities = new Dictionary<string, string>(StringComparer.Ordinal);
+            if (!Options.EnableAutomaticSpeakerReferences || !Options.TranscriptionModel.SupportsDiarizedJson()) return identities;
+            foreach (var group in segments.Where(s => !string.IsNullOrWhiteSpace(s.Speaker)).GroupBy(s => s.Speaker!))
+            {
+                if (snapshot.SpeakerReferences.ContainsKey(group.Key) || _speakerReferences.Count >= 4) continue;
+                foreach (var segment in group.OrderByDescending(s => s.End - s.Start))
+                {
+                    if (!segment.Start.HasValue || !segment.End.HasValue) continue;
+                    var start = segment.Start.Value + TimeSpan.FromMilliseconds(150);
+                    var end = segment.End.Value - TimeSpan.FromMilliseconds(150);
+                    if (end - start < TimeSpan.FromSeconds(2) || start < TimeSpan.Zero ||
+                        end > TimeSpan.FromSeconds(snapshot.Audio.Length / (double)BYTES_PER_SECOND)) continue;
+                    end = start + TimeSpan.FromSeconds(Math.Min(5, (end - start).TotalSeconds));
+                    // Never enroll a clip that overlaps another speaker or lacks reliable boundaries.
+                    if (segments.Any(other => other.Speaker != segment.Speaker &&
+                        (!other.Start.HasValue || !other.End.HasValue || other.Start.Value < end && other.End.Value > start))) continue;
+                    int offset = DurationToBytes(start);
+                    int count = Math.Min(DurationToBytes(end - start), snapshot.Audio.Length - offset) & ~1;
+                    if (count < BYTES_PER_SECOND * 2) continue;
+                    int audible = 0;
+                    for (int i = offset; i < offset + count; i += 2)
+                        if (Math.Abs((int)(short)(snapshot.Audio[i] | snapshot.Audio[i + 1] << 8)) > 200) audible++;
+                    if (audible < count / 20) continue;
+                    var clip = new byte[count];
+                    Buffer.BlockCopy(snapshot.Audio, offset, clip, 0, count);
+                    string name;
+                    do { name = $"speaker_{++_nextSpeakerId}"; } while (_speakerReferences.ContainsKey(name));
+                    _speakerReferences.Add(name, "data:audio/wav;base64," + Convert.ToBase64String(BuildWav(clip, SAMPLE_RATE)));
+                    identities.Add(group.Key, name);
+                    break;
+                }
+            }
+            return identities;
+        }
 
         private void PublishCompletedSnapshot(SnapshotWorkItem snapshot, IReadOnlyList<TranscriptSegment> segments,
             string providerText, string? detectedLanguage, Action<string> onTextChunk)
@@ -640,7 +708,8 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi
             {
                 if (snapshot.SessionId != _sessionId) return;
                 if (snapshot.AudioEnd <= TimeSpan.FromSeconds(_confirmedBytes / (double)BYTES_PER_SECOND)) return;
-                var additions = segments.Select(segment => OffsetSegment(snapshot, segment)).ToArray();
+                var identities = LearnSpeakerReferences(snapshot, segments);
+                var additions = segments.Select(segment => OffsetSegment(snapshot, segment, identities)).ToArray();
                 var text = additions.Length > 0 ? string.Join(Environment.NewLine, additions.Select(FormatSegment)) : providerText;
                 _confirmedText = JoinText(_confirmedText, text);
                 if (additions.Length > 0) _confirmedSegments.AddRange(additions);
@@ -841,7 +910,8 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi
 
         private void ValidateOptions()
         {
-            if (Options.MaxSectionDuration < TimeSpan.FromMilliseconds(1) || Options.MaxSectionDuration > TimeSpan.FromMinutes(5) ||
+            if (Options.DiarizationMinimumSectionDuration <= TimeSpan.Zero ||
+                Options.MaxSectionDuration < TimeSpan.FromMilliseconds(1) || Options.MaxSectionDuration > TimeSpan.FromMinutes(5) ||
                 Options.MaxBufferedDuration < Options.MaxSectionDuration || Options.MaxBufferedDuration > TimeSpan.FromMinutes(30) ||
                 Options.MaxRetries < 0 || Options.MaxRetries > 10 || Options.RetryDelay < TimeSpan.Zero ||
                 Options.RequestTimeout <= TimeSpan.Zero || Options.StreamIdleTimeout <= TimeSpan.Zero ||
@@ -927,6 +997,10 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi
             _hardwareFailed = _fatal = _retryExhausted = false;
             _confirmedText = string.Empty;
             _confirmedSegments.Clear();
+            _speakerReferences.Clear();
+            foreach (var reference in Options.KnownSpeakerReferences) _speakerReferences.Add(reference.Key, reference.Value);
+            _nextSpeakerId = 0;
+            _speakerSessionId = Guid.NewGuid().ToString("N");
             LatestStatus = null;
             while (_audioReady.Wait(0)) { }
             _latestPublishedText = string.Empty;
@@ -1024,7 +1098,7 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi
                 return null;
             }
 
-            var speaker = "speaker";
+            string? speaker = null;
             if (segment.TryGetProperty("speaker", out var speakerElement))
             {
                 speaker = speakerElement.GetString() ?? speaker;
@@ -1040,8 +1114,21 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi
                 Speaker = speaker,
                 Text = text.Trim(),
                 Start = TryGetSeconds(segment, "start"),
-                End = TryGetSeconds(segment, "end")
+                End = TryGetSeconds(segment, "end"),
+                Words = ParseWords(segment, speaker)
             };
+        }
+
+        private static IReadOnlyList<TranscriptWord> ParseWords(JsonElement segment, string? speaker)
+        {
+            if (!segment.TryGetProperty("words", out var words) || words.ValueKind != JsonValueKind.Array)
+                return Array.Empty<TranscriptWord>();
+            return words.EnumerateArray().Select(word => new TranscriptWord
+            {
+                Text = word.TryGetProperty("word", out var text) || word.TryGetProperty("text", out text) ? text.GetString() ?? string.Empty : string.Empty,
+                Speaker = word.TryGetProperty("speaker", out var label) ? label.GetString() : speaker,
+                Start = TryGetSeconds(word, "start"), End = TryGetSeconds(word, "end")
+            }).ToArray();
         }
 
         private static string? TryGetSegmentId(JsonElement root, JsonElement segment)
@@ -1107,6 +1194,9 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi
             bool IsFinal,
             string DisplayFloor,
             TimeSpan AudioStart,
-            TimeSpan AudioEnd);
+            TimeSpan AudioEnd)
+        {
+            public IReadOnlyDictionary<string, string> SpeakerReferences { get; init; } = new Dictionary<string, string>();
+        }
     }
 }

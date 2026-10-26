@@ -49,6 +49,7 @@ static class HttpTranscriptionTests
         await VerifyBlockedStreamAsync();
         await VerifyDeadlinesAndStartupAsync();
         await VerifySpeakersAndTailAsync();
+        await HttpDiarizationTests.RunAsync();
         await VerifyOverflowAndHardwareAsync();
         Console.WriteLine("HTTP transcription: four simulated hours, bounded uploads/RAM, stop, tail, retries, SSE deadlines, speaker scopes, reuse and hardware contracts passed.");
     }
@@ -185,6 +186,7 @@ static class HttpTranscriptionTests
     {
         var hardware = new Hardware { Tail = new byte[480] };
         var options = Options(); options.TranscriptionModel = OpenAiTranscriptionModel.Gpt4oTranscribeDiarize;
+        options.DiarizationMinimumSectionDuration = TimeSpan.FromMilliseconds(1);
         options.KnownSpeakerReferences["Known"] = "data:audio/wav;base64,AAAA";
         int requests = 0;
         using var client = new HttpClient(new Handler((_, _) =>
@@ -200,7 +202,9 @@ static class HttpTranscriptionTests
         await transcriber.StopAsync(); await run;
         var segments = transcriber.LatestStructuredTranscript!.Segments;
         Check(requests == 2 && segments.Count == 4 && segments.Select(s => s.Id).Distinct().Count() == 4, "tail acknowledged once; repeated segments deduplicated within requests");
-        Check(segments[0].Speaker == "section-1/A" && segments[2].Speaker == "section-2/A" && segments[3].Speaker == "Known", "anonymous speakers scoped and known labels stable");
+        Check(segments[0].Speaker is null && segments[2].Speaker is null && segments[3].Speaker == "Known" &&
+            segments[0].LocalSpeaker == "A" && segments[0].SpeakerScope == TranscriptSpeakerScope.Request,
+            "unresolved local labels do not manufacture people; known references remain stable");
         Check(segments[2].Start == TimeSpan.FromMilliseconds(100) && transcriber.LatestStatus!.IsComplete, "absolute segment times include section offset");
         var oldCallback = hardware.CaptureCallback();
         hardware.Tail = null;

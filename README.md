@@ -20,10 +20,29 @@ Voice conversations, transcription and speech translation for .NET 9/10. Compose
 | Voxtral STT → application backend → TTS | [Mistral configuration](Provider/Ai.Tlbx.VoiceAssistant.Provider.Mistral/README.md) |
 | Company gateways and custom model IDs | [Gateway configuration](tools/gateway-configuration.md) |
 
-## New in 11.7
+## Speaker continuity correction in 11.7.1
+
+HTTP diarization now learns up to four short voice references per recording and sends
+them with later uploads. Recognized voices retain session identities (`speaker_1`, etc.)
+when speaking order changes. Diarization waits for five seconds of new audio by default
+(`DiarizationMinimumSectionDuration`, capped by `MaxSectionDuration`); Stop still sends a short tail.
+References are extracted only from completed, timed, non-overlapping speaker segments with
+at least two seconds of usable audio. They remain in memory and go only to the configured
+transcription endpoint. Configured `KnownSpeakerReferences` share the four-reference limit.
+
+`Speaker` contains an established session identity or null. `LocalSpeaker` preserves the
+provider label; `SpeakerScope` and `SpeakerScopeId` identify its domain on both segments
+and words. Short, overlapping, unrecognized or excess speakers remain unassigned instead
+of appearing as new people on every upload. Set `EnableAutomaticSpeakerReferences = false`
+to use only application-supplied references. Configure references before starting a recording.
+Applications should group people by session-scoped identities and keep unassigned speech
+explicitly unassigned. Matching quality still depends on the provider and reference audio.
+
+## Bounded HTTP recording (11.7)
 
 HTTP live transcription processes bounded sections. Confirmed sections remain as text and
-are never uploaded again. `StopAsync()` stops capture independently of HTTP requests and
+are never retranscribed. Only bounded speaker-reference clips accompany later diarization requests.
+`StopAsync()` stops capture independently of HTTP requests and
 acknowledges the last hardware block. The task returned by `TranscribeLive` completes after
 bounded finalization. `LatestStatus` and `OnStatusChanged` expose completion, partial coverage
 and failure; `OnTranscriptionError` reports retries and request metadata without conversation text.
@@ -391,12 +410,11 @@ Failed finalization preserves earlier confirmed text and lists the unconfirmed t
 `MissingSections`. Applications own durable storage and recovery across page/circuit changes.
 
 For diarization choose `Gpt4oTranscribeDiarize`. Segment timestamps are absolute within the
-session; IDs include the section revision. Anonymous labels are scoped as `section-3/A`,
-because separate requests cannot establish that two `A` labels identify the same person.
+session; IDs include the section revision. Automatic voice references establish identities
+across requests, while unresolved local labels stay in `LocalSpeaker` with `Speaker = null`.
 Configured `KnownSpeakerReferences` preserve their names. Repeated events within a section
 are deduplicated. Sections have no audio overlap, so repeated phrases across boundaries are
-retained. Hard cuts during continuous speech can affect word accuracy; cross-section speaker
-identity without references is not inferred. See the
+retained. Hard cuts during continuous speech can affect word accuracy. See the
 [OpenAI file transcription contract](https://developers.openai.com/api/docs/guides/speech-to-text).
 
 ### Transcription Models
