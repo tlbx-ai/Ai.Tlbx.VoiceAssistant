@@ -1,0 +1,12 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="../../Telephony/Ai.Tlbx.VoiceAssistant.Telnyx/Ai.Tlbx.VoiceAssistant.Telnyx.csproj" />
+    <ProjectReference Include="../../Provider/Ai.Tlbx.VoiceAssistant.Provider.OpenAi/Ai.Tlbx.VoiceAssistant.Provider.OpenAi.csproj" />
+  </ItemGroup>
+</Project>

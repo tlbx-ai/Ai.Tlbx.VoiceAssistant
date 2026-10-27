@@ -18,6 +18,8 @@ using Ai.Tlbx.VoiceAssistant.Provider.XAi;
 using Ai.Tlbx.VoiceAssistant.Provider.XAi.Models;
 using Ai.Tlbx.VoiceAssistant.Provider.XAi.Protocol;
 
+if (args.Contains("--telnyx-only")) { await TelnyxTests.RunAsync(); return; }
+
 if (args.Contains("--voice-expansion-live", StringComparer.Ordinal)) { await OpenAiVoiceExpansionTests.RunLiveAsync(); return; }
 if (args.Contains("--voice-expansion-vision", StringComparer.Ordinal)) { await OpenAiVoiceExpansionTests.RunVisionAsync(); return; }
 if (args.Contains("--voice-expansion-storage", StringComparer.Ordinal)) { await OpenAiVoiceExpansionTests.RunStorageAsync(); return; }
@@ -25,6 +27,7 @@ if (args.Contains("--http-live")) { await HttpTranscriptionTests.RunLiveAsync(ar
 if (args.Contains("--diarization-only")) { await HttpDiarizationTests.RunAsync(); return; }
 if (args.Contains("--diarization-live")) { await HttpDiarizationLiveTests.RunAsync(args[1]); return; }
 if (args.Contains("--http-stop-repro")) { await HttpTranscriptionTests.RunAsync(); return; }
+await TelnyxTests.RunAsync();
 await MistralTests.RunAsync();
 if (args.Contains("--mistral-only", StringComparer.Ordinal)) return;
 if (args.Contains("--mistral-live", StringComparer.Ordinal)) { await MistralTests.RunLiveAsync(); return; }

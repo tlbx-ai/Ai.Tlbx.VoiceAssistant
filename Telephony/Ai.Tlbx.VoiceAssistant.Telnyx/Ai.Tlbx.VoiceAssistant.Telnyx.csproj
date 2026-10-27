@@ -1,0 +1,22 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFrameworks>net9.0;net10.0</TargetFrameworks>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <PackageId>Ai.Tlbx.VoiceAssistant.Telnyx</PackageId>
+    <Description>Telnyx REST provisioning, call control, signed ASP.NET Core webhooks and bidirectional telephone audio for VoiceAssistant.</Description>
+    <PackageTags>Telnyx;Telephony;VoiceAssistant;WebSocket;PCM;VoiceAI</PackageTags>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+    <PackageOutputPath>../../nupkg</PackageOutputPath>
+    <IsAotCompatible>true</IsAotCompatible>
+    <IsTrimmable>true</IsTrimmable>
+  </PropertyGroup>
+  <ItemGroup>
+    <InternalsVisibleTo Include="ContractTests" />
+    <FrameworkReference Include="Microsoft.AspNetCore.App" />
+    <ProjectReference Include="../../Provider/Ai.Tlbx.VoiceAssistant/Ai.Tlbx.VoiceAssistant.csproj" />
+    <PackageReference Include="BouncyCastle.Cryptography" Version="2.7.0" />
+    <None Include="README.md" Pack="true" PackagePath="/" />
+  </ItemGroup>
+</Project>

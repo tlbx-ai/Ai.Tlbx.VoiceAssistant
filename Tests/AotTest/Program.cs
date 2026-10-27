@@ -12,8 +12,15 @@ using Ai.Tlbx.VoiceAssistant.Provider.Google.Models;
 using Ai.Tlbx.VoiceAssistant.Provider.XAi;
 using Ai.Tlbx.VoiceAssistant.Provider.XAi.Models;
 using Ai.Tlbx.VoiceAssistant.Hardware.Web;
+using Ai.Tlbx.VoiceAssistant.Telnyx;
 
 var builder = WebApplication.CreateSlimBuilder(args);
+builder.Services.AddTelnyxVoice(options =>
+{
+    options.ApiKey = "aot-contract-no-network";
+    options.PublicKey = Convert.ToBase64String(new byte[32]);
+    options.PublicBaseUri = new Uri("https://aot.example.test");
+});
 builder.Services.AddOpenAiDirectLiveVoice();
 builder.Services.AddOpenAiDirectTranslation();
 
@@ -24,6 +31,17 @@ builder.Services.ConfigureHttpJsonOptions(options =>
 });
 
 var app = builder.Build();
+app.UseWebSockets();
+app.MapTelnyxVoice((call, ct) => call.Audio.Completion.WaitAsync(ct));
+app.MapGet("/telnyx-smoke", () =>
+{
+    var native = TelnyxWebhook.Parse("{\"data\":{\"id\":\"aot\",\"event_type\":\"custom.native\",\"payload\":{\"unknown\":true}}}");
+    var verifier = new TelnyxSignatureVerifier(new TelnyxOptions { PublicKey = Convert.ToBase64String(new byte[32]) });
+    bool invalidRejected = !verifier.Verify(DateTimeOffset.UtcNow.ToUnixTimeSeconds().ToString(), Convert.ToBase64String(new byte[64]), "{}");
+    string streamJson = new TelnyxStreamOptions().ToRequest(new Uri("wss://aot.example.test/telnyx/media")).ToJsonString();
+    using var stream = JsonDocument.Parse(streamJson);
+    return new TestResults { Success = invalidRejected && native.Payload.GetProperty("unknown").GetBoolean() && stream.RootElement.GetProperty("stream_bidirectional_codec").GetString() == "L16", Results = new() { "Telnyx native JSON serialization and Ed25519 verification executed without reflection" } };
+});
 app.MapGet("/mistral-smoke", async () =>
 {
     using var http = new HttpClient();

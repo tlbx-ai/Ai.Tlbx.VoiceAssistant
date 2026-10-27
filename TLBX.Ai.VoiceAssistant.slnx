@@ -1,5 +1,6 @@
 <Solution>
   <Folder Name="/Demo/">
+    <Project Path="Demo/Ai.Tlbx.VoiceAssistant.Demo.Telnyx/Ai.Tlbx.VoiceAssistant.Demo.Telnyx.csproj" />
     <Project Path="Demo/Ai.Tlbx.VoiceAssistant.Demo.Console/Ai.Tlbx.VoiceAssistant.Demo.Console.csproj" />
     <Project Path="Demo/Ai.Tlbx.VoiceAssistant.Demo.Linux/Ai.Tlbx.VoiceAssistant.Demo.Linux.csproj" />
     <Project Path="Demo/Ai.Tlbx.VoiceAssistant.Demo.Web/Ai.Tlbx.VoiceAssistant.Demo.Web.csproj" />
@@ -30,6 +31,9 @@
   <Folder Name="/Tests/">
     <Project Path="Tests/AotTest/AotTest.csproj" />
     <Project Path="Tests/ContractTests/ContractTests.csproj" />
+  </Folder>
+  <Folder Name="/Telephony/">
+    <Project Path="Telephony/Ai.Tlbx.VoiceAssistant.Telnyx/Ai.Tlbx.VoiceAssistant.Telnyx.csproj" />
   </Folder>
   <Folder Name="/WebUi/">
     <Project Path="WebUi/Ai.Tlbx.VoiceAssistant.WebUi/Ai.Tlbx.VoiceAssistant.WebUi.csproj" />

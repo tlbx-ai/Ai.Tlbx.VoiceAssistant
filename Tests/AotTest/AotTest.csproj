@@ -31,6 +31,7 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <ProjectReference Include="../../Telephony/Ai.Tlbx.VoiceAssistant.Telnyx/Ai.Tlbx.VoiceAssistant.Telnyx.csproj" />
     <ProjectReference Include="../../Provider/Ai.Tlbx.VoiceAssistant.Provider.Mistral/Ai.Tlbx.VoiceAssistant.Provider.Mistral.csproj" />
     <!-- Reference all packages under test -->
     <ProjectReference Include="..\..\Provider\Ai.Tlbx.VoiceAssistant.Provider.OpenAi.AspNetCore\Ai.Tlbx.VoiceAssistant.Provider.OpenAi.AspNetCore.csproj" />

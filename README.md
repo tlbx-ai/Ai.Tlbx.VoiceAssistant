@@ -12,6 +12,7 @@ Voice conversations, transcription and speech translation for .NET 9/10. Compose
 
 | Goal | API / guide |
 |------|-------------|
+| Incoming/outgoing AI telephone calls | [Telnyx REST, provisioning and bidirectional audio](Telephony/Ai.Tlbx.VoiceAssistant.Telnyx/README.md) |
 | Voice conversation with tools | `VoiceAssistant` + a provider; [quick start](#quick-start-blazor-server) |
 | Browser audio direct to OpenAI | `OpenAiDirectRealtimeVoiceProvider`; server keeps credentials and tools |
 | GPT-Live with your reasoning/agent backend | [GPT-Live setup and lifecycle](docs/openai-gpt-live.md) |

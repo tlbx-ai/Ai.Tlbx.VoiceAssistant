@@ -6,6 +6,7 @@
     <Nullable>enable</Nullable>
   </PropertyGroup>
   <ItemGroup>
+    <ProjectReference Include="../../Telephony/Ai.Tlbx.VoiceAssistant.Telnyx/Ai.Tlbx.VoiceAssistant.Telnyx.csproj" />
     <Compile Include="../../Demo/Ai.Tlbx.VoiceAssistant.Demo.Web/Services/MistralDemoBackend.cs" Link="Fixtures/MistralDemoBackend.cs" />
     <None Include="Fixtures/mono-22050.mp3" CopyToOutputDirectory="PreserveNewest" />
     <ProjectReference Include="../../Provider/Ai.Tlbx.VoiceAssistant.Provider.Mistral/Ai.Tlbx.VoiceAssistant.Provider.Mistral.csproj" />
