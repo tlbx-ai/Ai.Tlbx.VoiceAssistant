@@ -47,6 +47,22 @@ native labels even when `SessionSpeakerId` is unset. Set `EnableAutomaticSpeaker
 to use only application-supplied references. Configure references before starting a recording.
 Matching quality still depends on the provider and reference audio.
 
+## Publishing
+
+Run the **Publish NuGet** GitHub Actions workflow on `master`, supplying the exact
+version committed in `Directory.Build.props`, for example:
+
+```powershell
+gh workflow run publish-nuget.yml --ref master -f version=11.7.3
+```
+
+The workflow runs `verify-release.ps1`, including Native AOT, packs the toolkit,
+and publishes through NuGet Trusted Publishing. The `nuget` environment accepts
+only `master`; the NuGet policy binds this repository, workflow, environment and
+the eleven toolkit package IDs. No persistent NuGet API key is needed. A retry
+uses the same version and skips packages already uploaded. The local
+`publish-nuget*.ps1` scripts remain API-key-based alternatives.
+
 ## Bounded HTTP recording (11.7)
 
 HTTP live transcription processes bounded sections. Confirmed sections remain as text and

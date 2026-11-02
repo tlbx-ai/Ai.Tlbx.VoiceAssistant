@@ -1,0 +1,82 @@
+name: Publish NuGet
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Exact version already committed in Directory.Build.props
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: nuget-publish
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    if: github.ref == 'refs/heads/master'
+    runs-on: windows-latest
+    timeout-minutes: 30
+    environment: nuget
+    permissions:
+      contents: read
+      id-token: write
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-dotnet@67a3573c9a986a3f9c594539f4ab511d57bb3ce9 # v4
+        with:
+          dotnet-version: |
+            9.0.x
+            10.0.x
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: '22'
+
+      - name: Validate release version
+        env:
+          RELEASE_VERSION: ${{ inputs.version }}
+        run: |
+          [xml]$props = Get-Content Directory.Build.props
+          $version = [string]$props.Project.PropertyGroup.Version
+          if ($env:RELEASE_VERSION -notmatch '^\d+\.\d+\.\d+$' -or $version -ne $env:RELEASE_VERSION) {
+            throw 'Requested version must match Directory.Build.props exactly.'
+          }
+
+      - name: Verify release including Native AOT
+        run: ./verify-release.ps1
+
+      - name: Pack toolkit packages
+        run: |
+          $projects = @(Get-ChildItem Provider,Hardware,Telephony,WebUi -Recurse -Filter '*.csproj')
+          foreach ($project in $projects) {
+            dotnet pack $project.FullName -c Release --no-build --output artifacts/nuget
+            if ($LASTEXITCODE -ne 0) { throw "Packing failed: $($project.Name)" }
+          }
+          $packages = @(Get-ChildItem artifacts/nuget -Filter '*.nupkg')
+          if ($packages.Count -ne $projects.Count) { throw 'Package count does not match the toolkit projects.' }
+
+      - name: NuGet login with GitHub OIDC
+        id: login
+        uses: NuGet/login@ebc737b6fc418a6ca0073cf116ec8dc156d8b81e # v1
+        with:
+          user: Ai.Tlbx
+
+      - name: Publish packages
+        env:
+          NUGET_API_KEY: ${{ steps.login.outputs.NUGET_API_KEY }}
+        run: |
+          foreach ($package in Get-ChildItem artifacts/nuget -Filter '*.nupkg') {
+            dotnet nuget push $package.FullName --api-key $env:NUGET_API_KEY --source https://api.nuget.org/v3/index.json --skip-duplicate
+            if ($LASTEXITCODE -ne 0) { throw "Publishing failed: $($package.Name)" }
+          }
+          "Published version ${{ inputs.version }} from commit ${{ github.sha }}." >> $env:GITHUB_STEP_SUMMARY
