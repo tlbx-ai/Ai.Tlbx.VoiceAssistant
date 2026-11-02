@@ -39,7 +39,9 @@ try
 
     if (-not $SkipAot)
     {
-        if ($IsWindows -and -not (Get-Command link.exe -ErrorAction SilentlyContinue))
+        # Git for Windows also supplies link.exe. Always establish the MSVC
+        # environment instead of treating any executable with that name as ready.
+        if ($IsWindows)
         {
             $vswhere = Join-Path ${env:ProgramFiles(x86)} "Microsoft Visual Studio\Installer\vswhere.exe"
             if (-not (Test-Path -LiteralPath $vswhere))
