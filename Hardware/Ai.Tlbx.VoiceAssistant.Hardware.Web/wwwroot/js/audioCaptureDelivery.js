@@ -9,6 +9,8 @@ export class AudioCaptureDelivery {
         this.failed = false;
         this.closed = false;
         this.tail = Promise.resolve();
+        this.queue = [];
+        this.sending = false;
     }
 
     fail(message) {
@@ -24,20 +26,40 @@ export class AudioCaptureDelivery {
             return;
         }
         this.pending++;
-        this.tail = this.tail.then(async () => {
-            if (this.failed) return;
-            let timer;
-            try {
-                await Promise.race([
-                    this.send(audio),
-                    new Promise((_, reject) => { timer = setTimeout(() => reject(new Error('Microphone delivery acknowledgment timed out.')), this.timeoutMs); })
-                ]);
-            } catch {
-                this.fail('Microphone audio delivery failed or timed out.');
-            } finally {
-                clearTimeout(timer);
+        this.queue.push(audio);
+        if (!this.sending) {
+            this.sending = true;
+            this.tail = Promise.resolve().then(() => this.flush());
+        }
+    }
+
+    async flush() {
+        try {
+            while (this.queue.length && !this.failed) {
+                // One acknowledged callback per 20 ms frame drifts whenever the
+                // round trip exceeds 20 ms. Catch up by joining already queued
+                // PCM, without a batching timer or concurrent interop calls.
+                // Cap each callback at ten frames (200 ms at the capture rate).
+                const batch = this.queue.splice(0, 10);
+                let timer;
+                try {
+                    const audio = batch.length === 1 ? batch[0] : btoa(batch.map(chunk => atob(chunk)).join(''));
+                    await Promise.race([
+                        this.send(audio),
+                        new Promise((_, reject) => { timer = setTimeout(() => reject(new Error('Microphone delivery acknowledgment timed out.')), this.timeoutMs); })
+                    ]);
+                } catch {
+                    this.fail('Microphone audio delivery failed or timed out.');
+                } finally {
+                    clearTimeout(timer);
+                    this.pending -= batch.length;
+                }
             }
-        }).finally(() => { this.pending--; });
+        } finally {
+            this.pending -= this.queue.length;
+            this.queue = [];
+            this.sending = false;
+        }
     }
 
     async drain() {

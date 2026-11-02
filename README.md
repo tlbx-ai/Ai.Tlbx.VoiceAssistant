@@ -63,6 +63,9 @@ durable checkpoints and recovery across page/circuit changes.
 
 Browser capture preserves delivery order, drains the final .NET callback before stop
 acknowledgment, bounds its delivery queue and reports worklet, track and delivery failures.
+The PCM relay combines already queued 20 ms frames into callbacks of at most 200 ms,
+so interop round trips longer than one frame do not accumulate delay. The first
+frame is sent immediately; direct OpenAI WebRTC audio bypasses this relay.
 
 ## Quick Start (Blazor Server)
 
