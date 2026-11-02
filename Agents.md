@@ -182,4 +182,4 @@ Always use `Action<LogLevel, string>` for logging delegation and forward logs up
 - Web components require HTTPS or localhost for microphone access due to browser security
 - JavaScript AudioWorklet processors handle real-time audio processing (de-esser, compression, downsampling)
 - Solution uses the new .slnx format (TLBX.Ai.VoiceAssistant.slnx)
-- Publishing requires NUGET_API_KEY environment variable for NuGet.org uploads
+- Publish through `.github/workflows/publish-nuget.yml` on `master` with the exact committed version. It runs the release gate and uses NuGet Trusted Publishing through the master-only `nuget` environment. Retry the same version after a failed upload; do not increment it again. Local `publish-nuget*.ps1` scripts are API-key-based alternatives.
