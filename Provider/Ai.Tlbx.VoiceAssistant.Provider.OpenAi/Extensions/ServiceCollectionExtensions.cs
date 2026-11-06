@@ -74,7 +74,7 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi.Extensions
         /// <returns>Configured OpenAI voice settings.</returns>
         public static OpenAiVoiceSettings CreateDefaultOpenAiSettings(
             string instructions = "You are a helpful assistant.",
-            AssistantVoice voice = AssistantVoice.Marin)
+            OpenAiVoice voice = OpenAiVoice.Marin)
         {
             return new OpenAiVoiceSettings
             {
@@ -108,7 +108,7 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi.Extensions
         public static OpenAiVoiceSettings CreateDefaultOpenAiSettings(
             double vadThreshold,
             string instructions = "You are a helpful assistant.",
-            AssistantVoice voice = AssistantVoice.Marin)
+            OpenAiVoice voice = OpenAiVoice.Marin)
         {
             var settings = CreateDefaultOpenAiSettings(instructions, voice);
             settings.VadThreshold = vadThreshold;

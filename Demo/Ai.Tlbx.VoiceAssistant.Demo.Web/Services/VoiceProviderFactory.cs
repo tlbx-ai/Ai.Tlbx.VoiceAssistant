@@ -46,7 +46,7 @@ namespace Ai.Tlbx.VoiceAssistant.Demo.Web.Services
                 VoiceProviderType.XAi => new XaiVoiceProvider(
                     Environment.GetEnvironmentVariable("XAI_API_KEY"), logAction),
                 VoiceProviderType.OpenAiTranscription => new OpenAiTranscriptionProvider(
-                    Environment.GetEnvironmentVariable("OPENAI_API_KEY"), logAction: logAction),
+                    _serviceProvider.GetRequiredService<DemoOpenAiCredentials>().ApiKey, logAction: logAction),
                 VoiceProviderType.Mistral => new Provider.Mistral.MistralVoiceProvider(
                     _serviceProvider.GetRequiredService<Provider.Mistral.MistralAudioClient>(), (level, message) => {
                         logAction?.Invoke(level, message);

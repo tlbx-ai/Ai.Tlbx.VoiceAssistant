@@ -34,8 +34,11 @@ Sources: [Live overview](https://developers.openai.com/api/docs/guides/live),
 
 Startup fields are `model`, `instructions`, `input`, `audio`, `delegation`, and `store`.
 `audio.format` is shared by input and output; `audio.output.voice` defaults to `marin`.
-The string `Voice` also accepts additional Live voice names such as `quartz`, `ripple`, `vesper`,
-`willow`, `stone`, `gleam`, `meridian`, `bossa`, `tempo`, `beacon`, `delta`, and `cinder`.
+Discover the selected model's voices with `settings.GetAvailableVoices()` or
+`OpenAiVoiceCatalog.GetVoices("gpt-live-1")`. Assign `Voice = OpenAiVoice.Nuri` directly;
+each catalog entry contains its exact API ID and human-readable display information.
+The 11.8 catalog validates the model/API/voice combination before a connection is created.
+For a gateway alias set `VoiceModelId = "gpt-live-1"`; unknown model IDs never imply support.
 Custom-voice objects are not exposed by these settings.
 
 Initial instructions support up to 16,384 tokens. Startup history accepts at most 128 text messages,
@@ -382,6 +385,24 @@ remain an unimplemented extension point.
 
 ### Application-owned agent handoff
 
-`ClientBackend.Handler` receives original speech fragments and delegation metadata, and can connect Ai.Tlbx.Inference or any application-owned agent. Progress and usage callbacks keep the spoken conversation and cost ledger informed while work runs outside the receive loop. Follow-ups queue by default; `Supersede` is explicit. Full agent output remains application-owned, with only a concise spoken result appended to Live. See the [working inference adapter](../Demo/Ai.Tlbx.VoiceAssistant.Demo.Web/Services/InferenceHandoffBackend.cs) and `/agent-handoff` demo.
+`ClientBackend.Handler` connects Ai.Tlbx.Inference or any application-owned agent through a plain
+async delegate; no inference SDK is required by the provider package. `context.Refresh()` captures
+the full current transcript, application context and visual items. Call `ThrowIfContextChanged()`
+before actions/results and route tool callbacks through `ExecuteToolAsync`. The provider refreshes
+stale work before publishing its result. Follow-ups queue by default; `ResolveDelegationAsync`
+can use application/task state to select Queue, Supersede, Cancel or Ignore for each delegation.
+Speech interruptions alone never cancel tasks. No keyword heuristics infer user intent.
+
+Keep `OpenAiLiveToolJournal` with your application conversation across reconnects. Its atomic
+checkpoint callback supports durable action records; started actions whose outcome is unknown
+after restart must be reconciled with their service. Complete tool outputs survive model
+cancellation. Call IDs prevent transport-level replays; business idempotency and authorization
+remain the application's responsibility. Keep your SDK's own model history as well.
+
+The [working Inference adapter](../Demo/Ai.Tlbx.VoiceAssistant.Demo.Web/Services/InferenceHandoffBackend.cs)
+uses native structured output for the full result and concise spoken facts in one model run,
+without a second summarizer. Live appends use the documented 500-token limit, never a byte cutoff.
+The normal `/` demo includes Agent-Handoff. See the provider README for an SDK-independent adapter
+example, persistence details and the optional tokenizer callback.
 
 The available API model on 2026-10-17 is `gpt-live-1`. Official API docs and the account catalog do not yet establish GPT-Live 1.1/Quip IDs, pricing or protocol compatibility. The library preserves an explicit `ModelId` and does not silently substitute models. A ChatGPT Voice announcement does not establish API availability. Native Decisions delegation is a separate beta workflow; this update keeps the typed client/Responses boundary and supports application-owned decision routing through the agent callback.

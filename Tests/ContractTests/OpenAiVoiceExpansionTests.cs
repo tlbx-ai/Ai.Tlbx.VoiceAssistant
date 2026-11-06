@@ -71,7 +71,8 @@ internal static class OpenAiVoiceExpansionTests
                 await Send(socket, """{"type":"session.output_audio.delta","delta":"AAA="}""", timeout.Token);
                 await Send(socket, """{"type":"session.closed","usage":{"input_tokens":3,"output_tokens":5,"total_tokens":8}}""", timeout.Token);
             }
-            await socket.CloseOutputAsync(WebSocketCloseStatus.NormalClosure, "done", timeout.Token);
+            try { await socket.CloseAsync(WebSocketCloseStatus.NormalClosure, "done", timeout.Token); }
+            catch (WebSocketException) { /* Client cleanup aborts after consuming final/close. */ }
         });
         await using var provider = new OpenAiTranslationProvider("translate-key");
         provider.OnAudioReceived = audio.Add; provider.OnTranscriptDelta = fragments.Add; provider.OnUsageReceived = usage.Add;

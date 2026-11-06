@@ -23,6 +23,8 @@ public class Program
     public static void Main(string[] args)
     {
         var builder = WebApplication.CreateBuilder(args);
+        var openAiCredentials = new DemoOpenAiCredentials(builder.Configuration["openai-key-file"]);
+        builder.Services.AddSingleton(openAiCredentials);
 
         // Add services to the container.
         builder.Services.AddRazorComponents()
@@ -32,7 +34,7 @@ public class Program
         // Register provider factory
         builder.Services.AddScoped<IVoiceProviderFactory, VoiceProviderFactory>();
         Ai.Tlbx.Inference.Configuration.ServiceCollectionExtensions.AddAiInference(builder.Services,
-            options => options.AddOpenAi(Environment.GetEnvironmentVariable("OPENAI_API_KEY") ?? ""));
+            options => options.AddOpenAi(openAiCredentials.ApiKey ?? ""));
         builder.Services.AddScoped<InferenceHandoffBackend>();
         builder.Services.AddHttpClient();
         builder.Services.AddScoped(sp => new Provider.Mistral.MistralAudioClient(
@@ -44,7 +46,6 @@ public class Program
         // Register services needed by VoiceAssistant (without registering VoiceAssistant itself)
         // since we create it manually in Home.razor with the factory pattern
         builder.Services.AddScoped<IAudioHardwareAccess, WebAudioAccess>();
-        builder.Services.AddScoped<OpenAiDirectRealtimeVoiceProvider>();
         builder.Services.AddOpenAiDirectTranslation(options =>
         {
             options.AuthorizeRequest = _ => true; // Local demo; production must authorize its users.
@@ -62,6 +63,12 @@ public class Program
             options.AuthorizeRequest = _ => true;
             options.Log = (level, message) => Debug.WriteLine($"[DirectRealtime:{level}] {message}");
         });
+
+        // Explicit demo credentials are passed to all OpenAI paths, including Ai.Tlbx.Inference.
+        // No process, user or machine environment variable is changed.
+        builder.Services.AddScoped(sp => ActivatorUtilities.CreateInstance<OpenAiDirectRealtimeVoiceProvider>(sp, openAiCredentials.ApiKey ?? ""));
+        builder.Services.AddScoped(sp => ActivatorUtilities.CreateInstance<OpenAiDirectLiveVoiceProvider>(sp, openAiCredentials.ApiKey ?? ""));
+        builder.Services.AddScoped(sp => ActivatorUtilities.CreateInstance<OpenAiDirectTranslationVoiceProvider>(sp, openAiCredentials.ApiKey ?? ""));
 
         // Register all built-in tools directly
         builder.Services.AddTransient<IVoiceTool, TimeTool>();

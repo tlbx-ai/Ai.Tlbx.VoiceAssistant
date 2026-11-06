@@ -133,7 +133,7 @@ builder.Services.AddScoped<IAudioHardwareAccess, WebAudioAccess>();
 ```csharp
 // OpenAI
 var provider = factory.CreateOpenAi(apiKey);
-var settings = new OpenAiVoiceSettings { Voice = AssistantVoice.Alloy };
+var settings = new OpenAiVoiceSettings { Voice = OpenAiVoice.Alloy };
 
 // Google Gemini
 var provider = factory.CreateGoogle(apiKey);

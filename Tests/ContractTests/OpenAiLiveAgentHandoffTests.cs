@@ -77,9 +77,10 @@ internal static partial class OpenAiLiveTests
                 Check(context.SessionId == "agent-session", "agent gets session identity");
                 if (context.Delegation.Id == "first")
                 {
-                    Check(context.Transcript.Count == 1, "first snapshot excludes future user speech");
+                    Check(context.Transcript.Count == (calls.Count == 1 ? 1 : 2), "refreshed snapshot retains later speech");
                     firstStarted.TrySetResult();
                     await releaseFirst.Task.WaitAsync(ct);
+                    context.ThrowIfContextChanged();
                     await context.ReportContextAsync!("Die Akte wird noch geprüft", ct);
                     await context.ReportProgressAsync("Die Akte ist geprüft", ct);
                 }
@@ -94,7 +95,7 @@ internal static partial class OpenAiLiveTests
         Check(calls.SequenceEqual(["first"]), "new delegation queues without cancelling the active agent");
         releaseFirst.TrySetResult();
         await secondDone.Task.WaitAsync(timeout.Token);
-        Check(calls.SequenceEqual(["first", "second"]), "FIFO execution and duplicate delegation suppression");
+        Check(calls.SequenceEqual(["first", "first", "second"]), "fresh-context retry, FIFO execution and duplicate delegation suppression");
         Check(commentary.SequenceEqual(["Die Akte ist geprüft", "Ergebnis eins", "Ergebnis zwei"]), "acknowledged progress and final results delivered in order");
         Check(quietContext.SequenceEqual(["Die Akte wird noch geprüft"]), "quiet context is acknowledged separately from spoken commentary");
         // Inject another delegation through the same production dispatch path; it must cancel without commentary.

@@ -156,6 +156,7 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi
             if (_settings == null)
                 throw new InvalidOperationException("Settings must be configured before creating session");
 
+            _settings.ValidateVoice();
             // Creating client secret for ephemeral key
 
             // Create request with session configuration
@@ -242,6 +243,7 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi
             }
                        
 
+            openAiSettings.ValidateVoice();
             if (openAiSettings.ToolExecutionTimeout <= TimeSpan.Zero)
                 throw new ArgumentOutOfRangeException(nameof(openAiSettings.ToolExecutionTimeout), "Tool execution timeout must be positive.");
             if (_webSocket != null) await DisconnectAsync();
@@ -378,6 +380,7 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi
                 throw new ArgumentException("Settings must be of type OpenAiVoiceSettings for OpenAI provider", nameof(settings));
             }
 
+            openAiSettings.ValidateVoice();
             if (openAiSettings.ToolExecutionTimeout <= TimeSpan.Zero)
                 throw new ArgumentOutOfRangeException(nameof(openAiSettings.ToolExecutionTimeout), "Tool execution timeout must be positive.");
             _settings = openAiSettings;
@@ -497,8 +500,9 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi
         {
             if (_settings == null || !IsConnected)
                 return;
+            _settings.ValidateVoice();
 
-            var voiceString = _settings.Voice.ToString().ToLowerInvariant();
+            var voiceString = _settings.Voice.ToApiString();
             _logAction(LogLevel.Info, $"Configuring session with voice: {_settings.Voice} -> {voiceString}");
 
             var instructions = OpenAiInstructionsComposer.Compose(_settings);

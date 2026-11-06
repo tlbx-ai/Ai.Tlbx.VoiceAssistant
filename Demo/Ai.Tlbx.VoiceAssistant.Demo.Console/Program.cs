@@ -50,7 +50,7 @@ internal static class Program
     private static List<AudioDeviceInfo> microphones = [];
     private static string selectedMicrophoneId = string.Empty;
     private static ProviderChoice selectedProvider = ProviderChoice.OpenAI;
-    private static string selectedVoice = nameof(AssistantVoice.Marin);
+    private static string selectedVoice = nameof(OpenAiVoice.Marin);
     private static string selectedModel = nameof(OpenAiRealtimeModel.GptRealtime21);
     private static OpenAiTranscriptionModel transcriptionModel = OpenAiTranscriptionModel.GptLiveTranscribe;
     private static bool includeTranscriptionLogProbabilities;
@@ -263,20 +263,20 @@ internal static class Program
                 .Title("Provider")
                 .AddChoices(Enum.GetValues<ProviderChoice>()));
 
-        selectedVoice = selectedProvider switch
-        {
-            ProviderChoice.OpenAI => PromptEnum("OpenAI voice", AssistantVoice.Marin).ToString(),
-            ProviderChoice.Google => PromptEnum("Google voice", GoogleVoice.Puck).ToString(),
-            ProviderChoice.XAi => PromptEnum("xAI voice", XaiVoice.Eve).ToString(),
-            _ => selectedVoice
-        };
-
         selectedModel = selectedProvider switch
         {
-            ProviderChoice.OpenAI => PromptEnum("OpenAI realtime model", OpenAiRealtimeModel.GptRealtime21, includeObsolete: true).ToString(),
+            ProviderChoice.OpenAI => PromptOpenAiModel(),
             ProviderChoice.Google => PromptEnum("Google Live model", GoogleModel.Gemini38Live, includeObsolete: true).ToString(),
             ProviderChoice.XAi => PromptEnum("xAI realtime model", XaiVoiceModel.GrokVoiceLatest, includeObsolete: true).ToString(),
             _ => selectedModel
+        };
+
+        selectedVoice = selectedProvider switch
+        {
+            ProviderChoice.OpenAI => PromptOpenAiVoice(),
+            ProviderChoice.Google => PromptEnum("Google voice", GoogleVoice.Puck).ToString(),
+            ProviderChoice.XAi => PromptEnum("xAI voice", XaiVoice.Eve).ToString(),
+            _ => selectedVoice
         };
 
         talkingSpeed = AnsiConsole.Prompt(
@@ -555,7 +555,7 @@ internal static class Program
     private static (IVoiceProvider Provider, IVoiceSettings Settings) CreateOpenAi()
     {
         EnsureOpenAiKey();
-        var voice = ParseOrDefault(selectedVoice, AssistantVoice.Marin);
+        var voice = ParseOrDefault(selectedVoice, OpenAiVoice.Marin);
         var model = ParseOrDefault(selectedModel, OpenAiRealtimeModel.GptRealtime21);
         var settings = new OpenAiVoiceSettings
         {
@@ -703,6 +703,24 @@ internal static class Program
         return AllTools
             .Where(t => enabledTools.Contains(t.Name))
             .ToList();
+    }
+
+    private static string PromptOpenAiModel()
+    {
+        var selected = AnsiConsole.Prompt(new SelectionPrompt<OpenAiVoiceModelInfo>()
+            .Title("OpenAI realtime model").UseConverter(model => model.Name)
+            .AddChoices(OpenAiVoiceCatalog.GetModels().Where(model => model.Api == OpenAiVoiceApi.Realtime)));
+        if (!OpenAiRealtimeModelExtensions.TryParseApiString(selected.Id, out var model))
+            throw new InvalidOperationException("No Realtime settings for selected model.");
+        return model.ToString();
+    }
+
+    private static string PromptOpenAiVoice()
+    {
+        var model = ParseOrDefault(selectedModel, OpenAiRealtimeModel.GptRealtime21);
+        return AnsiConsole.Prompt(new SelectionPrompt<OpenAiVoiceInfo>()
+            .Title("OpenAI voice").UseConverter(voice => voice.DisplayName)
+            .AddChoices(OpenAiVoiceCatalog.GetVoices(model))).Voice.ToString();
     }
 
     private static T PromptEnum<T>(string title, T current, bool includeObsolete = false)

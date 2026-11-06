@@ -18,6 +18,9 @@ using Ai.Tlbx.VoiceAssistant.Provider.XAi;
 using Ai.Tlbx.VoiceAssistant.Provider.XAi.Models;
 using Ai.Tlbx.VoiceAssistant.Provider.XAi.Protocol;
 
+if (args.Contains("--live-contracts-only")) { await OpenAiLiveTests.RunAsync(); await OpenAiDirectLiveTests.RunAsync(); return; }
+if (args.Contains("--voice-catalog-only")) { OpenAiVoiceCatalogTests.Run(); await OpenAiVoiceCatalogTests.VerifyPreflightAsync(); return; }
+if (args.Contains("--hybrid-only")) { await OpenAiLiveTests.RunHybridAsync(); await DemoHandoffTests.RunAsync(); return; }
 if (args.Contains("--telnyx-only")) { await TelnyxTests.RunAsync(); return; }
 
 if (args.Contains("--voice-expansion-live", StringComparer.Ordinal)) { await OpenAiVoiceExpansionTests.RunLiveAsync(); return; }
@@ -33,6 +36,7 @@ if (args.Contains("--mistral-only", StringComparer.Ordinal)) return;
 if (args.Contains("--mistral-live", StringComparer.Ordinal)) { await MistralTests.RunLiveAsync(); return; }
 await ProviderUpdateTests.RunAsync();
 await DemoHandoffTests.RunAsync();
+await OpenAiLiveTests.RunHybridAsync();
 if (args.Contains("--provider-update-live", StringComparer.Ordinal)) { await ProviderUpdateTests.RunLiveAsync(); return; }
 await OpenAiVoiceExpansionTests.RunAsync();
 if (args.Contains("--voice-expansion-only", StringComparer.Ordinal)) return;
@@ -91,11 +95,12 @@ if (args.Contains("--live-custom-config-smoke", StringComparer.Ordinal))
     return;
 }
 
-Assert(Enum.GetValues<AssistantVoice>().Length == 10, "OpenAI voice roster");
+OpenAiVoiceCatalogTests.Run();
+await OpenAiVoiceCatalogTests.VerifyPreflightAsync();
 Assert(Enum.GetValues<GoogleVoice>().Length == 30, "Gemini voice roster");
 Assert(Enum.GetValues<XaiVoice>().Length == 28, "xAI voice roster");
 Assert(new OpenAiVoiceSettings().Model == OpenAiRealtimeModel.GptRealtime21, "OpenAI default model");
-Assert(new OpenAiVoiceSettings().Voice == AssistantVoice.Marin, "OpenAI default voice");
+Assert(new OpenAiVoiceSettings().Voice == OpenAiVoice.Marin, "OpenAI default voice");
 Assert(new OpenAiVoiceSettings().ReasoningEffort == SessionReasoningEffort.Low, "OpenAI low-latency reasoning default");
 Assert(new OpenAiVoiceSettings().TurnDetection.SilenceDurationMs == 200, "OpenAI low-latency VAD default");
 Assert(new OpenAiVoiceSettings().Eagerness == Eagerness.high, "OpenAI low-latency semantic VAD default");

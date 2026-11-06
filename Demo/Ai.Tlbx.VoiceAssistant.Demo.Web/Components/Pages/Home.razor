@@ -90,7 +90,7 @@
                                     <!-- Voice Selection -->
                                     <div>
                                         <label for="voiceSelect" class="block text-xs font-medium text-gray-600 mb-1">Voice</label>
-                                        <VoiceSelect AvailableVoices="@availableVoices" VoiceLabels="@(_selectedProviderString == "Mistral (OpenRouter)" ? MistralVoiceLabels : null)" @bind-SelectedVoice="@currentVoiceString" Disabled="@((voiceAssistant?.IsConnecting ?? false) || (voiceAssistant?.IsRecording ?? false))" />
+                                        <VoiceSelect AvailableVoices="@availableVoices" VoiceLabels="@(_selectedProviderString == "OpenAI" ? OpenAiVoiceLabels : _selectedProviderString == "Mistral (OpenRouter)" ? MistralVoiceLabels : null)" @bind-SelectedVoice="@currentVoiceString" Disabled="@((voiceAssistant?.IsConnecting ?? false) || (voiceAssistant?.IsRecording ?? false))" />
                                     </div>
                                     }
 
@@ -602,7 +602,7 @@
     }
 
     // Voice management (provider-specific)
-    private string _currentVoiceString = nameof(AssistantVoice.Marin);
+    private string _currentVoiceString = nameof(OpenAiVoice.Marin);
     private string currentVoiceString
     {
         get => _currentVoiceString;
@@ -614,7 +614,9 @@
         }
     }
     private double currentVoiceSpeed = 1.0;
-    private List<string> availableVoices = Enum.GetValues<AssistantVoice>().Select(v => v.ToString()).ToList();
+    private List<string> availableVoices = OpenAiVoiceCatalog.GetVoices("gpt-realtime-2.1").Select(voice => voice.Voice.ToString()).ToList();
+    private static readonly IReadOnlyDictionary<string, string> OpenAiVoiceLabels = OpenAiVoiceCatalog.GetModels()
+        .SelectMany(model => model.Voices).DistinctBy(voice => voice.Voice).ToDictionary(voice => voice.Voice.ToString(), voice => voice.DisplayName);
     private static readonly IReadOnlyDictionary<string, string> MistralVoiceLabels = new Dictionary<string, string> {
         ["voice_481"] = "Fiona · Deutsch",
         ["voice_478"] = "Sarah · Englisch",
@@ -624,9 +626,9 @@
     private sealed record ModelOption(string Value, string Label);
 
     // Model management (provider-specific)
-    private string _currentModelString = nameof(OpenAiRealtimeModel.GptRealtime21);
+    private string _currentModelString = OpenAiRealtimeModel.GptRealtime21.ToApiString();
     private List<ModelOption> availableModels = GetOpenAiModelOptions();
-    private static List<ModelOption> GetOpenAiModelOptions() => [new("gpt-live-1", "GPT-Live 1 (gpt-live-1)"), .. GetEnumOptions<OpenAiRealtimeModel>(includeObsolete: true)];
+    private static List<ModelOption> GetOpenAiModelOptions() => OpenAiVoiceCatalog.GetModels().Select(model => new ModelOption(model.Id, model.Name + " (" + model.Id + ")")).ToList();
     private bool IsLiveModel => _selectedProviderString == "OpenAI" && _currentModelString == "gpt-live-1";
     private string _liveBackendMode = "client";
     private bool IsAgentHandoff => IsLiveModel && _liveBackendMode == "agent";
@@ -649,7 +651,7 @@
             "explicit" => "- The user explicitly asks the agent/sub-agent to work, requests a tool-backed fact or action, or asks about a retained full agent result.\n",
             _ => "- The task needs tools, calculation, careful reasoning, a longer composition, document analysis or evaluation of a previous full agent result.\n"
         }) + "- The user requests a review, critique or quality assessment of completed agent work: start the review directly rather than offering it for later.\n" +
-        "- A correction changes work already in progress.\nDo not delegate to the backend when:\n" +
+        "- A correction, confirmation, cancellation or new detail affects backend work. Stopping speech alone does not cancel a task; delegate requests to cancel the work and wait for its actual outcome.\nDo not delegate to the backend when:\n" +
         "- Greeting, listening confirmation, clarification, or repeating a short verified result already supplied.\n" +
         (_delegationPolicy == "explicit" ? "- A simple request can be answered conversationally without tools and does not explicitly request an agent.\n" : "") +
         "Delegate before answering anything that depends on backend work. Do not guess results while waiting.";
@@ -677,10 +679,9 @@
         if (_isBusy) return;
         var wasLive = IsLiveModel;
         _currentModelString = e.Value?.ToString() ?? _currentModelString;
-        availableVoices = IsLiveModel
-            ? new() { "Marin", "Quartz", "Ripple", "Vesper", "Willow", "Stone", "Gleam", "Meridian", "Bossa", "Tempo", "Beacon", "Delta", "Cinder" }
-            : _selectedProviderString == "OpenAI" ? Enum.GetValues<AssistantVoice>().Select(v => v.ToString()).ToList() : availableVoices;
-        if (!availableVoices.Contains(_currentVoiceString)) currentVoiceString = availableVoices[0];
+        availableVoices = _selectedProviderString == "OpenAI"
+            ? OpenAiVoiceCatalog.GetVoices(_currentModelString).Select(voice => voice.Voice.ToString()).ToList() : availableVoices;
+        if (!availableVoices.Contains(_currentVoiceString)) currentVoiceString = nameof(OpenAiVoice.Marin);
         if (wasLive != IsLiveModel) RecreateVoiceAssistant();
         Log(LogLevel.Info, $"Model changed to: {_currentModelString}");
     }
@@ -850,7 +851,6 @@
             };
             live.OnTranscriptDelta = delta =>
             {
-                if (IsAgentHandoff) HandoffBackend.ObserveTranscript(delta);
                 _ = InvokeAsync(() =>
                 {
                     // Display grouping only: concurrent activity must not split a speaker into syllables.
@@ -906,10 +906,10 @@
         }
         else if (_selectedProviderString == "OpenAI")
         {
-            availableVoices = Enum.GetValues<AssistantVoice>().Select(v => v.ToString()).ToList();
-            _currentVoiceString = nameof(AssistantVoice.Marin);
+            availableVoices = OpenAiVoiceCatalog.GetVoices("gpt-realtime-2.1").Select(voice => voice.Voice.ToString()).ToList();
+            _currentVoiceString = nameof(OpenAiVoice.Marin);
             availableModels = GetOpenAiModelOptions();
-            _currentModelString = nameof(OpenAiRealtimeModel.GptRealtime21);
+            _currentModelString = OpenAiRealtimeModel.GptRealtime21.ToApiString();
         }
         else if (_selectedProviderString == "Google")
         {
@@ -1261,7 +1261,7 @@
 
     private OpenAiRealtimeModel GetSelectedOpenAiModelOrDefault()
     {
-        return Enum.TryParse<OpenAiRealtimeModel>(_currentModelString, out var model)
+        return OpenAiRealtimeModelExtensions.TryParseApiString(_currentModelString, out var model)
             ? model
             : OpenAiRealtimeModel.GptRealtime21;
     }
@@ -1475,7 +1475,6 @@
             {
                 _liveDisplayedCalls.Clear();
                 _liveTranscriptEntries.Clear();
-                HandoffBackend.ResetTranscript();
                 DetachHandoffCallbacks();
                 if (IsAgentHandoff)
                 {
@@ -1497,24 +1496,24 @@
                 settings = new OpenAiLiveSettings
                 {
                     ModelId = "gpt-live-1",
-                    Voice = _currentVoiceString.ToLowerInvariant(),
+                    Voice = Enum.Parse<OpenAiVoice>(_currentVoiceString),
                     Instructions = IsAgentHandoff ? _sessionLiveInstructions : instructions + " Delegiere Aufgaben, die die aktivierten Werkzeuge benötigen, an dein Backend. Bestätige Aktionen erst nach dem geprüften Ergebnis.",
                     InitialHistory = _liveMessages.Where(m => m.ToolCallId == null && m.Role is ChatMessage.UserRole or ChatMessage.AssistantRole).TakeLast(128).ToList(),
                     Responses = _liveBackendMode == "managed" ? backend : null,
                     ClientBackend = IsAgentHandoff
-                        ? new OpenAiLiveClientBackendOptions { Handler = HandoffBackend.RunAsync, Timeout = TimeSpan.FromMinutes(5) }
+                        ? new OpenAiLiveClientBackendOptions { Handler = HandoffBackend.RunAsync, ToolJournal = HandoffBackend.ToolJournal, Timeout = TimeSpan.FromMinutes(5) }
                         : _liveBackendMode == "client" ? new OpenAiLiveClientBackendOptions { Responses = backend } : null,
                     Tools = enabledTools.ToList()
                 };
             }
             else if (_selectedProviderString == "OpenAI")
             {
-                if (!Enum.TryParse<AssistantVoice>(_currentVoiceString, out var openAiVoice))
+                if (!Enum.TryParse<OpenAiVoice>(_currentVoiceString, out var openAiVoice))
                 {
-                    openAiVoice = AssistantVoice.Marin;
+                    openAiVoice = OpenAiVoice.Marin;
                 }
 
-                if (!Enum.TryParse<OpenAiRealtimeModel>(_currentModelString, out var openAiModel))
+                if (!OpenAiRealtimeModelExtensions.TryParseApiString(_currentModelString, out var openAiModel))
                 {
                     openAiModel = OpenAiRealtimeModel.GptRealtime21;
                 }
@@ -1779,7 +1778,7 @@
         {
             _selectedProviderString = "OpenAI";
             if (IsLiveModel || !Enum.TryParse<OpenAiRealtimeModel>(_currentModelString, out _))
-                _currentModelString = nameof(OpenAiRealtimeModel.GptRealtime21);
+                _currentModelString = OpenAiRealtimeModel.GptRealtime21.ToApiString();
             availableModels = GetOpenAiModelOptions();
         }
         _supportTextDelta = "";

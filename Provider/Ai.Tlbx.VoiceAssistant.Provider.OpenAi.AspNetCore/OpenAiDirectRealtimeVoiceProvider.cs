@@ -82,6 +82,7 @@ public sealed class OpenAiDirectRealtimeVoiceProvider : IDirectBrowserVoiceProvi
             throw new ArgumentException("Settings must be of type OpenAiVoiceSettings for OpenAI direct realtime provider", nameof(settings));
         }
 
+        openAiSettings.ValidateVoice();
         _settings = openAiSettings;
         ReportStatus("Preparing OpenAI browser session...");
 
@@ -161,6 +162,7 @@ public sealed class OpenAiDirectRealtimeVoiceProvider : IDirectBrowserVoiceProvi
             throw new ArgumentException("Settings must be of type OpenAiVoiceSettings for OpenAI direct realtime provider", nameof(settings));
         }
 
+        openAiSettings.ValidateVoice();
         _settings = openAiSettings;
         _logAction(LogLevel.Warn, "OpenAI direct realtime settings updates require a new browser session.");
         return Task.CompletedTask;

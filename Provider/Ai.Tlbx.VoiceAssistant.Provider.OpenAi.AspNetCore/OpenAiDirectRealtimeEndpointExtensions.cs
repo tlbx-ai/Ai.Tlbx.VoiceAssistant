@@ -97,7 +97,7 @@ public static class OpenAiDirectRealtimeEndpointExtensions
                 ClientSecret = clientSecret,
                 RealtimeCallsEndpoint = new ProviderEndpointOptions(spec.Settings.RealtimeCallsEndpoint).BuildUri().AbsoluteUri,
                 Model = spec.Settings.GetModelId(),
-                Voice = spec.Settings.Voice.ToString().ToLowerInvariant(),
+                Voice = spec.Settings.Voice.ToApiString(),
                 ControlUrl = $"{NormalizePrefix(options.RoutePrefix)}/control/{voiceSessionId}",
                 Channel = spec.Channel
             };

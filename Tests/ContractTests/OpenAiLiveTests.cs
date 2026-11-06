@@ -37,6 +37,7 @@ internal static partial class OpenAiLiveTests
             Check(start["type"]!.GetValue<string>() == "session.start", "first event is session.start");
             var session = start["session"]!;
             Check(session["model"]!.GetValue<string>() == "gpt-live-1", "model in session body");
+            Check(session["audio"]!["output"]!["voice"]!.GetValue<string>() == "nuri", "catalog voice reaches WebSocket startup");
             Check(session["input"]!.AsArray().Count == 2, "history delivered before startup");
             Check(session["audio"]!["format"]!["rate"]!.GetValue<int>() == 24000, "shared audio format");
             Check(session["delegation"]!["responses"]!["tools"]!.AsArray().Count == 1, "Responses tool schema");
@@ -91,7 +92,7 @@ internal static partial class OpenAiLiveTests
         });
         var tool = new LookupTool();
         _ = server.ContinueWith(t => Console.Error.WriteLine(t.Exception), TaskContinuationOptions.OnlyOnFaulted);
-        var settings = new OpenAiLiveSettings { Connection = new($"ws://localhost:{port}/"),
+        var settings = new OpenAiLiveSettings { Connection = new($"ws://localhost:{port}/"), Voice = OpenAiVoice.Nuri,
             Responses = new JsonObject { ["model"] = "backend" }, Tools = [tool] };
         await using var provider = new OpenAiLiveProvider("test-live-key");
         provider.SetStartupHistory([ChatMessage.CreateUserMessage("previous question"), ChatMessage.CreateAssistantMessage("previous answer")]);
@@ -101,6 +102,11 @@ internal static partial class OpenAiLiveTests
         var continuation = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var completedTranscripts = 0;
         var errors = new ConcurrentQueue<string>();
+        var readyAtAcknowledgment = false;
+        provider.OnEventReceived = e =>
+        {
+            if (e["type"]?.GetValue<string>() == "session.started") readyAtAcknowledgment = provider.IsConnected;
+        };
         provider.OnError = errors.Enqueue;
         provider.OnTranscriptDelta = fragments.Enqueue;
         provider.OnUsageReceived = usage.Enqueue;
@@ -114,10 +120,12 @@ internal static partial class OpenAiLiveTests
         await provider.AppendThinkingAsync("verified context");
         try { await provider.SetInputMutedAsync(true); throw new Exception("Expected rejection"); }
         catch (InvalidOperationException ex) when (ex.Message.Contains("test rejection")) { }
-        await continuation.Task.WaitAsync(timeout.Token);
+        try { await continuation.Task.WaitAsync(timeout.Token); }
+        catch (OperationCanceledException ex) { throw new InvalidOperationException($"Managed Live tool callback missing; calls={tool.Calls}; backend={provider.BackendContinuationError}; errors={string.Join(" | ", errors)}", ex); }
         while (!errors.Any(x => x.Contains("resp_failed"))) await Task.Delay(10, timeout.Token);
         await provider.DisconnectAsync();
         await server;
+        Check(readyAtAcknowledgment, "audio and tool transport ready when session.started is dispatched");
         Check(provider.FinalUsageConfirmed && !provider.IsConnected, "graceful finalization");
         Check(fragments.Count == 2 && fragments.First().Delta == " hi " && fragments.Last().StartMs == 50, "exact overlapping fragments");
         Check(completedTranscripts == 0, "no invented end of turn");

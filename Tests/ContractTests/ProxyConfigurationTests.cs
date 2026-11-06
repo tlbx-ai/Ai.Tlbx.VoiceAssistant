@@ -54,6 +54,7 @@ static class ProxyConfigurationTests
         var open = new OpenAiVoiceSettings
         {
             UseEphemeralKey = false,
+            VoiceModelId = "gpt-realtime-2.1",
             MostLikelySpokenLanguage = "de",
             TranscriptionHint = "Deutsche Fachbegriffe",
             Instructions = "  Antworte auf Deutsch mit natürlicher deutscher Aussprache.\r\n\t",
@@ -203,6 +204,7 @@ static class ProxyConfigurationTests
         var settings = new OpenAiVoiceSettings
         {
             ModelId = "team/realtime",
+            VoiceModelId = "gpt-realtime-2.1",
             Instructions = "  Antworte ausschließlich auf Deutsch.\r\n\t",
             ToolCallPreambleMode = ToolCallPreambleMode.BeforeEveryToolCall
         };

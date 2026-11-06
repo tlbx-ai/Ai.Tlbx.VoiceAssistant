@@ -13,9 +13,18 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi.Models;
 public sealed class OpenAiLiveClientBackendOptions
 {
     /// <summary>Optional application-owned agent. When set, no library Responses HTTP calls are made.
-    /// Return a concise factual spoken result, at most 500 UTF-8 bytes. Use context callbacks for progress and usage.
+    /// Return a concise factual spoken result, at most 500 tokens (the Live API enforces the limit). Use context callbacks for progress and usage.
     /// The application owns authorization, durable context, model selection and disposal of its agent.</summary>
     public Func<OpenAiLiveBackendContext, CancellationToken, Task<string>>? Handler { get; set; }
+    /// <summary>Optional per-delegation decision, evaluated before waiting behind existing work. Interpret user
+    /// corrections/cancellations with your backend and application state, not keyword heuristics. Can return
+    /// Queue, Supersede, Cancel or Ignore. Tool actions already started are retained independently.</summary>
+    public Func<OpenAiLiveBackendContext, CancellationToken, Task<OpenAiLiveDelegationBehavior>>? ResolveDelegationAsync { get; set; }
+    /// <summary>Share across reconnections and adapters; configure its checkpoint hook for durable storage.</summary>
+    public OpenAiLiveToolJournal ToolJournal { get; set; } = new();
+    /// <summary>Optional tokenizer from your inference library. Must count actual Live-compatible tokens.
+    /// Without it, the server validates the documented 500-token append limit; no byte approximation is used.</summary>
+    public Func<string, int>? CountContextTokens { get; set; }
     public OpenAiLiveDelegationBehavior NewDelegationBehavior { get; set; } = OpenAiLiveDelegationBehavior.Queue;
     public ProviderEndpointOptions Connection { get; set; } = new("https://api.openai.com/v1/responses");
     /// <summary>Responses model configuration. The runner owns input, tools, stream, store and continuation.

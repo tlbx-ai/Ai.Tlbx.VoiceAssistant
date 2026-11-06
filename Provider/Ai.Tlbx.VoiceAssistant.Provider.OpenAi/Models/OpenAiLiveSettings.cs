@@ -11,8 +11,13 @@ public sealed class OpenAiLiveSettings : IVoiceSettings
 {
     public string ModelId { get; set; } = "gpt-live-1";
     public string Instructions { get; set; } = "Be concise and helpful. Delegate tasks that need tools or reasoning to the backend.";
-    /// <summary>API voice name, including Live voices such as quartz, ripple, and willow.</summary>
-    public string Voice { get; set; } = "marin";
+    /// <summary>Built-in voice. Use GetAvailableVoices() for the selected model; validation runs before a connection is created.</summary>
+    public OpenAiVoice Voice { get; set; } = OpenAiVoice.Marin;
+    /// <summary>Canonical Live model for an unknown gateway alias; never overrides a known model.</summary>
+    public string? VoiceModelId { get; set; }
+    public string GetVoiceModelId() => OpenAiVoiceCatalog.ResolveModel(ModelId, VoiceModelId, OpenAiVoiceApi.Live);
+    public IReadOnlyList<OpenAiVoiceInfo> GetAvailableVoices() => OpenAiVoiceCatalog.GetVoices(GetVoiceModelId());
+    public void ValidateVoice() => OpenAiVoiceCatalog.Validate(GetVoiceModelId(), Voice);
     public bool Store { get; set; }
     /// <summary>Completed stored source session to fork. Requires the source project's storage policy.
     /// Model, voice, instructions and history are inherited; only Store and Responses settings override the source.

@@ -17,6 +17,11 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi.Models
         /// <summary>Exact gateway model/deployment ID. Null uses the built-in model; the enum still selects protocol capabilities.</summary>
         public string? ModelId { get; set; }
         public string GetModelId() => string.IsNullOrWhiteSpace(ModelId) ? Model.ToApiString() : ModelId;
+        /// <summary>Canonical model for a custom gateway alias. Required when ModelId is not in the voice catalog.</summary>
+        public string? VoiceModelId { get; set; }
+        public string GetVoiceModelId() => OpenAiVoiceCatalog.ResolveModel(GetModelId(), VoiceModelId, OpenAiVoiceApi.Realtime);
+        public IReadOnlyList<OpenAiVoiceInfo> GetAvailableVoices() => OpenAiVoiceCatalog.GetVoices(GetVoiceModelId());
+        public void ValidateVoice() => OpenAiVoiceCatalog.Validate(GetVoiceModelId(), Voice);
 
         public ProviderEndpointOptions ClientSecretsConnection { get; set; } = new("https://api.openai.com/v1/realtime/client_secrets");
         /// <summary>False connects directly with the API key, for gateways without client_secrets.</summary>
@@ -60,7 +65,7 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi.Models
         /// <summary>
         /// The voice to use for AI responses.
         /// </summary>
-        public AssistantVoice Voice { get; set; } = AssistantVoice.Marin;
+        public OpenAiVoice Voice { get; set; } = OpenAiVoice.Marin;
 
         /// <summary>
         /// Optional stable, non-identifying end-user identifier for OpenAI abuse monitoring.
@@ -165,23 +170,6 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi.Models
         /// OpenAI Realtime currently ignores the shared thinking configuration.
         /// </summary>
         public SessionThinkingConfig Thinking { get; set; } = new();
-    }
-
-    /// <summary>
-    /// Available assistant voices for OpenAI real-time API.
-    /// </summary>
-    public enum AssistantVoice
-    {
-        Alloy,
-        Ash,
-        Ballad,
-        Coral,
-        Echo,
-        Sage,
-        Shimmer,
-        Verse,
-        Marin,
-        Cedar
     }
 
     /// <summary>

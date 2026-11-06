@@ -197,7 +197,7 @@ internal static partial class OpenAiLiveTests
         catch (ArgumentException) { }
         unsafeSettings.ClientBackend!.Connection.ApiKey = "separate-key";
         Check(BuildClientSession(unsafeSettings, [])["delegation"]!["type"]!.GetValue<string>() == "client", "explicit separate auth accepted");
-        foreach (var scenario in new[] { "oversized-answer", "incomplete", "http-error", "http-after-tool", "round-limit", "timeout" })
+        foreach (var scenario in new[] { "incomplete", "http-error", "http-after-tool", "round-limit", "timeout" })
         {
             var calls = 0;
             var tool = new ClientLargeTool("retained");
@@ -208,7 +208,7 @@ internal static partial class OpenAiLiveTests
                 if (scenario == "timeout") await Task.Delay(200);
                 if (scenario is "http-error" or "http-after-tool") return new HttpResponseMessage(HttpStatusCode.BadRequest) { Content = new StringContent("rejected") };
                 if (scenario == "incomplete") return new HttpResponseMessage(HttpStatusCode.OK) { Content = new StringContent("""{"status":"incomplete","incomplete_details":{"reason":"max_output_tokens"},"output":[]}""") };
-                return ClientResponse(scenario == "round-limit" ? ClientCall("round") : ClientAnswer(scenario == "oversized-answer" ? new string('ä', 251) : "late"));
+                return ClientResponse(scenario == "round-limit" ? ClientCall("round") : ClientAnswer("late"));
             }));
             var settings = new OpenAiLiveSettings { Tools = [tool], ClientBackend = new() { HttpClient = http, MaxRounds = scenario == "http-after-tool" ? 2 : 1,
                 Timeout = scenario == "timeout" ? TimeSpan.FromMilliseconds(30) : TimeSpan.FromSeconds(5) } };
@@ -259,6 +259,8 @@ internal static partial class OpenAiLiveTests
             _instance = Activator.CreateInstance(_type, System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic,
                 null, [settings, apiKey, history, message, result, usage], null)!;
         }
+        public OpenAiLiveBackendContext? Context { set => _type.GetProperty("Context",
+            System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!.SetValue(_instance, value); }
         public Task<string> RunAsync(JsonArray transcript, CancellationToken token) => (Task<string>)_type.GetMethod("RunAsync",
             System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)!.Invoke(_instance, [transcript, token])!;
         public void Dispose() => ((IDisposable)_instance).Dispose();

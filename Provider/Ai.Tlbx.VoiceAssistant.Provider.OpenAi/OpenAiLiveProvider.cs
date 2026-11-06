@@ -100,12 +100,13 @@ public sealed partial class OpenAiLiveProvider : IVoiceProvider, IStartupHistory
         {
             using var timeout = new CancellationTokenSource(_settings!.ConnectionTimeout);
             await _socket!.ConnectAsync(LiveUri(_settings, ForkSuffix(_settings), true), timeout.Token).ConfigureAwait(false);
-            _receiver = ReceiveAsync(_socket, _lifetime!.Token);
+            // Be ready before receiving session.started: its first tool batch may follow immediately.
+            _audio = Channel.CreateBounded<string>(new BoundedChannelOptions(100) { SingleReader = true, FullMode = BoundedChannelFullMode.Wait });
+            _audioLifetime = CancellationTokenSource.CreateLinkedTokenSource(_lifetime!.Token);
+            _audioSender = SendAudioAsync(_audio.Reader, _audioLifetime.Token);
+            _receiver = ReceiveAsync(_socket, _lifetime.Token);
             await SendCoreAsync(new JsonObject { ["type"] = "session.start", ["session"] = BuildStartup(_settings, false) }, timeout.Token).ConfigureAwait(false);
             await _started.Task.WaitAsync(timeout.Token).ConfigureAwait(false);
-            _audio = Channel.CreateBounded<string>(new BoundedChannelOptions(100) { SingleReader = true, FullMode = BoundedChannelFullMode.Wait });
-            _audioLifetime = CancellationTokenSource.CreateLinkedTokenSource(_lifetime.Token);
-            _audioSender = SendAudioAsync(_audio.Reader, _audioLifetime.Token);
             OnStatusChanged?.Invoke("Connected to GPT-Live");
         }
         catch
@@ -212,8 +213,9 @@ public sealed partial class OpenAiLiveProvider : IVoiceProvider, IStartupHistory
 
     internal static JsonObject BuildSession(OpenAiLiveSettings settings, IEnumerable<ChatMessage> history)
     {
-        if (string.IsNullOrWhiteSpace(settings.ModelId) || string.IsNullOrWhiteSpace(settings.Voice))
-            throw new ArgumentException("ModelId and Voice are required.");
+        if (string.IsNullOrWhiteSpace(settings.ModelId))
+            throw new ArgumentException("ModelId is required.");
+        settings.ValidateVoice();
         if (settings.TalkingSpeed != 1 || settings.NoiseReduction != default || settings.ReasoningEffort != null || settings.Thinking.IsConfigured || settings.ToolCallPreambleMode != default)
             throw new ArgumentException("Live speech has no speed, reasoning, thinking, or tool-preamble control. Configure the Responses backend separately.");
         OpenAiLiveClientBackend.Validate(settings);
@@ -233,7 +235,7 @@ public sealed partial class OpenAiLiveProvider : IVoiceProvider, IStartupHistory
         return new JsonObject
         {
             ["model"] = settings.ModelId, ["instructions"] = ComposeLiveInstructions(settings),
-            ["audio"] = new JsonObject { ["format"] = new JsonObject { ["type"] = "audio/pcm", ["rate"] = 24000 }, ["output"] = new JsonObject { ["voice"] = settings.Voice } },
+            ["audio"] = new JsonObject { ["format"] = new JsonObject { ["type"] = "audio/pcm", ["rate"] = 24000 }, ["output"] = new JsonObject { ["voice"] = settings.Voice.ToApiString() } },
             ["store"] = settings.Store, ["input"] = input, ["delegation"] = BuildDelegation(settings)
         };
     }
@@ -250,7 +252,8 @@ public sealed partial class OpenAiLiveProvider : IVoiceProvider, IStartupHistory
         return settings.Instructions + "\n\nBackend capabilities (registered tool metadata):\n" + capabilities.ToJsonString() +
             "\nDelegation policy for these capabilities: Delegate when a user's request matches a capability above, " +
             "including ordinary language, synonyms, and requests for the documents or information it provides. " +
-            "The user does not need to name a tool or ask you to use one. The backend selects and executes the tool; " +
+            "The user does not need to name a tool or ask you to use one. Delegate corrections, confirmations, new details and requests to cancel or change ongoing backend work. " +
+            "Stopping speech alone does not cancel a task; the application/backend handles cancellation and reports which actions already ran. The backend selects and executes the tool; " +
             "you do not call it directly. Before asking the user to supply information, check whether a listed capability can retrieve it. " +
             "Do not claim access to capabilities not listed here or claim completion before a verified backend result. " +
             "Do not delegate greetings or repeat completed actions when an available result already answers the request. " +
@@ -333,13 +336,14 @@ public sealed partial class OpenAiLiveProvider : IVoiceProvider, IStartupHistory
     public Task<JsonObject> AppendInstructionsAsync(string content, string? delegationId = null, CancellationToken cancellationToken = default) => AppendAsync("instructions", content, delegationId, cancellationToken);
     public Task<JsonObject> AppendThinkingAsync(string content, string? delegationId = null, CancellationToken cancellationToken = default) => AppendAsync("thinking", content, delegationId, cancellationToken);
     public Task<JsonObject> AppendCommentaryAsync(string content, string? delegationId = null, CancellationToken cancellationToken = default) => AppendAsync("commentary", content, delegationId, cancellationToken);
-    private async Task<JsonObject> AppendAsync(string kind, string content, string? delegationId, CancellationToken cancellationToken)
+    private async Task<JsonObject> AppendAsync(string kind, string content, string? delegationId, CancellationToken cancellationToken, bool recordForBackend = true)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(content);
-        var acknowledgment = await SendCommandAsync(new JsonObject { ["type"] = $"session.{kind}.append", ["content"] = content, ["delegation_id"] = delegationId }, cancellationToken).ConfigureAwait(false);
-        if (_settings?.ClientBackend != null && kind != "commentary")
+        if (_settings?.ClientBackend?.CountContextTokens is { } countTokens && countTokens(content) is var count && (count < 0 || count > 500))
+            throw new ArgumentException("Live context appends accept at most 500 tokens.", nameof(content));
+        if (recordForBackend && _settings?.ClientBackend != null && kind != "commentary")
             lock (_clientLock) _clientTranscript.Add((JsonNode)new JsonObject { ["role"] = "application", ["kind"] = kind, ["text"] = content });
-        return acknowledgment;
+        return await SendCommandAsync(new JsonObject { ["type"] = $"session.{kind}.append", ["content"] = content, ["delegation_id"] = delegationId }, cancellationToken).ConfigureAwait(false);
     }
     public Task<JsonObject> SetInputMutedAsync(bool muted, CancellationToken cancellationToken = default) =>
         SendCommandAsync(new JsonObject { ["type"] = muted ? "session.input_audio.mute" : "session.input_audio.unmute" }, cancellationToken);

@@ -34,6 +34,64 @@ This does not identify individual speakers in mixed microphone audio. The two hu
 speakers must not be confused with the API's user/assistant roles. GPT-Live is a separate
 protocol; these settings apply to OpenAI Realtime only.
 
+## Discover voices by model (11.8)
+
+```csharp
+var models = OpenAiVoiceCatalog.GetModels();
+var choices = OpenAiVoiceCatalog.GetVoices("gpt-live-1");
+// Each choice exposes Voice (enum), Id (exact API name), Name, Language,
+// RegionalInfluence and DisplayName. These lists are read-only.
+var live = new OpenAiLiveSettings { Voice = OpenAiVoice.Nuri };
+var realtime = new OpenAiVoiceSettings
+{
+    Model = OpenAiRealtimeModel.GptRealtime21,
+    Voice = OpenAiVoice.Cedar
+};
+var currentChoices = live.GetAvailableVoices();
+bool allowed = OpenAiVoiceCatalog.IsSupported("gpt-realtime-2.1", OpenAiVoice.Nuri); // false
+live.ValidateVoice(); // Also called automatically before connecting.
+```
+
+`gpt-realtime-2.1` exposes 10 standard voices; `gpt-live-1` exposes Marin and
+21 additional documented voices, including Nuri, Juni and Flitz for German.
+Realtime and Live use separate rosters even though they share `OpenAiVoice`.
+Both WebSocket and direct WebRTC paths validate model, API kind and voice before
+creating network sessions. Realtime settings updates use the same validation.
+The demo derives both its model and voice choices from this catalog.
+
+Unknown IDs (including future model versions and deprecated previews without a
+verified roster) throw `NotSupportedException`; no family-prefix guesses are made.
+The offline catalog describes built-in voices, not API access for your account.
+Custom-voice objects are not exposed by these settings.
+
+For an OpenAI-compatible gateway alias, keep the deployment ID in `ModelId` and
+declare its documented underlying voice model explicitly:
+
+```csharp
+var gateway = new OpenAiVoiceSettings
+{
+    ModelId = "team/realtime",
+    VoiceModelId = "gpt-realtime-2.1",
+    Voice = OpenAiVoice.Marin
+};
+// GetModelId() still returns team/realtime; GetAvailableVoices() uses Realtime 2.1.
+```
+
+`VoiceModelId` cannot override the roster or API kind of a known model. Gateway
+owners must ensure their alias implements the declared model contract.
+
+### Breaking migration in 11.8.0
+
+- Replace `AssistantVoice` and the provisional `OpenAiLiveVoice` with `OpenAiVoice`.
+- `OpenAiLiveSettings.Voice` is now an enum: use `OpenAiVoice.Nuri`, not `"nuri"` or `.ToApiString()`.
+- Use `GetVoices(modelId)` or `settings.GetAvailableVoices()` instead of enumerating
+  every voice in the enum, which includes voices from multiple APIs.
+- Set `VoiceModelId` for unknown gateway model aliases; unsupported combinations
+  now fail locally before a request. `ToApiString()` remains available for native payloads.
+
+Sources: [Realtime voices](https://developers.openai.com/api/docs/guides/realtime-conversations#voice-options),
+[GPT-Live voices](https://developers.openai.com/api/docs/guides/live-conversations#voice-options).
+
 ## GPT-Live (11.0)
 
 Use `OpenAiLiveProvider` with `OpenAiLiveSettings` for `gpt-live-1`.
@@ -110,19 +168,79 @@ Tool request/result callbacks include the call ID. `ToolResults` retains complet
 after failures; `AcceptedByClientBackend` confirms HTTP request acceptance, not speech.
 Normal delegated Responses usage is forwarded through `OnUsageReceived`.
 
-Backend work runs outside the Live receiver. A new delegation supersedes pending HTTP work
-and suppresses stale commentary. `CancelClientBackend()` offers the same explicit cancellation.
+Backend work runs outside the Live receiver. Follow-ups queue by default; a fresh snapshot is
+captured when work starts. New user/application context invalidates pending actions and spoken
+results; the backend is refreshed with retained action records. `ResolveDelegationAsync` can
+interpret each delegation using your agent and task state, selecting `Queue`, `Supersede`,
+`Cancel`, or `Ignore`. Stopping speech alone does not cancel backend work.
+`CancelClientBackend()` explicitly cancels continuation and pending commentary.
 A running `IVoiceTool` cannot be forcibly cancelled: its result is retained and the next
 delegation waits for it. Disconnect remains bounded, but reuse of the provider is blocked
 until any running tool returns. Duplicate call IDs never re-execute an action.
 
-The spoken answer must fit a conservative **500 UTF-8 byte** bound; oversized answers fail
-visibly without truncation. This is deliberately stricter than Live's 500-token append limit.
+Live context appends accept **500 tokens**, enforced by the API. There is no 500-byte cutoff.
+Optionally supply `CountContextTokens` from your inference library for earlier validation.
+Return concise verified facts directly; keep full artifacts in the application. Never truncate
+an answer or replay an uncertain append after a transport timeout.
 Backend HTTP limits and the selected model's context window still apply. Defaults allow
 eight Responses rounds and two minutes of HTTP work per delegation; tools without a
 cancellation contract may outlive that timeout. HTTP/continuation errors are surfaced and
 close Live with bounded finalization. The runner never retries executed tools or changes
 delegation mode automatically.
+
+
+### Adapters for Ai.Tlbx.Inference and other inference libraries
+
+`ClientBackend.Handler` is a plain asynchronous delegate. The provider package has no dependency
+on Ai.Tlbx.Inference or another inference SDK. Your adapter owns its model, prompt, history,
+authorization and interpretation of new requests, corrections, confirmations and cancellations.
+
+```csharp
+// Keep this journal with your application conversation, across Live reconnections.
+var journal = new OpenAiLiveToolJournal(savedActionRecords);
+journal.CheckpointAsync = SaveActionsAtomicallyAsync;
+settings.ClientBackend = new OpenAiLiveClientBackendOptions
+{
+    ToolJournal = journal,
+    Handler = async (context, ct) =>
+    {
+        context = context.Refresh(); // speech + application context + visual items
+        // Supply context.Transcript, InitialHistory and ToolJournal.Records to your existing agent.
+        // Route its registered tool callbacks through this method:
+        // await context.ExecuteToolAsync(callId, name, argumentsJson, ct);
+        var facts = await RunExistingAgentAsync(context, ct);
+        context.ThrowIfContextChanged();
+        return facts; // concise factual result, at most 500 Live tokens
+    },
+    // Optional: your application/agent chooses a policy for this specific request.
+    ResolveDelegationAsync = DecideFromConversationAndTaskStateAsync
+};
+```
+
+The functions and `savedActionRecords` above belong to the host application. Both callbacks
+receive the complete current context. A delegation is metadata, not a tool call with task text;
+use the backend to interpret meaning. Do not classify corrections or cancellations with regexes.
+The provider rejects stale final results and retries the handler with fresh context. Check
+freshness before actions, and use `ExecuteToolAsync` to recheck at the execution boundary.
+Progress/context callbacks are awaited separately; speech/playback completion is not inferred
+from a context acknowledgment. Backend progress is not fed back as a new backend request.
+
+The journal records started/completed/uncertain actions and full outputs immediately, independently
+of model completion. Reusing a completed call ID returns its saved output; mismatched arguments
+and uncertain outcomes are blocked. A different call ID is a distinct action: enforce business
+idempotency keys and permissions in the actual tool/service. Without a checkpoint hook records
+are in memory. Persist snapshots atomically for process-restart recovery; restored unfinished
+actions require service reconciliation before retrying. A cancelled model does not undo an action.
+
+The [Inference demo adapter](../../Demo/Ai.Tlbx.VoiceAssistant.Demo.Web/Services/InferenceHandoffBackend.cs)
+uses Ai.Tlbx.Inference's tool callback and native JSON Schema output. One model run produces the
+full `result` for the chat and `spoken_facts` for Live, with no second summarization call. Streamed
+full text, complete artifact references, action records and usage remain available for follow-ups.
+Other SDKs can implement the same delegate with their own result format and agent history.
+
+Sources: [client delegation and context ownership](https://developers.openai.com/api/docs/guides/live-delegation#keep-the-conversation-context-in-your-application),
+[backend prompts and task state](https://developers.openai.com/api/docs/guides/live-migration#split-conversation-and-backend-instructions),
+[500-token updates](https://developers.openai.com/api/docs/guides/live-delegation#send-the-right-kind-of-update).
 
 Managed Responses delegation remains available through `settings.Responses` with
 `ClientBackend = null`. Its existing 128-item / 32768-byte conservative session input budget
@@ -142,7 +260,7 @@ dotnet add package Ai.Tlbx.VoiceAssistant.Provider.OpenAi
 var provider = factory.CreateOpenAi(apiKey);
 var settings = new OpenAiVoiceSettings
 {
-    Voice = AssistantVoice.Marin,
+    Voice = OpenAiVoice.Marin,
     Model = OpenAiRealtimeModel.GptRealtime21,
     Instructions = "You are a helpful assistant.",
     VadThreshold = 0.75

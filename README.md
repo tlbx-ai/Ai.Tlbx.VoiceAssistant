@@ -203,7 +203,7 @@ app.MapOpenAiDirectRealtimeVoice();
 var provider = new OpenAiVoiceProvider(apiKey);
 var settings = new OpenAiVoiceSettings
 {
-    Voice = AssistantVoice.Marin,
+    Voice = OpenAiVoice.Marin,
     Model = OpenAiRealtimeModel.GptRealtime21
 };
 
@@ -236,7 +236,7 @@ Each provider has its own settings class with shared and provider-specific optio
 // OpenAI — current recommended realtime default is GptRealtime21
 new OpenAiVoiceSettings
 {
-    Voice = AssistantVoice.Coral,
+    Voice = OpenAiVoice.Coral,
     Model = OpenAiRealtimeModel.GptRealtime21,
     ReasoningEffort = SessionReasoningEffort.Low,
     ToolCallPreambleMode = ToolCallPreambleMode.BeforeToolBurst,
@@ -292,7 +292,7 @@ OpenAI threshold applies only to `server_vad`; semantic VAD uses `Eagerness`.
 
 ### Current model guidance
 
-- OpenAI: `OpenAiRealtimeModel.GptRealtime21` is the default full reasoning voice model; `GptRealtime21Mini` is the faster, lower-cost option. Older model IDs remain available for compatibility.
+- OpenAI: `OpenAiRealtimeModel.GptRealtime21` is the default full reasoning voice model; `GptRealtime21Mini` is the faster, lower-cost option. Use `OpenAiVoiceCatalog.GetVoices(modelId)` for model-specific choices. Unknown gateway aliases require `VoiceModelId`; deprecated previews without a verified roster are excluded from discovery.
 - OpenAI voice settings default to `SessionReasoningEffort.Low`, 200 ms server-VAD silence detection, and `Eagerness.high` when semantic VAD is selected. The selected model remains entirely controlled by `OpenAiVoiceSettings.Model`; the library never switches a session to the mini model automatically.
 - `ToolCallPreambleMode.Disabled` is a provider instruction, not an audio gate: every received audio delta is forwarded immediately in both WebSocket and Direct WebRTC sessions.
 - Google: `GoogleModel.Gemini38Live` is the current default for the Gemini Live API. `GoogleModel.Gemini25FlashNativeAudioLatest` is also available for testing Google's rolling native-audio Live API alias. The `gemini-3.1-flash-tts-preview` and older `gemini-2.5-*-tts` models are text-to-speech `generateContent` models, not realtime `bidiGenerateContent` voice-session models, so they are not exposed through this realtime provider.

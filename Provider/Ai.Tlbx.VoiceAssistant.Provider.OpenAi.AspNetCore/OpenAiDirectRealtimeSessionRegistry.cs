@@ -71,6 +71,7 @@ internal sealed class OpenAiDirectRealtimeSessionRegistry : IOpenAiDirectRealtim
 
     public SessionConfig BuildSessionConfig(OpenAiVoiceSettings settings)
     {
+        settings.ValidateVoice();
         var semanticVad = IsSemanticVad(settings.TurnDetection.Type);
         return new SessionConfig
         {
@@ -111,7 +112,7 @@ internal sealed class OpenAiDirectRealtimeSessionRegistry : IOpenAiDirectRealtim
                 },
                 Output = settings.OutputMode == OpenAiOutputMode.Text ? null : new AudioOutputConfig
                 {
-                    Voice = settings.Voice.ToString().ToLowerInvariant(),
+                    Voice = settings.Voice.ToApiString(),
                     Speed = settings.TalkingSpeed
                 }
             },

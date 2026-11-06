@@ -2,6 +2,19 @@
 
 This is a Blazor Server demo for `Ai.Tlbx.VoiceAssistant`.
 
+## Local startup
+
+Pass a local UTF-8 text file containing the OpenAI API key as an application argument:
+
+```powershell
+dotnet run --project Demo/Ai.Tlbx.VoiceAssistant.Demo.Web -- --openai-key-file "C:\Env\openai.txt"
+```
+
+The explicit file takes precedence for the demo's Realtime, GPT-Live, translation,
+transcription and Ai.Tlbx.Inference paths. Its contents are never added to the command
+line, logs or browser. No environment variables are changed. Without this parameter,
+the existing `OPENAI_API_KEY` fallback remains available in both demo and libraries.
+
 ## Overview
 
 The demo uses reusable Razor components from `Ai.Tlbx.VoiceAssistant.WebUi` and shows the library's provider switching, microphone selection, live voice sessions, realtime transcription, and tool-call flow.
@@ -10,9 +23,9 @@ The demo uses reusable Razor components from `Ai.Tlbx.VoiceAssistant.WebUi` and 
 
 ### Agent handoff
 
-In the normal Voice Chat UI (`/`), select **OpenAI → GPT-Live 1 → Agent-Handoff · GPT-6.1 Sol** in the GPT-Live backend selector for continuous GPT-Live speech with GPT-6.1 Sol through Ai.Tlbx.Inference 2.6.0. The agent receives complete synthetic documents, retains tool results across follow-ups and emits per-call usage, including summary calls and failures with unknown usage. The shared ChatWidget shows the spoken conversation, agent progress, tool requests with arguments, expandable complete tool outputs and full agent answers. Speaker fragments remain grouped across interleaved progress events; scrolling up pauses automatic scrolling. The adapter consumes user fragments received during an active inference call before publishing its final answer, retaining completed tool results. The footer shows model costs and final usage. There is no separate handoff page. The core library remains independent of the inference package; applications can supply their own `ClientBackend.Handler`.
+In the normal Voice Chat UI (`/`), select **OpenAI → GPT-Live 1 → Agent-Handoff · GPT-6.1 Sol** in the GPT-Live backend selector for continuous GPT-Live speech with GPT-6.1 Sol through Ai.Tlbx.Inference 2.6.0. The agent receives complete synthetic documents, retains tool results across follow-ups and emits per-call usage, including failures with unknown usage. The shared ChatWidget shows the spoken conversation, agent progress, tool requests with arguments, expandable complete tool outputs and full agent answers. Speaker fragments remain grouped across interleaved progress events; scrolling up pauses automatic scrolling. The adapter consumes user fragments received during an active inference call before publishing its final answer, retaining completed tool results. The footer shows model costs and final usage. There is no separate handoff page. The core library remains independent of the inference package; applications can supply their own `ClientBackend.Handler`.
 
-The demo uses the verified API model `gpt-live-1`. Short results (at most 500 UTF-8 bytes) return directly to Live, avoiding an extra inference call; longer results stay in full in the agent history and UI and receive a separate spoken summary. GPT-Live 1.1 and Quip were announced for ChatGPT on October 15, 2026, with API availability announced as coming soon. They are outside this demo's verified scope. The demo never silently substitutes another model. Google demo credentials prefer the dedicated `GEMINI_API_KEY`, then `GOOGLE_API_KEY`.
+The demo uses the documented API model `gpt-live-1`. The backend returns its complete result and concise spoken facts in one structured inference response. Complete results remain in the agent history and UI; Live receives the spoken facts without a second summarization call. GPT-Live 1.1 and Quip were announced for ChatGPT on October 15, 2026, with API availability announced as coming soon. They are outside this demo's verified scope. The demo never silently substitutes another model. Google demo credentials prefer the dedicated `GEMINI_API_KEY`, then `GOOGLE_API_KEY`.
 
 For a Tailscale dev loop, bind `dotnet watch --no-hot-reload` to the Tailscale HTTPS address and set `DOTNET_WATCH_SUPPRESS_BROWSER_REFRESH=true`; otherwise the SDK's localhost browser-refresh WebSocket can fail against the Tailscale origin. Use a suitable development certificate. Direct browser acceptance is required: the tlbx reverse-proxy preview rendered this page but failed its Blazor circuit during verification, while direct HTTPS interaction worked.
 
@@ -29,7 +42,7 @@ The activity view timestamps individual inference calls, tool execution and spee
 ### Voice Chat Functionality
 - **Real-time voice interaction** with an AI assistant
 - **OpenAI direct WebRTC on Blazor Server**: browser microphone/playback audio goes directly between the browser and OpenAI; the server only prepares ephemeral sessions and executes tools
-- **Provider model selection** with obsolete models kept visible for manual regression checks
+- **Provider model selection** and compatible OpenAI voice choices from `OpenAiVoiceCatalog`
 - Start/stop voice recording controls
 - Voice selection for AI responses
 - Microphone device selection

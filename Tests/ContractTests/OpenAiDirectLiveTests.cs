@@ -40,6 +40,7 @@ internal static class OpenAiDirectLiveTests
             var body = JsonNode.Parse(await reader.ReadToEndAsync(timeout.Token))!;
             Check(body["transport"]!["sdp"]!.GetValue<string>() == "test-offer", "offer preserved");
             Check(body["session"]!["audio"]!["format"] == null, "WebRTC format is negotiated, not PCM configuration");
+            Check(body["session"]!["audio"]!["output"]!["voice"]!.GetValue<string>() == "flitz", "catalog voice reaches WebRTC startup");
             Check(body["session"]!["input"]!.AsArray().Count == 1, "startup history preserved");
             create.Response.StatusCode = 201;
             var answer = Encoding.UTF8.GetBytes("""{"session":{"id":"live_contract"},"transport":{"type":"webrtc","sdp":"test-answer"}}""");
@@ -71,7 +72,7 @@ internal static class OpenAiDirectLiveTests
         var reflected = 0;
         provider.OnAudioReceived = _ => reflected++;
         provider.OnEventReceived = e => { if (e["type"]!.GetValue<string>().Contains("audio.")) reflected++; };
-        var settings = new OpenAiLiveSettings { Connection = new($"ws://localhost:{port}/v1/live/sessions") };
+        var settings = new OpenAiLiveSettings { Connection = new($"ws://localhost:{port}/v1/live/sessions"), Voice = OpenAiVoice.Flitz };
         if (rejectAttach)
         {
             try { await provider.ConnectWebRtcAsync(settings, "test-offer"); throw new Exception("Expected attach rejection"); }

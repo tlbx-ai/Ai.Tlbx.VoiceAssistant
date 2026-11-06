@@ -14,6 +14,13 @@ using Ai.Tlbx.VoiceAssistant.Provider.XAi.Models;
 using Ai.Tlbx.VoiceAssistant.Hardware.Web;
 using Ai.Tlbx.VoiceAssistant.Telnyx;
 
+OpenAiVoiceCatalog.Validate("gpt-live-1", OpenAiVoice.Nuri);
+if (OpenAiVoiceCatalog.GetVoices("gpt-realtime-2.1").Count != 10) throw new InvalidOperationException("Voice catalog missing");
+var hybridJournal = new OpenAiLiveToolJournal();
+var hybridContext = new OpenAiLiveBackendContext("aot", new("aot-job", "client", 0, null), new(), [], [],
+    (_, _) => Task.CompletedTask, _ => { }) { ToolJournal = hybridJournal, GetLatestTranscript = () => new() };
+hybridContext.Refresh().ThrowIfContextChanged();
+hybridJournal.Clear();
 var builder = WebApplication.CreateSlimBuilder(args);
 builder.Services.AddTelnyxVoice(options =>
 {
@@ -85,7 +92,7 @@ app.MapGet("/test", () =>
         var openAiSettings = new OpenAiVoiceSettings
         {
             Instructions = "Test",
-            Voice = AssistantVoice.Marin
+            Voice = OpenAiVoice.Marin
         };
         results.Add($"OpenAI settings created: Voice={openAiSettings.Voice}");
     }

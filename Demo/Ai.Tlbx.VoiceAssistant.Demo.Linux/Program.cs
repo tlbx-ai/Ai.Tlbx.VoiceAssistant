@@ -1,4 +1,4 @@
-﻿using Ai.Tlbx.VoiceAssistant;
+using Ai.Tlbx.VoiceAssistant;
 using Ai.Tlbx.VoiceAssistant.Hardware.Linux;
 using Ai.Tlbx.VoiceAssistant.Provider.OpenAi;
 using Ai.Tlbx.VoiceAssistant.Provider.OpenAi.Models;
@@ -160,7 +160,7 @@ namespace Ai.Tlbx.VoiceAssistant.Demo.Linux
                                 var settings = new OpenAiVoiceSettings
                                 {
                                     Instructions = "You are a helpful AI assistant. Be friendly, conversational, helpful, and engaging. When the user speaks interrupt your answer and listen and then answer the new question.",
-                                    Voice = AssistantVoice.Marin,
+                                    Voice = OpenAiVoice.Marin,
                                     Model = _openAiModel
                                 };
                                 await _voiceAssistant!.StartAsync(settings);
