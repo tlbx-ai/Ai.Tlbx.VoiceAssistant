@@ -20,7 +20,7 @@ let deEsserNode = null;    // High-shelf EQ to tame sibilance before compression
 let compressorNode = null; // Audio compressor for voice enhancement
 let makeupGainNode = null; // Input gain before compression
 let playbackEqNodes = [];  // BiquadFilterNode chain for playback EQ
-let currentEqPreset = 'clarity'; // Default EQ preset
+let currentEqPreset = 'flat'; // Neutral default; Clarity remains available explicitly
 // Note: We properly stop streams when done - don't hog the microphone!
 
 // --- Playback EQ Presets ---

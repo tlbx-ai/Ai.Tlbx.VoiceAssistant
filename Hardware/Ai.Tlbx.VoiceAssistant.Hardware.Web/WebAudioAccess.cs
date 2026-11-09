@@ -704,7 +704,7 @@ namespace Ai.Tlbx.VoiceAssistant.Hardware.Web
 
         /// <summary>
         /// Sets the playback EQ preset. Available presets:
-        /// flat, clarity (default), presence, brightness, warm, broadcast, demud, bathtub, loudness
+        /// flat (default), clarity, presence, brightness, warm, broadcast, demud, bathtub, loudness
         /// </summary>
         public async Task<bool> SetPlaybackEqPresetAsync(string presetName)
         {

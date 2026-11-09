@@ -116,7 +116,7 @@ registerProcessor('audio-recorder-processor', AudioRecorderProcessor);
 // Receives 24kHz audio, upsamples to 48kHz with linear interpolation
 
 const BUFFER_SIZE = 8640000; // ~180s (3 min) at 48kHz – ~34MB, prevents overflow on very long responses
-const CROSSFADE_SAMPLES = 256; // Number of samples for crossfade (doubled for 48kHz)
+const TRANSITION_SECONDS = 0.005; // Smooth actual gaps without delaying queued PCM
 
 class PlaybackProcessor extends AudioWorkletProcessor {
     constructor(options) {
@@ -125,16 +125,18 @@ class PlaybackProcessor extends AudioWorkletProcessor {
         this._writeIndex = 0;
         this._readIndex = 0;
         this._bufferFill = 0; // How many samples are currently in the buffer
-        this._isPlaying = false; // Start paused until data arrives
         this._isStopping = false; // Flag to indicate stop request
 
         // Upsampling state: linear interpolation from 24kHz to 48kHz
         this._lastInputSample = 0; // Last sample from previous chunk for interpolation
 
-        // Crossfading state
-        this._crossfadeBuffer = new Float32Array(CROSSFADE_SAMPLES).fill(0);
-        this._isCrossfadingIn = false;
-        this._crossfadeIndex = 0;
+        // Transition state tracks rendered output, never queue emptiness at arrival.
+        this._transitionSamples = Math.max(1, Math.round(sampleRate * TRANSITION_SECONDS));
+        this._lastOutputSample = 0;
+        this._inUnderrun = true;
+        this._fadeOutRemaining = 0;
+        this._fadeInIndex = this._transitionSamples;
+        this._transitionStart = 0;
 
         // Audio enhancement state
         this._prevSample = 0; // For interpolation
@@ -145,20 +147,19 @@ class PlaybackProcessor extends AudioWorkletProcessor {
         this.port.onmessage = (event) => {
             if (event.data.command === 'stop') {
                 console.log('[PlaybackProcessor] Received stop command');
-                this._isStopping = true; // Signal to stop after buffer drains or immediately if forced
-                // Option: Clear buffer immediately? Depends on desired stop behavior.
-                // this._readIndex = this._writeIndex;
-                // this._bufferFill = 0;
-                // this._isPlaying = false;
+                this._isStopping = true; // Pause immediately until new audio arrives.
             } else if (event.data.command === 'clear') {
                  console.log('[PlaybackProcessor] Received clear command');
                  this._readIndex = this._writeIndex;
                  this._bufferFill = 0;
-                 this._isPlaying = false;
                  this._isStopping = false;
-                 this._crossfadeIndex = 0;
-                 this._isCrossfadingIn = false;
-                 this._crossfadeBuffer.fill(0);
+                 this._lastOutputSample = 0;
+                 this._inUnderrun = true;
+                 this._fadeOutRemaining = 0;
+                 this._fadeInIndex = this._transitionSamples;
+                 this._transitionStart = 0;
+                 this._prevSample = 0;
+                 this._eqHistory.fill(0);
                  this._lastInputSample = 0; // Reset upsampling state
                  this._buffer.fill(0); // Clear the entire buffer
             } else if (event.data.command === 'setEnhancement') {
@@ -169,16 +170,14 @@ class PlaybackProcessor extends AudioWorkletProcessor {
                 this._handleAudioData(event.data.audioData);
                 // Realtime speech should reach the speakers on the next render quantum.
                 // Do not add a client-side jitter buffer before starting or resuming.
-                if (!this._isPlaying && this._bufferFill > 0) {
-                    this._isPlaying = true;
-                }
                 this._isStopping = false; // Resume playing if stopped
             }
         };
     }
 
     _handleAudioData(audioData) {
-        const inputData = audioData instanceof ArrayBuffer ? new Float32Array(audioData) : new Float32Array(audioData.buffer);
+        const inputData = audioData instanceof ArrayBuffer ? new Float32Array(audioData) : new Float32Array(audioData.buffer, audioData.byteOffset, audioData.byteLength / Float32Array.BYTES_PER_ELEMENT);
+        if (inputData.length === 0) return;
 
         // Upsample 24kHz → 48kHz (2:1) with linear interpolation
         // Each input sample produces 2 output samples
@@ -187,13 +186,6 @@ class PlaybackProcessor extends AudioWorkletProcessor {
         if (this._bufferFill + upsampledLength > BUFFER_SIZE) {
             console.warn('[PlaybackProcessor] Buffer overflow, dropping new data.');
             return; // skip this chunk to preserve already queued audio
-        }
-
-        // Prepare for crossfade-in if buffer was empty or starting fresh
-        if (this._bufferFill === 0) {
-             this._isCrossfadingIn = true;
-             this._crossfadeIndex = 0;
-             this._crossfadeBuffer.fill(0);
         }
 
         // Upsample with linear interpolation and copy into ring buffer
@@ -220,13 +212,6 @@ class PlaybackProcessor extends AudioWorkletProcessor {
         this._bufferFill += upsampledLength;
     }
 
-    // Simple linear crossfade
-    _applyCrossfade(sample, index, totalSamples, fadeIn, fadeOutBuffer) {
-        const fadeOutGain = 1.0 - (index / totalSamples);
-        const fadeInGain = index / totalSamples;
-        return (fadeOutBuffer[index] * fadeOutGain) + (sample * fadeInGain);
-    }
-    
     // Audio enhancement: Simple interpolation for smoother playback
     _interpolate(currentSample) {
         // Linear interpolation between samples
@@ -281,90 +266,46 @@ class PlaybackProcessor extends AudioWorkletProcessor {
 
 
     process(inputs, outputs, parameters) {
-        const output = outputs[0];
-        const channel = output[0]; // mono
-
-        // If we're stopped or have no channel, output silence
-        if (!channel || this._isStopping) {
-            if (channel) channel.fill(0);
+        const channel = outputs[0]?.[0];
+        if (!channel) return true;
+        if (this._isStopping) {
+            channel.fill(0);
             return true;
         }
 
-        // Decide whether we should start or pause playback based on buffer level
-        if (!this._isPlaying) {
-            if (this._bufferFill > 0) {
-                this._isPlaying = true;
-            } else {
-                // No audio has arrived yet.
-                if (channel) channel.fill(0);
-                return true;
-            }
-        }
-
-        if (channel === undefined) {
-            return true;
-        }
-
-        let generatedSamples = 0;
         for (let i = 0; i < channel.length; i++) {
+            let sample;
             if (this._bufferFill > 0) {
-                let sample = this._buffer[this._readIndex];
-
-                 // Apply crossfade-in if starting a new block after silence
-                 if (this._isCrossfadingIn && this._crossfadeIndex < CROSSFADE_SAMPLES) {
-                     sample = this._applyCrossfade(sample, this._crossfadeIndex, CROSSFADE_SAMPLES, true, this._crossfadeBuffer);
-                     this._crossfadeIndex++;
-                 } else {
-                     this._isCrossfadingIn = false; // Done crossfading in
-                 }
-
-
-                // Apply audio enhancement if enabled
-                if (this._enhancementEnabled) {
-                    sample = this._enhanceAudio(sample);
+                if (this._inUnderrun) {
+                    // Resume immediately, including during the tail of a short gap.
+                    this._transitionStart = this._lastOutputSample;
+                    this._fadeInIndex = 0;
+                    this._fadeOutRemaining = 0;
+                    this._inUnderrun = false;
                 }
-                
-                channel[i] = sample;
+                sample = this._buffer[this._readIndex];
                 this._readIndex = (this._readIndex + 1) % BUFFER_SIZE;
                 this._bufferFill--;
-                generatedSamples++;
-
-
+                if (this._enhancementEnabled) sample = this._enhanceAudio(sample);
+                if (this._fadeInIndex < this._transitionSamples) {
+                    const gain = ++this._fadeInIndex / this._transitionSamples;
+                    sample = this._transitionStart * (1 - gain) + sample * gain;
+                }
             } else {
-                // Buffer underrun - fill with silence
-                channel[i] = 0.0;
-                 // Resume with the very next received chunk instead of rebuilding
-                 // an artificial startup buffer.
-                 this._isPlaying = false;
-                  // Store the last samples for potential crossfade next time
-                 if (generatedSamples > 0) {
-                     const start = (this._readIndex - Math.min(generatedSamples, CROSSFADE_SAMPLES) + BUFFER_SIZE) % BUFFER_SIZE;
-                      for(let j = 0; j < CROSSFADE_SAMPLES; j++) {
-                          this._crossfadeBuffer[j] = this._buffer[(start + j) % BUFFER_SIZE] ?? 0.0;
-                      }
-                 } else {
-                     this._crossfadeBuffer.fill(0); // No previous samples, fade from silence
-                 }
-
-                // continue filling remaining samples with silence
-                continue;
+                // A gap exists only when a render sample actually has no PCM.
+                if (!this._inUnderrun) {
+                    this._inUnderrun = true;
+                    this._transitionStart = this._lastOutputSample;
+                    this._fadeOutRemaining = this._transitionSamples;
+                   }
+                sample = this._fadeOutRemaining > 0
+                    ? this._transitionStart * (--this._fadeOutRemaining / this._transitionSamples)
+                    : 0;
             }
+            channel[i] = sample;
+            this._lastOutputSample = channel[i];
         }
-         // Fill remaining output buffer with silence if we stopped early due to underrun
-         for (let i = generatedSamples; i < channel.length; i++) {
-            channel[i] = 0.0;
-         }
-
-
-         // If stopping command received and buffer is now empty, request termination
-         if (this._isStopping && this._bufferFill === 0) {
-             console.log('[PlaybackProcessor] Stopping after draining buffer.');
-             this._isPlaying = false;
-             return false; // Request termination
-         }
-
-
-        return true; // Keep processor alive
+        return true;
     }
 }
 

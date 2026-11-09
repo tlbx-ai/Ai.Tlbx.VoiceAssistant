@@ -31,6 +31,9 @@ try
     node Tests\Browser\translation-contracts.mjs
     Assert-LastCommandSucceeded "Browser translation and visual input contracts"
 
+    node Tests\Browser\audio-playback-contracts.mjs
+    Assert-LastCommandSucceeded "Browser audio playback contracts"
+
     node Tests\Browser\audio-capture-contracts.mjs
     Assert-LastCommandSucceeded "Browser audio capture contracts"
 
