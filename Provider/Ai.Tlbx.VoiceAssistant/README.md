@@ -4,7 +4,7 @@
 
 [![NuGet](https://img.shields.io/nuget/v/Ai.Tlbx.VoiceAssistant.svg?label=nuget&color=blue)](https://www.nuget.org/packages/Ai.Tlbx.VoiceAssistant/)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
-[![.NET 9 | 10](https://img.shields.io/badge/.NET-9.0_|_10.0-purple.svg)](https://dotnet.microsoft.com/)
+[![.NET 10 | 11](https://img.shields.io/badge/.NET-10.0_|_11.0-purple.svg)](https://dotnet.microsoft.com/)
 
 ---
 
@@ -353,7 +353,7 @@ await assistant.StopAsync();
 
 ## Requirements
 
-- **.NET 9.0 or .NET 10.0**
+- **.NET 10.0 or .NET 11.0**
 - **API Key:** [OpenAI](https://platform.openai.com/api-keys), [Google AI Studio](https://aistudio.google.com/apikey), or [xAI](https://console.x.ai/)
 - **Web:** Modern browser with microphone permission (HTTPS or localhost)
 - **Windows:** Windows 10+

@@ -13,7 +13,7 @@ dotnet add package Ai.Tlbx.VoiceAssistant.Hardware.Windows
 ## Requirements
 
 - Windows 10 or later
-- .NET 9.0 or .NET 10.0
+- .NET 10.0 or .NET 11.0
 
 ## Usage
 

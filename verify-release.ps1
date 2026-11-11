@@ -22,8 +22,11 @@ try
     dotnet build TLBX.Ai.VoiceAssistant.slnx -c $Configuration --nologo "-m:$MaxCpuCount"
     Assert-LastCommandSucceeded "Solution build"
 
-    dotnet run --project Tests\ContractTests\ContractTests.csproj -c $Configuration --no-build
-    Assert-LastCommandSucceeded "Provider contract tests"
+    foreach ($framework in @("net10.0", "net11.0"))
+    {
+        dotnet run --project Tests\ContractTests\ContractTests.csproj -c $Configuration -f $framework --no-build
+        Assert-LastCommandSucceeded "Provider contract tests ($framework)"
+    }
 
     node Tests\Browser\conversation-support-contracts.mjs
     Assert-LastCommandSucceeded "Browser response control contracts"
@@ -62,8 +65,11 @@ try
             & $developerShell -Arch amd64 -HostArch amd64 -SkipAutomaticLocation
         }
 
-        dotnet publish Tests\AotTest\AotTest.csproj -c $Configuration -r $RuntimeIdentifier --self-contained true --nologo "-m:$MaxCpuCount"
-        Assert-LastCommandSucceeded "Native AOT publish"
+        foreach ($framework in @("net10.0", "net11.0"))
+        {
+            dotnet publish Tests\AotTest\AotTest.csproj -c $Configuration -f $framework -r $RuntimeIdentifier --self-contained true --nologo "-m:$MaxCpuCount"
+            Assert-LastCommandSucceeded "Native AOT publish ($framework)"
+        }
     }
 
     Write-Host "Release verification passed." -ForegroundColor Green

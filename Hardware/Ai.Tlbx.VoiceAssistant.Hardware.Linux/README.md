@@ -13,7 +13,7 @@ dotnet add package Ai.Tlbx.VoiceAssistant.Hardware.Linux
 ## Requirements
 
 - Linux with ALSA support
-- .NET 9.0 or .NET 10.0
+- .NET 10.0 or .NET 11.0
 - ALSA development libraries:
   ```bash
   sudo apt-get install libasound2-dev

@@ -24,7 +24,7 @@ OpenAI live voice on Blazor Server should use `Ai.Tlbx.VoiceAssistant.Provider.O
 
 - Modern browser with Web Audio API support
 - HTTPS or localhost (required for microphone access)
-- .NET 9.0 or .NET 10.0
+- .NET 10.0 or .NET 11.0
 
 ## Usage
 

@@ -4,7 +4,7 @@ This console application demonstrates how to use the Ai.Tlbx.RealTimeAudio libra
 
 ## Requirements
 
-- .NET 9.0 runtime
+- .NET 10.0 runtime
 - Linux operating system with ALSA support
 - ALSA development libraries (`libasound2` package on Debian/Ubuntu-based distributions)
 - OpenAI API key

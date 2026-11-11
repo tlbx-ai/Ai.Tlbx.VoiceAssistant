@@ -1,10 +1,10 @@
 # AI Voice Assistant Toolkit
 
-Voice conversations, transcription and speech translation for .NET 9/10. Compose a provider, audio hardware and your application tools. Supports OpenAI, Google Gemini, xAI Grok and Mistral Voxtral.
+Voice conversations, transcription and speech translation for .NET 10/11. Compose a provider, audio hardware and your application tools. Supports OpenAI, Google Gemini, xAI Grok and Mistral Voxtral.
 
 [![NuGet](https://img.shields.io/nuget/v/Ai.Tlbx.VoiceAssistant.svg?label=nuget&color=blue)](https://www.nuget.org/packages/Ai.Tlbx.VoiceAssistant/)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
-[![.NET 9 | 10](https://img.shields.io/badge/.NET-9.0_|_10.0-purple.svg)](https://dotnet.microsoft.com/)
+[![.NET 10 | 11](https://img.shields.io/badge/.NET-10.0_|_11.0-purple.svg)](https://dotnet.microsoft.com/)
 
 ---
 
@@ -846,7 +846,7 @@ timed transcripts, startup history, usage accounting, examples, and migration co
 
 ## Requirements
 
-- **.NET 9.0 or .NET 10.0**
+- **.NET 10.0 or .NET 11.0**
 - **API Key:** [OpenAI](https://platform.openai.com/api-keys), [Google AI Studio](https://aistudio.google.com/apikey), or [xAI](https://console.x.ai/)
 - **Web:** Modern browser with microphone permission (HTTPS or localhost)
 - **Windows:** Windows 10+

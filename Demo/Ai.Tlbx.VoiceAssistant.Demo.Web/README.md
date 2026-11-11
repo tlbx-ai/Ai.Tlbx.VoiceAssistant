@@ -74,7 +74,7 @@ The application uses:
 
 ## Getting Started
 
-1. Ensure you have .NET 9 SDK or later
+1. Ensure you have .NET 11 SDK or later
 2. Set `OPENAI_API_KEY` for OpenAI voice sessions
 3. Run the application using `dotnet run`
 
@@ -103,7 +103,7 @@ The demo provides a complete reference implementation showing how to:
 
 ## Setup Requirements
 
-1. .NET 9 SDK or later
+1. .NET 11 SDK or later
 2. OpenAI API key with access to voice API capabilities
 
 ## Environmental Variables

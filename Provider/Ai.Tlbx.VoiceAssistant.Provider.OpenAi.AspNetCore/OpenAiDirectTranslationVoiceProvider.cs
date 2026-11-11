@@ -1,3 +1,6 @@
+// These provider APIs propagate failed JS operations to their callers. Only teardown
+// tolerates JSDisconnectedException; swallowing command failures would report false success.
+#pragma warning disable BL0016
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using Ai.Tlbx.VoiceAssistant.Interfaces;

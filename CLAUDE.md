@@ -176,7 +176,7 @@ Always use `Action<LogLevel, string>` for logging delegation and forward logs up
 
 ### Important Notes
 
-- The project targets .NET 9.0 and .NET 10.0 (multi-targeting)
+- The project targets .NET 10.0 and .NET 11.0 (multi-targeting)
 - Windows components require Windows 10 or later
 - Linux components require libasound (ALSA) to be installed
 - Web components require HTTPS or localhost for microphone access due to browser security

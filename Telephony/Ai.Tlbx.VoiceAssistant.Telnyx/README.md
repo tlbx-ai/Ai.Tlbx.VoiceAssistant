@@ -1,6 +1,6 @@
 # Ai.Tlbx.VoiceAssistant.Telnyx
 
-Telnyx telephone transport for .NET 9/10 VoiceAssistant applications. One package provides a thin REST client, explicit provisioning, signed ASP.NET Core endpoints and isolated bidirectional PCM audio for each telephone call. AI models and tools stay in the existing VoiceAssistant providers.
+Telnyx telephone transport for .NET 10/11 VoiceAssistant applications. One package provides a thin REST client, explicit provisioning, signed ASP.NET Core endpoints and isolated bidirectional PCM audio for each telephone call. AI models and tools stay in the existing VoiceAssistant providers.
 
 ## Configure a telephone assistant
 
