@@ -19,6 +19,7 @@
 @using System.Threading
 @using System.Text.Json
 @using Microsoft.Extensions.DependencyInjection
+@using Ai.Tlbx.Sip
 
 @rendermode InteractiveServer
 @inject IJSRuntime JS
@@ -28,6 +29,7 @@
 @inject Action<LogLevel, string> LogAction
 @inject InferenceHandoffBackend HandoffBackend
 @inject MistralDemoBackend MistralBackend
+@inject SipDemoSession SipSession
 @implements IAsyncDisposable
 
 <PageTitle>AI Voice Chat</PageTitle>
@@ -43,11 +45,15 @@
 
                 <!-- Tab Bar -->
                 <div class="mb-3 border-b border-gray-200">
-                    <nav class="flex space-x-4" aria-label="Tabs">
+                    <nav class="flex flex-wrap gap-x-4" aria-label="Tabs">
                         <button class="px-3 py-2 text-sm font-medium border-b-2 transition-colors @(_activeTab == "voice" ? "border-blue-500 text-blue-600" : "border-transparent text-gray-500 hover:text-gray-700")"
                                 @onclick='() => OnTabChanged("voice")'
                                 disabled="@_isBusy">
                             Voice Chat
+                        </button>
+                        <button id="sip-tab" class="px-3 py-2 text-sm font-medium border-b-2 transition-colors @(IsSipMode ? "border-blue-500 text-blue-600" : "border-transparent text-gray-500 hover:text-gray-700")"
+                                @onclick='() => OnTabChanged("sip")' disabled="@_isBusy">
+                            SIP Call
                         </button>
                         <button id="conversation-support-tab" class="px-3 py-2 text-sm font-medium border-b-2 @(IsConversationSupport ? "border-blue-500 text-blue-600" : "border-transparent text-gray-500")"
                                 @onclick='() => OnTabChanged("support")' disabled="@_isBusy">
@@ -61,7 +67,7 @@
                     </nav>
                 </div>
 
-                @if (_activeTab == "voice" || IsConversationSupport)
+                @if (_activeTab == "voice" || IsConversationSupport || IsSipMode)
                 {
                     <div class="flex flex-col lg:flex-row gap-3">
                         <!-- Controls Panel -->
@@ -73,9 +79,50 @@
 
                                 <div class="p-3 space-y-3">
                                     <!-- Talk Button -->
-                                    <AiTalkControl OnStartTalking="StartSession" OnStopTalking="StopSession" IsTalking="voiceAssistant?.IsRecording ?? false" Loading="(voiceAssistant?.IsConnecting ?? false) || (voiceAssistant?.IsRecording ?? false)" />
+                                    @if (IsSipMode)
+                                    {
+                                        <div class="space-y-2">
+                                            <label for="sip-number" class="block text-xs font-medium text-gray-600">Phone number or extension</label>
+                                            <input id="sip-number" type="tel" autocomplete="tel" class="w-full p-2 border border-gray-300 rounded-md text-sm"
+                                                   @bind="_sipNumber" @bind:event="oninput" disabled="@_isBusy" placeholder="+49… or **610" />
+                                            @if (!SipSession.IsConfigured)
+                                            {
+                                                <p id="sip-config-hint" class="text-sm text-gray-600">Configure a SIP account on the demo server to enable calls.</p>
+                                            }
+                                            @if (_isBusy)
+                                            {
+                                                <button id="sip-hangup" @onclick="StopSession" disabled="@_stopping" class="w-full py-2 px-3 rounded-md bg-red-600 text-white text-sm font-medium">Hang up</button>
+                                            }
+                                            else
+                                            {
+                                                <button id="sip-call" @onclick="StartSession" disabled="@(!SipSession.IsConfigured || string.IsNullOrWhiteSpace(_sipNumber))" class="w-full py-2 px-3 rounded-md bg-blue-600 text-white text-sm font-medium">Call with AI</button>
+                                            }
+                                            @if (!_isBusy)
+                                            {
+                                                <p class="text-xs text-gray-500">Audio uses the phone. Follow transcripts and tool activity in the conversation.</p>
+                                            }
+                                            <div id="sip-status" role="status" aria-live="polite" class="text-sm text-gray-700">
+                                                SIP: @SipSession.ClientState · Call: @(SipSession.Call?.Status.State.ToString() ?? "Idle")
+                                                @if (SipSession.Call?.Status.EndReason is { } reason) { <span> · @reason</span> }
+                                            </div>
+                                            @if (SipSession.Call is { } sipCall)
+                                            {
+                                                var metrics = sipCall.Metrics;
+                                                <p id="sip-metrics" class="text-xs text-gray-500">@metrics.Codec · RX @metrics.ReceivedPackets · TX @metrics.TransmittedPackets · RTT @(metrics.RoundTripMilliseconds is { } rtt ? $"{rtt:F0} ms" : "unknown")</p>
+                                            }
+                                        </div>
+                                    }
+                                    else
+                                    {
+                                        <AiTalkControl OnStartTalking="StartSession" OnStopTalking="StopSession" IsTalking="voiceAssistant?.IsRecording ?? false" Loading="(voiceAssistant?.IsConnecting ?? false) || (voiceAssistant?.IsRecording ?? false)" />
+                                    }
 
                                     <!-- Provider Selection -->
+                                    @if (IsSipMode && _isBusy)
+                                    {
+                                        <p id="sip-selected-ai" class="text-sm text-gray-700">@_selectedProviderString · @(availableModels.FirstOrDefault(m => m.Value == _currentModelString)?.Label) · @_currentVoiceString</p>
+                                    }
+                                    <div class="@(IsSipMode && _isBusy ? "hidden" : "space-y-3")">
                                     @if (IsConversationSupport)
                                     {
                                         <p class="text-sm text-gray-600">Hört eurem Gespräch zu und zeigt kurze Kontexthinweise. Ort: Nordhausen, Deutschland. Ausgabe nur als Text.</p>
@@ -84,13 +131,13 @@
                                     {
                                     <div>
                                         <label for="providerSelect" class="block text-xs font-medium text-gray-600 mb-1">AI Provider</label>
-                                        <ProviderSelect AvailableProviders="@availableProviders" @bind-SelectedProvider="@selectedProviderString" Disabled="@((voiceAssistant?.IsConnecting ?? false) || (voiceAssistant?.IsRecording ?? false))" />
+                                        <ProviderSelect AvailableProviders="@availableProviders" @bind-SelectedProvider="@selectedProviderString" Disabled="@_isBusy" />
                                     </div>
 
                                     <!-- Voice Selection -->
                                     <div>
                                         <label for="voiceSelect" class="block text-xs font-medium text-gray-600 mb-1">Voice</label>
-                                        <VoiceSelect AvailableVoices="@availableVoices" VoiceLabels="@(_selectedProviderString == "OpenAI" ? OpenAiVoiceLabels : _selectedProviderString == "Mistral (OpenRouter)" ? MistralVoiceLabels : null)" @bind-SelectedVoice="@currentVoiceString" Disabled="@((voiceAssistant?.IsConnecting ?? false) || (voiceAssistant?.IsRecording ?? false))" />
+                                        <VoiceSelect AvailableVoices="@availableVoices" VoiceLabels="@(_selectedProviderString == "OpenAI" ? OpenAiVoiceLabels : _selectedProviderString == "Mistral (OpenRouter)" ? MistralVoiceLabels : null)" @bind-SelectedVoice="@currentVoiceString" Disabled="@_isBusy" />
                                     </div>
                                     }
 
@@ -100,7 +147,7 @@
                                         <select id="voice-model" class="w-full p-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-sm"
                                                 value="@_currentModelString"
                                                 @onchange="OnModelChanged"
-                                                disabled="@((voiceAssistant?.IsConnecting ?? false) || (voiceAssistant?.IsRecording ?? false))">
+                                                disabled="@_isBusy">
                                             @foreach (var model in availableModels.Where(m => !IsConversationSupport || m.Value != "gpt-live-1"))
                                             {
                                                 <option value="@model.Value">@model.Label</option>
@@ -114,7 +161,7 @@
                                         <div>
                                             <label for="live-backend-mode" class="block text-xs font-medium text-gray-600 mb-1">GPT-Live backend</label>
                                             <select id="live-backend-mode" class="w-full p-2 border border-gray-300 rounded-md text-sm" @bind="_liveBackendMode"
-                                                    disabled="@((voiceAssistant?.IsConnecting ?? false) || (voiceAssistant?.IsRecording ?? false))">
+                                                    disabled="@_isBusy">
                                                 <option value="agent">Agent-Handoff · GPT-6.1 Sol (Ai.Tlbx.Inference)</option>
                                                 <option value="client">Application Responses backend — full tool results</option>
                                                 <option value="managed">Live-managed Responses — limited tool-result buffer</option>
@@ -152,7 +199,7 @@
                                                 <select class="w-full p-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-sm disabled:bg-gray-100 disabled:text-gray-400"
                                                         value="@ReasoningEffortValue"
                                                         @onchange="OnReasoningEffortChanged"
-                                                        disabled="@((voiceAssistant?.IsConnecting ?? false) || (voiceAssistant?.IsRecording ?? false))">
+                                                        disabled="@_isBusy">
                                                     <option value="">Provider default</option>
                                                     @foreach (var effort in _reasoningEfforts)
                                                     {
@@ -221,7 +268,7 @@
                                     <div>
                                         <ToolSelector AvailableTools="@availableTools"
                                                      @bind-EnabledTools="@enabledTools"
-                                                     Disabled="@((voiceAssistant?.IsConnecting ?? false) || (voiceAssistant?.IsRecording ?? false))" />
+                                                     Disabled="@_isBusy" />
                                     </div>
 
                                     @if (!IsLiveModel && !IsConversationSupport)
@@ -237,7 +284,7 @@
                                             <select class="w-full p-2 border border-gray-300 rounded-md focus:ring-2 focus:ring-blue-500 focus:border-blue-500 text-sm disabled:bg-gray-100 disabled:text-gray-400"
                                                     value="@ToolCallPreambleModeValue"
                                                     @onchange="OnToolCallPreambleModeChanged"
-                                                    disabled="@((voiceAssistant?.IsConnecting ?? false) || (voiceAssistant?.IsRecording ?? false))">
+                                                    disabled="@_isBusy">
                                                 @foreach (var mode in _toolCallPreambleModes)
                                                 {
                                                     <option value="@mode.Value">@mode.Label</option>
@@ -249,6 +296,8 @@
 
                                     <!-- Microphone Selection -->
                                     }
+                                    @if (!IsSipMode)
+                                    {
                                     <div>
                                         <label class="block text-xs font-medium text-gray-600 mb-1">Microphone</label>
                                         <MicrophoneSelect AvailableMicrophones="availableMicrophones"
@@ -256,30 +305,46 @@
                                                          SelectedMicrophoneIdChanged="OnMicrophoneSelectionChanged"
                                                          MicPermissionGranted="micPermissionGranted"
                                                          OnRequestPermission="RequestMicrophonePermission"
-                                                         Disabled="@((voiceAssistant?.IsConnecting ?? false) || (voiceAssistant?.IsRecording ?? false))" />
+                                                         Disabled="@_isBusy" />
                                     </div>
 
                                     <!-- Action Buttons -->
+                                    }
                                     <div class="space-y-2">
                                         <button class="w-full py-2 px-3 rounded-md bg-gray-600 text-white text-sm font-medium hover:bg-gray-700 transition-colors flex items-center justify-center"
                                         @onclick="ClearChat"
-                                        disabled="@((voiceAssistant?.IsConnecting ?? false) || (voiceAssistant?.IsRecording ?? false))">
+                                        disabled="@_isBusy">
                                             <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4 mr-1.5" viewBox="0 0 20 20" fill="currentColor">
                                                 <path fill-rule="evenodd" d="M9 2a1 1 0 00-.894.553L7.382 4H4a1 1 0 000 2v10a2 2 0 002 2h8a2 2 0 002-2V6a1 1 0 100-2h-3.382l-.724-1.447A1 1 0 0011 2H9zM7 8a1 1 0 012 0v6a1 1 0 11-2 0V8zm5-1a1 1 0 00-1 1v6a1 1 0 102 0V8a1 1 0 00-1-1z" clip-rule="evenodd" />
                                             </svg>
                                             Clear Chat
                                         </button>
 
-                                        <MicTestWidget OnStartTest="TestMicrophone" Loading="voiceAssistant?.IsMicrophoneTesting ?? false" Disabled="_isBusy" />
+                                        @if (!IsSipMode)
+                                        {
+                                            <MicTestWidget OnStartTest="TestMicrophone" Loading="voiceAssistant?.IsMicrophoneTesting ?? false" Disabled="_isBusy" />
+                                        }
                                     </div>
 
+                                    </div>
                                     <!-- Status -->
                                     <div>
+                                        @if (IsSipMode)
+                                        {
+                                            <p class="text-xs text-gray-500">AI: @(voiceAssistant?.IsProviderConnected == true ? "Connected" : _sipStarting ? "Connecting" : "Disconnected")</p>
+                                            @if (!string.IsNullOrEmpty(_sessionError ?? voiceAssistant?.LastErrorMessage))
+                                            {
+                                                <p role="alert" class="text-sm text-red-700">@(_sessionError ?? voiceAssistant?.LastErrorMessage)</p>
+                                            }
+                                        }
+                                        else
+                                        {
                                         <StatusWidget ConnectionStatus="@(voiceAssistant?.ConnectionStatus ?? "")" Error="@(_sessionError ?? voiceAssistant?.LastErrorMessage ?? "")" IsMicrophoneTesting="@(voiceAssistant?.IsMicrophoneTesting ?? false)" />
+                                        }
                                     </div>
 
                                     <!-- Connection Events -->
-                                    @if (!string.IsNullOrEmpty(lastConnectionEvent))
+                                    @if (!IsSipMode && !string.IsNullOrEmpty(lastConnectionEvent))
                                     {
                                         <div class="border-t pt-3">
                                             <label class="block text-xs font-medium text-gray-600 mb-1">Last Event</label>
@@ -329,14 +394,14 @@
                                     }
                                     else
                                     {
-                                        <ChatWidget ShowDebugToolCalls="@showDebugMode" ShowToolCalls="true" InspectableToolCalls="@(IsAgentHandoff || _selectedProviderString == "Mistral (OpenRouter)")" Messages="@(IsLiveModel ? _liveMessages : null)" />
+                                        <ChatWidget ShowDebugToolCalls="@showDebugMode" ShowToolCalls="true" InspectableToolCalls="@(IsSipMode || IsAgentHandoff || _selectedProviderString == "Mistral (OpenRouter)")" Messages="@(IsLiveModel ? _liveMessages : null)" />
                                     }
                                 </div>
 
                                 <div class="px-3 py-2 border-t border-gray-200 bg-white">
                                     @if (IsLiveModel)
                                     {
-                                        <p id="live-session-usage" data-final-usage="@(_liveProvider?.FinalUsageConfirmed == true ? "true" : "false")" class="text-xs text-gray-500 mb-1">Live transcript · Voice: @voiceAssistant?.TotalProviderSessionDuration.TotalSeconds.ToString("F1") s · Backend: @voiceAssistant?.TotalTokensUsed tokens · Modellkosten: $@LiveCost.ToString("F5") @(LiveCostIncomplete ? "(unvollständige Schätzung)" : "(Schätzung)") · Final usage: @_liveProvider?.FinalUsageConfirmed</p>
+                                        <p id="live-session-usage" data-final-usage="@(LiveFinalUsage ? "true" : "false")" class="text-xs text-gray-500 mb-1">Live transcript · Voice: @voiceAssistant?.TotalProviderSessionDuration.TotalSeconds.ToString("F1") s · Backend: @voiceAssistant?.TotalTokensUsed tokens · Modellkosten: $@LiveCost.ToString("F5") @(LiveCostIncomplete ? "(unvollständige Schätzung)" : "(Schätzung)") · Final usage: @LiveFinalUsage</p>
                                     }
                                     @if (voiceAssistant?.IsRecording ?? false)
                                     {
@@ -579,9 +644,44 @@
     // Tab state
     private string _activeTab = "voice";
     private bool IsConversationSupport => _activeTab == "support";
+    private bool IsSipMode => _activeTab == "sip";
+    private string _sipNumber = "";
+    private bool _sipStarting;
+    private CancellationTokenSource? _sipCancellation;
+    private Task? _sipStartTask;
+    private CancellationTokenSource _pageLifetime = new();
+    private Task? _sipMetricsTask;
+    private string? _observedSipEnd;
+    private bool _assistantUsesSip;
+    private Task _retiredSipAssistant = Task.CompletedTask;
+    private OpenAiLiveProvider? _sipLiveProvider;
+    private bool HasLiveProvider => _liveProvider != null || _sipLiveProvider != null;
+    private bool LiveConnected => _liveProvider?.IsConnected ?? _sipLiveProvider?.IsConnected ?? false;
+    private bool LiveFinalUsage => _liveProvider?.FinalUsageConfirmed ?? _sipLiveProvider?.FinalUsageConfirmed ?? false;
+    private void OnSipChanged() => _ = InvokeAsync(async () =>
+    {
+        if (_pageLifetime.IsCancellationRequested) return;
+        StateHasChanged();
+        if (IsSipMode && SipSession.Call is { Status.State: SipCallState.Ended } ended && _observedSipEnd != ended.Id)
+        {
+            _observedSipEnd = ended.Id;
+            if (!_stopping) await StopSession();
+        }
+    });
+
+    private async Task RefreshSipMetricsAsync()
+    {
+        using var timer = new PeriodicTimer(TimeSpan.FromSeconds(1));
+        try
+        {
+            while (await timer.WaitForNextTickAsync(_pageLifetime.Token))
+                if (IsSipMode && _isBusy) await InvokeAsync(StateHasChanged);
+        }
+        catch (OperationCanceledException) when (_pageLifetime.IsCancellationRequested) { }
+    }
     private readonly List<ChatMessage> _supportMessages = new();
     private string _supportTextDelta = "";
-    private bool _isBusy => (voiceAssistant?.IsConnecting ?? false) || (voiceAssistant?.IsRecording ?? false) || _isPttRecording || _isPttProcessing;
+    private bool _isBusy => _sipStarting || _stopping || (voiceAssistant?.IsConnecting ?? false) || (voiceAssistant?.IsRecording ?? false) || _isPttRecording || _isPttProcessing;
 
     // Provider management
     private List<string> availableProviders = new() { "OpenAI", "Google", "xAI", "Mistral (OpenRouter)" };
@@ -689,6 +789,7 @@
     private string GetModelSelectHint()
     {
         if (IsConversationSupport) return "OpenAI Realtime hört zu und liefert ausschließlich Texthinweise.";
+        if (IsSipMode) return "The selected AI uses server audio over the SIP phone call.";
         return _selectedProviderString switch
         {
             "OpenAI" when IsLiveModel => "Continuous GPT-Live conversation over WebRTC. Select Agent-Handoff to delegate complex work to GPT-6.1 Sol.",
@@ -774,6 +875,8 @@
 
     protected override async Task OnInitializedAsync()
     {
+        SipSession.Changed += OnSipChanged;
+        _sipMetricsTask = RefreshSipMetricsAsync();
         // Create initial VoiceAssistant with OpenAI provider
         RecreateVoiceAssistant();
 
@@ -787,11 +890,13 @@
         await Task.CompletedTask;
     }
 
-    private void RecreateVoiceAssistant()
+    private void RecreateVoiceAssistant(IAudioHardwareAccess? hardware = null)
     {
         DetachHandoffCallbacks();
         if (_liveProvider != null) { _liveProvider.OnTranscriptDelta = null; _liveProvider.OnEventReceived = null; _liveProvider.OnBackendActivity = null; }
         _liveProvider = null;
+        if (_sipLiveProvider != null) { _sipLiveProvider.OnTranscriptDelta = null; _sipLiveProvider.OnEventReceived = null; _sipLiveProvider.OnBackendActivity = null; }
+        _sipLiveProvider = null;
         // Dispose old instance if exists
         if (voiceAssistant != null)
         {
@@ -799,6 +904,7 @@
             voiceAssistant.OnMessageAdded = null;
             voiceAssistant.OnTextDelta = null;
             voiceAssistant.OnMicrophoneDevicesChanged = null;
+            if (_assistantUsesSip) _retiredSipAssistant = voiceAssistant.DisposeAsync().AsTask();
         }
 
         // Create provider based on active tab
@@ -819,19 +925,19 @@
                 _ => VoiceProviderType.OpenAI
             };
         }
-        var provider = ProviderFactory.CreateProvider(providerType);
+        var provider = ProviderFactory.CreateProvider(providerType, serverAudio: IsSipMode);
         _mistralProvider = provider as MistralVoiceProvider;
 
         // Create new VoiceAssistant
-        voiceAssistant = new VoiceAssistant(HardwareAccess, provider, LogAction);
-        if (provider is OpenAiDirectLiveVoiceProvider live)
+        voiceAssistant = new VoiceAssistant(hardware ?? HardwareAccess, provider, LogAction);
+        _assistantUsesSip = hardware != null;
+        if (provider is OpenAiDirectLiveVoiceProvider || provider is OpenAiLiveProvider)
         {
-            _liveProvider = live;
-            live.OnBackendActivity = activity =>
+            Action<OpenAiLiveBackendActivity> onBackendActivity = activity =>
             {
                 if (IsAgentHandoff) AddLiveChatMessage(new ChatMessage($"{activity.State}{(activity.Detail == null ? "" : " · " + activity.Detail)}", "activity", activity.DelegationId));
             };
-            live.OnEventReceived = envelope =>
+            Action<JsonObject> onEventReceived = envelope =>
             {
                 var eventType = envelope["type"]?.GetValue<string>() ?? "unknown";
                 if (!eventType.Contains("audio") && !eventType.Contains("transcript") && eventType != "response.event")
@@ -849,7 +955,7 @@
                     StateHasChanged();
                 });
             };
-            live.OnTranscriptDelta = delta =>
+            Action<OpenAiLiveTranscriptDelta> onTranscriptDelta = delta =>
             {
                 _ = InvokeAsync(() =>
                 {
@@ -869,6 +975,20 @@
                     _ = ScrollToBottom();
                 });
             };
+            if (provider is OpenAiDirectLiveVoiceProvider browserLive)
+            {
+                _liveProvider = browserLive;
+                browserLive.OnBackendActivity = onBackendActivity;
+                browserLive.OnEventReceived = onEventReceived;
+                browserLive.OnTranscriptDelta = onTranscriptDelta;
+            }
+            else if (provider is OpenAiLiveProvider serverLive)
+            {
+                _sipLiveProvider = serverLive;
+                serverLive.OnBackendActivity = onBackendActivity;
+                serverLive.OnEventReceived = onEventReceived;
+                serverLive.OnTranscriptDelta = onTranscriptDelta;
+            }
         }
 
         // Wire up callbacks
@@ -1363,7 +1483,7 @@
                 lastConnectionEvent = $"{DateTime.Now:HH:mm:ss} - {status}";
             }
             StateHasChanged();
-            if (_liveProvider != null && voiceAssistant?.IsRecording == true && !_liveProvider.IsConnected && !_stopping)
+            if (HasLiveProvider && voiceAssistant?.IsRecording == true && !LiveConnected && !_stopping)
                 await StopSession();
         });
     }
@@ -1434,11 +1554,27 @@
         }
     }
 
-    private async Task StartSession()
+    private Task StartSession()
+    {
+        if (!IsSipMode) return StartSessionCore();
+        if (_sipStartTask is { IsCompleted: false } || _isBusy) return Task.CompletedTask;
+        return _sipStartTask = StartSessionCore();
+    }
+
+    private async Task StartSessionCore()
     {
         _sessionError = null;
         try
         {
+            if (IsSipMode)
+            {
+                _sipNumber = SipDemoSession.ValidateNumber(_sipNumber);
+                _sipStarting = true;
+                _sipCancellation?.Dispose();
+                _sipCancellation = CancellationTokenSource.CreateLinkedTokenSource(_pageLifetime.Token);
+                await SipSession.PrepareAsync(_sipNumber, _sipCancellation.Token);
+                RecreateVoiceAssistant(SipSession.Hardware!);
+            }
             if (voiceAssistant == null)
             {
                 Log(LogLevel.Error, "VoiceAssistant not initialized");
@@ -1609,9 +1745,21 @@
                 ConversationSupport.Configure(supportSettings);
 
             // Start the session with the configured settings
-            await voiceAssistant.StartAsync(settings);
-            if (_liveProvider != null && _liveMessages.Count == 0)
-                await _liveProvider.AppendInstructionsAsync("Begrüße den Nutzer kurz als KI-Sprachassistent und höre dann zu.");
+            if (IsSipMode)
+            {
+                // Validate/connect the AI before making the phone ring. Capture
+                // starts only after the call is answered.
+                await voiceAssistant.ConnectProviderAsync(settings);
+                _sipCancellation!.Token.ThrowIfCancellationRequested();
+                await SipSession.DialAsync(_sipCancellation.Token);
+            }
+            await voiceAssistant.StartAsync(settings, IsSipMode ? _sipCancellation!.Token : CancellationToken.None);
+            if (IsSipMode) _sipCancellation!.Token.ThrowIfCancellationRequested();
+            if (HasLiveProvider && _liveMessages.Count == 0)
+            {
+                if (_liveProvider != null) await _liveProvider.AppendInstructionsAsync("Begrüße den Nutzer kurz als KI-Sprachassistent und höre dann zu.");
+                else if (_sipLiveProvider != null) await _sipLiveProvider.AppendInstructionsAsync("Begrüße den Nutzer kurz als KI-Sprachassistent und höre dann zu.");
+            }
 
             // Even if permission state is lost in the process, we still know we have a valid device
             if (!micPermissionGranted && availableMicrophones.Count > 0)
@@ -1626,6 +1774,17 @@
             Log(LogLevel.Error, $"Error starting session: {ex.Message}");
             _sessionError = ex.Message;
             Log(LogLevel.Error, $"Stack trace: {ex.StackTrace}");
+            if (IsSipMode)
+            {
+                if (ex is OperationCanceledException && _sipCancellation?.IsCancellationRequested == true) _sessionError = null;
+                try { if (voiceAssistant != null) await voiceAssistant.StopAsync(); }
+                finally { await SipSession.StopAsync(); }
+            }
+        }
+        finally
+        {
+            _sipStarting = false;
+            if (!_pageLifetime.IsCancellationRequested) await InvokeAsync(StateHasChanged);
         }
     }
 
@@ -1636,9 +1795,17 @@
         _stopping = true;
         try
         {
-            if (voiceAssistant == null) return;
-
-            await voiceAssistant.StopAsync();
+            if (IsSipMode)
+            {
+                _sipCancellation?.Cancel();
+                // End the phone leg immediately, even if an AI handshake is still
+                // completing under the provider's own connection deadline.
+                await SipSession.StopAsync();
+                if (_sipStartTask != null) await _sipStartTask;
+                try { if (voiceAssistant != null) await voiceAssistant.StopAsync(); }
+                finally { await SipSession.StopAsync(); }
+            }
+            else if (voiceAssistant != null) await voiceAssistant.StopAsync();
 
             // Ensure mic permission state is preserved after stopping
             if (!micPermissionGranted && availableMicrophones.Count > 0)
@@ -1676,7 +1843,7 @@
         _ = ScrollToBottom();
     });
 
-    private void CancelAgentWork() => _liveProvider?.CancelClientBackend();
+    private void CancelAgentWork() { _liveProvider?.CancelClientBackend(); _sipLiveProvider?.CancelClientBackend(); }
 
     private void DetachHandoffCallbacks()
     {
@@ -2024,6 +2191,16 @@
 
     public async ValueTask DisposeAsync()
     {
+        SipSession.Changed -= OnSipChanged;
+        _pageLifetime.Cancel();
+        _sipCancellation?.Cancel();
+        if (_sipStartTask != null) await _sipStartTask;
+        if (_sipMetricsTask != null) await _sipMetricsTask;
+        await _retiredSipAssistant;
+        await SipSession.DisposeAsync();
+        _sipCancellation?.Dispose();
+        _pageLifetime.Dispose();
+        if (_sipLiveProvider != null) { _sipLiveProvider.OnTranscriptDelta = null; _sipLiveProvider.OnEventReceived = null; _sipLiveProvider.OnBackendActivity = null; }
         DetachHandoffCallbacks();
         if (_liveProvider != null) { _liveProvider.OnTranscriptDelta = null; _liveProvider.OnEventReceived = null; _liveProvider.OnBackendActivity = null; }
         await StopPttLiveTranscriptionAsync();
@@ -2045,6 +2222,8 @@
         if (firstRender)
         {
             // Add JS helper function for scrolling
+            try
+            {
             await JS.InvokeVoidAsync("eval", @"
                 window.scrollToBottom = function(element) {
                     if (element) {
@@ -2062,6 +2241,8 @@
 
             // Check microphone permission state without activating microphone
             await CheckMicrophonePermissionState();
+            }
+            catch (JSDisconnectedException) { }
         }
     }
 

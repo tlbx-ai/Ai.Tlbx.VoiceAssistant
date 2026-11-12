@@ -15,6 +15,22 @@ transcription and Ai.Tlbx.Inference paths. Its contents are never added to the c
 line, logs or browser. No environment variables are changed. Without this parameter,
 the existing `OPENAI_API_KEY` fallback remains available in both demo and libraries.
 
+## Local SIP calls (.NET 11)
+
+Keep `Ai.Tlbx.Sip` beside this checkout, or pass `-p:SipProjectRoot=<path>` when building. The Web demo references the local `Ai.Tlbx.VoiceAssistant.Sip` project; no SIP NuGet publication is required. Provider libraries retain their existing target frameworks; this demo requires .NET 11 for the managed SIP projects.
+
+Set `Sip:ConfigFile` (application argument/configuration) or `SIP_CONFIG_FILE` to a server-side `SipClientConfig` JSON file outside Git. It accepts enum names and IP-address strings. Use a dedicated PBX identity; credentials stay on the server.
+
+```powershell
+dotnet run --project Demo/Ai.Tlbx.VoiceAssistant.Demo.Web -- --Sip:ConfigFile "C:\env\sip\client.secrets.json"
+```
+
+Select **SIP Call**, choose the AI provider/model/voice/tools, enter a phone number or extension, then **Call with AI**. No call starts automatically. Audio uses the phone; the existing ChatWidget shows transcripts, tool arguments, complete expandable results and agent output. OpenAI Realtime and GPT-Live use their server-side PCM/WebSocket providers in this mode. Google, xAI and Mistral use the same hardware adapter at their required input rates.
+
+**Hang up** works while connecting, ringing and talking. A remote hangup stops the AI session and unregisters the demo SIP client. Closing the circuit releases its owned call. This local demonstration does not implement application authentication or multi-user PBX-account arbitration; do not expose it as an anonymous public dialer.
+
+Run the isolated checks with `dotnet run --project Tests/SipDemoTests`: local PBX and AI peers verify destination validation, 16/24-kHz PCM, complete chat events, remote teardown, ringing cancellation and busy handling. `-- --browser` starts the same demo components against test-only peers on `http://localhost:7091` for browser acceptance; it cannot place real network calls or contact an AI service.
+
 ## Overview
 
 The demo uses reusable Razor components from `Ai.Tlbx.VoiceAssistant.WebUi` and shows the library's provider switching, microphone selection, live voice sessions, realtime transcription, and tool-call flow.

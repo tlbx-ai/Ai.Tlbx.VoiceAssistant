@@ -31,6 +31,7 @@
   <Folder Name="/Tests/">
     <Project Path="Tests/AotTest/AotTest.csproj" />
     <Project Path="Tests/ContractTests/ContractTests.csproj" />
+    <Project Path="Tests/SipDemoTests/SipDemoTests.csproj" />
   </Folder>
   <Folder Name="/Telephony/">
     <Project Path="Telephony/Ai.Tlbx.VoiceAssistant.Telnyx/Ai.Tlbx.VoiceAssistant.Telnyx.csproj" />

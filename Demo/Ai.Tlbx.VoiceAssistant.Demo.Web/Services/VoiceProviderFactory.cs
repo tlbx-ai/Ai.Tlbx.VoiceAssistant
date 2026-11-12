@@ -21,7 +21,7 @@ namespace Ai.Tlbx.VoiceAssistant.Demo.Web.Services
 
     public interface IVoiceProviderFactory
     {
-        IVoiceProvider CreateProvider(VoiceProviderType providerType);
+        IVoiceProvider CreateProvider(VoiceProviderType providerType, bool serverAudio = false);
     }
 
     public class VoiceProviderFactory : IVoiceProviderFactory
@@ -33,12 +33,16 @@ namespace Ai.Tlbx.VoiceAssistant.Demo.Web.Services
             _serviceProvider = serviceProvider;
         }
 
-        public IVoiceProvider CreateProvider(VoiceProviderType providerType)
+        public IVoiceProvider CreateProvider(VoiceProviderType providerType, bool serverAudio = false)
         {
             var logAction = _serviceProvider.GetService<Action<LogLevel, string>>();
 
             return providerType switch
             {
+                VoiceProviderType.OpenAI when serverAudio => new OpenAiVoiceProvider(
+                    _serviceProvider.GetRequiredService<DemoOpenAiCredentials>().ApiKey, logAction: logAction),
+                VoiceProviderType.OpenAiLive when serverAudio => new OpenAiLiveProvider(
+                    _serviceProvider.GetRequiredService<DemoOpenAiCredentials>().ApiKey, logAction),
                 VoiceProviderType.OpenAI => _serviceProvider.GetRequiredService<OpenAiDirectRealtimeVoiceProvider>(),
                 VoiceProviderType.OpenAiLive => _serviceProvider.GetRequiredService<OpenAiDirectLiveVoiceProvider>(),
                 VoiceProviderType.Google => new GoogleVoiceProvider(

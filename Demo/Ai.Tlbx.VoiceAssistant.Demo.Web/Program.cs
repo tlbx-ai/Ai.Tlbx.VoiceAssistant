@@ -46,6 +46,7 @@ public class Program
         // Register services needed by VoiceAssistant (without registering VoiceAssistant itself)
         // since we create it manually in Home.razor with the factory pattern
         builder.Services.AddScoped<IAudioHardwareAccess, WebAudioAccess>();
+        builder.Services.AddScoped<SipDemoSession>();
         builder.Services.AddOpenAiDirectTranslation(options =>
         {
             options.AuthorizeRequest = _ => true; // Local demo; production must authorize its users.
