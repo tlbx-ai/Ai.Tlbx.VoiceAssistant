@@ -104,7 +104,12 @@
                                             <div id="sip-status" role="status" aria-live="polite" class="text-sm text-gray-700">
                                                 SIP: @SipSession.ClientState · Call: @(SipSession.Call?.Status.State.ToString() ?? "Idle")
                                                 @if (SipSession.Call?.Status.EndReason is { } reason) { <span> · @reason</span> }
+                                                @if (SipSession.Call?.Status.SipStatusCode is { } sipCode) { <span> · @sipCode @SipSession.Call.Status.SipReasonPhrase</span> }
                                             </div>
+                                            @if (SipSession.Call?.Status.Error is { } sipError)
+                                            {
+                                                <p id="sip-call-error" role="alert" class="text-sm text-red-700">@sipError</p>
+                                            }
                                             @if (SipSession.Call is { } sipCall)
                                             {
                                                 var metrics = sipCall.Metrics;
@@ -665,6 +670,13 @@
         if (IsSipMode && SipSession.Call is { Status.State: SipCallState.Ended } ended && _observedSipEnd != ended.Id)
         {
             _observedSipEnd = ended.Id;
+            if (_sipStarting)
+            {
+                // Startup owns failed INVITE cleanup. Cancelling it here can turn
+                // a native SIP rejection into an apparently user-cancelled call.
+                if (ended.Status.EndReason is SipCallEndReason.RemoteHangup or SipCallEndReason.ConnectionLost) _sipCancellation?.Cancel();
+                return;
+            }
             if (!_stopping) await StopSession();
         }
     });

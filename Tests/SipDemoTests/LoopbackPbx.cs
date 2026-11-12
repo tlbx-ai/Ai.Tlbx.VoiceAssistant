@@ -15,6 +15,7 @@ internal sealed class LoopbackPbx : IAsyncDisposable
     private Dictionary<string, string>? _invite;
     public bool HoldAnswer { get; init; }
     public bool Reject { get; init; }
+    public int RejectionCode { get; init; } = 486;
     public int Port => ((IPEndPoint)_sip.Client.LocalEndPoint!).Port;
     public int ReceivedAudio, Cancelled, HungUp, Unregistered;
     public System.Collections.Concurrent.ConcurrentQueue<byte[]> ReceivedPayloads { get; } = new();
@@ -57,7 +58,8 @@ internal sealed class LoopbackPbx : IAsyncDisposable
                 {
                     _invite = h; Invited.TrySetResult(); await ReplyAsync(h, 180, "Ringing");
                     if (HoldAnswer) continue;
-                    if (Reject) { await ReplyAsync(h, 486, "Busy Here"); continue; }
+                    if (Reject) { await ReplyAsync(h, RejectionCode, RejectionCode switch
+                    { 404 => "Not Found", 484 => "Address Incomplete", 604 => "Does Not Exist Anywhere", _ => "Busy Here" }); continue; }
                     int peerRtp = int.Parse(text.Split("m=audio ")[1].Split(' ')[0]);
                     int ownRtp = ((IPEndPoint)_rtp.Client.LocalEndPoint!).Port;
                     int ownRtcp = ((IPEndPoint)_rtcp.Client.LocalEndPoint!).Port;

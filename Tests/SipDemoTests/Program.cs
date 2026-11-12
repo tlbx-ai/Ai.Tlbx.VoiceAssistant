@@ -107,9 +107,10 @@ foreach (var rate in new[] { AudioSampleRate.Rate16000, AudioSampleRate.Rate2400
     finally { File.Delete(path); }
 }
 
-foreach (bool reject in new[] { false, true })
+foreach (int code in new[] { 0, 404, 484, 486, 604 })
 {
-    await using var pbx = new LoopbackPbx { HoldAnswer = !reject, Reject = reject }; string path = await WriteConfig(pbx);
+    bool reject = code != 0;
+    await using var pbx = new LoopbackPbx { HoldAnswer = !reject, Reject = reject, RejectionCode = code }; string path = await WriteConfig(pbx);
     try
     {
         await using var session = new SipDemoSession(Config(path)); await session.PrepareAsync("123");
@@ -118,10 +119,11 @@ foreach (bool reject in new[] { false, true })
         if (!reject) cancellation.Cancel();
         try { await dialing; throw new InvalidOperationException("Call unexpectedly established."); }
         catch (OperationCanceledException) when (!reject) { }
-        catch (SipException e) when (reject && e.StatusCode == 486) { }
+        catch (SipException e) when (reject && e.StatusCode == code) { }
         await session.StopAsync();
         Require(session.Call!.Completion.IsCompletedSuccessfully && (reject || pbx.Cancelled == 1), "Call cleanup failed.");
-        Console.WriteLine(reject ? "PASS busy result and cleanup" : "PASS cancellation during ringing sends CANCEL and releases registration");
+        if (reject) Require(session.Call.Status.SipStatusCode == code && session.Call.Status.Error!.Contains(code.ToString()), "Native call failure disappeared during demo cleanup.");
+        Console.WriteLine(reject ? $"PASS SIP {code} failure remains visible after demo cleanup" : "PASS cancellation during ringing sends CANCEL and releases registration");
     }
     finally { File.Delete(path); }
 }
@@ -164,4 +166,4 @@ await using (var pbx = new LoopbackPbx())
     }
     finally { File.Delete(path); }
 }
-Console.WriteLine("7/7 SIP demo checks passed; no external services used.");
+Console.WriteLine("10/10 SIP demo checks passed; no external services used.");
