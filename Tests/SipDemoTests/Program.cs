@@ -36,7 +36,7 @@ static IConfiguration Config(string path) => new ConfigurationBuilder().AddInMem
 
 if (args.Contains("--browser"))
 {
-    await using var pbx = new LoopbackPbx();
+    await using var pbx = new LoopbackPbx { Reject = args.Contains("--reject"), RejectionCode = 404 };
     string path = await WriteConfig(pbx);
     try
     {
