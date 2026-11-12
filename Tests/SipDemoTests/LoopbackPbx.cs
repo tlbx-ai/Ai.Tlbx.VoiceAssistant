@@ -17,6 +17,7 @@ internal sealed class LoopbackPbx : IAsyncDisposable
     public bool Reject { get; init; }
     public int Port => ((IPEndPoint)_sip.Client.LocalEndPoint!).Port;
     public int ReceivedAudio, Cancelled, HungUp, Unregistered;
+    public System.Collections.Concurrent.ConcurrentQueue<byte[]> ReceivedPayloads { get; } = new();
     public TaskCompletionSource Invited { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
     public LoopbackPbx() { _loop = RunAsync(); _media = ReceiveAudioAsync(); }
     private async Task ReceiveAudioAsync()
@@ -28,6 +29,7 @@ internal sealed class LoopbackPbx : IAsyncDisposable
                 try
                 {
                     var packet = await _rtp.ReceiveAsync(_stop.Token);
+                    if (packet.Buffer.Length > 12) ReceivedPayloads.Enqueue(packet.Buffer[12..]);
                     if (packet.Buffer.Length > 12 && packet.Buffer.Skip(12).Any(b => b != 0xd5)) Interlocked.Increment(ref ReceivedAudio);
                 }
                 catch (SocketException error) when (error.SocketErrorCode is SocketError.ConnectionReset or SocketError.ConnectionRefused) { }

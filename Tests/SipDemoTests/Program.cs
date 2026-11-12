@@ -125,4 +125,43 @@ foreach (bool reject in new[] { false, true })
     }
     finally { File.Delete(path); }
 }
-Console.WriteLine("6/6 SIP demo checks passed; no external services used.");
+await using (var pbx = new LoopbackPbx())
+{
+    string path = await WriteConfig(pbx);
+    try
+    {
+        await using var session = new SipDemoSession(Config(path));
+        await session.PrepareAsync("123"); await session.DialAsync();
+        var provider = new ProbeProvider(AudioSampleRate.Rate24000);
+        await using var assistant = new Ai.Tlbx.VoiceAssistant.VoiceAssistant(session.Hardware!, provider);
+        await assistant.StartAsync(new OpenAiVoiceSettings());
+        await Eventually(() => provider.InputChunks > 0);
+        Require(await session.Hardware!.WaitForPlaybackDrainAsync(TimeSpan.FromSeconds(3)), "Initial probe did not drain.");
+        pbx.ReceivedPayloads.Clear();
+        byte[] markers = [0xfa, 0x7a, 0xea, 0x6a, 0x9a, 0x1a, 0x8a, 0x0a];
+        foreach (byte marker in markers)
+        {
+            // Independent A-law reference decoder; verify actual RTP payloads.
+            int a = marker ^ 0x55, segment = (a & 0x70) >> 4;
+            int magnitude = ((a & 15) << 4) + (segment == 0 ? 8 : 264);
+            if (segment > 1) magnitude <<= segment - 1;
+            short value = (short)((a & 0x80) != 0 ? magnitude : -magnitude);
+            byte[] pcm = new byte[14400 * 2]; // Eight 600-ms chunks arrive in a single AI burst.
+            for (int i = 0; i < 14400; i++) System.Buffers.Binary.BinaryPrimitives.WriteInt16LittleEndian(pcm.AsSpan(i * 2), value);
+            provider.OnAudioReceived!(Convert.ToBase64String(pcm));
+        }
+        Require(await session.Hardware.WaitForPlaybackDrainAsync(TimeSpan.FromSeconds(12)), "AI burst did not drain.");
+        await Task.Delay(100);
+        byte[] received = pbx.ReceivedPayloads.SelectMany(p => p).ToArray();
+        foreach (byte marker in markers)
+            Require(received.Count(b => b == marker) is >= 4700 and <= 4900, $"AI burst lost PCM section {marker:x2}: {received.Count(b => b == marker)}/4800 samples.");
+        var order = new List<byte>();
+        foreach (byte section in received.Where(markers.Contains).Chunk(160).Select(p => p.GroupBy(b => b).MaxBy(g => g.Count())!.Key))
+            if (order.Count == 0 || order[^1] != section) order.Add(section);
+        Require(order.SequenceEqual(markers), "AI burst changed section order.");
+        await assistant.StopAsync(); await session.StopAsync();
+        Console.WriteLine("PASS complete 4.8-second AI burst reaches RTP in order, including middle sections");
+    }
+    finally { File.Delete(path); }
+}
+Console.WriteLine("7/7 SIP demo checks passed; no external services used.");
