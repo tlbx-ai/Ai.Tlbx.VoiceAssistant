@@ -3,12 +3,12 @@
   <PropertyGroup>
     <TargetFramework>net11.0</TargetFramework>
     <Nullable>enable</Nullable>    
-    <SipProjectRoot Condition="'$(SipProjectRoot)' == ''">$(MSBuildThisFileDirectory)../../../Ai.Tlbx.Sip</SipProjectRoot>
+    <IsPackable>false</IsPackable>
   </PropertyGroup>
 
   <ItemGroup>
     <InternalsVisibleTo Include="SipDemoTests" />
-    <ProjectReference Include="$(SipProjectRoot)/src/Ai.Tlbx.VoiceAssistant.Sip/Ai.Tlbx.VoiceAssistant.Sip.csproj" />
+    <PackageReference Include="Ai.Tlbx.VoiceAssistant.Sip" Version="11.9.0" />
     <ProjectReference Include="../../Provider/Ai.Tlbx.VoiceAssistant.Provider.Mistral/Ai.Tlbx.VoiceAssistant.Provider.Mistral.csproj" />
     <PackageReference Include="Ai.Tlbx.Inference" Version="2.6.0" />
     <ProjectReference Include="..\..\Hardware\Ai.Tlbx.VoiceAssistant.Hardware.Web\Ai.Tlbx.VoiceAssistant.Hardware.Web.csproj" />

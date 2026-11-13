@@ -10,8 +10,11 @@ Voice conversations, transcription and speech translation for .NET 10/11. Compos
 
 ## Choose a mode
 
+For a ready-to-run browser demo, download the [Web demo ZIP](https://github.com/tlbx-ai/Ai.Tlbx.VoiceAssistant/releases/tag/web-demo-v11.9.0). It includes the SIP Call mode backed by `Ai.Tlbx.VoiceAssistant.Sip` 11.9.0 / `Ai.Tlbx.Sip` 1.0.0; see the [startup and SIP setup](Demo/Ai.Tlbx.VoiceAssistant.Demo.Web/README.md).
+
 | Goal | API / guide |
 |------|-------------|
+| Calls through a SIP PBX | [SIP Call in the Web demo](Demo/Ai.Tlbx.VoiceAssistant.Demo.Web/README.md) and [managed SIP libraries](https://github.com/tlbx-ai/Ai.Tlbx.Sip) |
 | Incoming/outgoing AI telephone calls | [Telnyx REST, provisioning and bidirectional audio](Telephony/Ai.Tlbx.VoiceAssistant.Telnyx/README.md) |
 | Voice conversation with tools | `VoiceAssistant` + a provider; [quick start](#quick-start-blazor-server) |
 | Browser audio direct to OpenAI | `OpenAiDirectRealtimeVoiceProvider`; server keeps credentials and tools |

@@ -43,6 +43,9 @@ try
     dotnet run --project Demo\Ai.Tlbx.VoiceAssistant.Demo.Console\Ai.Tlbx.VoiceAssistant.Demo.Console.csproj -c $Configuration --no-build -- --smoke-test
     Assert-LastCommandSucceeded "Console demo smoke test"
 
+    dotnet run --project Tests\SipDemoTests\SipDemoTests.csproj -c $Configuration --no-build
+    Assert-LastCommandSucceeded "SIP web demo integration tests"
+
     if (-not $SkipAot)
     {
         # Git for Windows also supplies link.exe. Always establish the MSVC

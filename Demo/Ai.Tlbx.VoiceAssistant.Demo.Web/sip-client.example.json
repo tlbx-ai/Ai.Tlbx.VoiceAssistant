@@ -1,0 +1,9 @@
+{
+  "Id": "demo",
+  "Registrar": "fritz.box",
+  "User": "YOUR_SIP_USER",
+  "Credentials": {
+    "Username": "YOUR_AUTH_USER",
+    "Password": "YOUR_SIP_PASSWORD"
+  }
+}

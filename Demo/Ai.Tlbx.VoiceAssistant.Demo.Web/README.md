@@ -2,6 +2,20 @@
 
 This is a Blazor Server demo for `Ai.Tlbx.VoiceAssistant`.
 
+## Download and run
+
+Download `Ai.Tlbx.VoiceAssistant.Demo.Web.11.9.0.zip` from the [Web demo release](https://github.com/tlbx-ai/Ai.Tlbx.VoiceAssistant/releases/tag/web-demo-v11.9.0) and extract it. The same framework-dependent archive runs on Windows and Linux with the **ASP.NET Core 11 runtime** installed. It contains the application and browser assets; it is not a NuGet library or a hosted public service.
+
+From the extracted directory:
+
+```sh
+dotnet Ai.Tlbx.VoiceAssistant.Demo.Web.dll --urls http://localhost:5080
+```
+
+Open `http://localhost:5080`. Set provider keys on the server or pass `--openai-key-file /secure/openai.txt`. For HTTPS, configure an ASP.NET Core certificate and use an HTTPS URL. For SIP, copy `sip-client.example.json` outside the extracted directory, replace the placeholder credentials and add `--Sip:ConfigFile /secure/client.secrets.json`. No provider keys or real PBX configuration are included; no registration or call starts automatically.
+
+Build the same archive from a clean checkout with `pwsh ./publish-web-demo.ps1`. It runs the repository's build/contracts/browser-audio/console checks and the ten local SIP integration cases before publishing the framework-dependent app. Toolkit NuGet versions are unchanged.
+
 ## Local startup
 
 Pass a local UTF-8 text file containing the OpenAI API key as an application argument:
@@ -15,9 +29,9 @@ transcription and Ai.Tlbx.Inference paths. Its contents are never added to the c
 line, logs or browser. No environment variables are changed. Without this parameter,
 the existing `OPENAI_API_KEY` fallback remains available in both demo and libraries.
 
-## Local SIP calls (.NET 11)
+## SIP calls (.NET 11)
 
-Keep `Ai.Tlbx.Sip` beside this checkout, or pass `-p:SipProjectRoot=<path>` when building. The Web demo references the local `Ai.Tlbx.VoiceAssistant.Sip` project; no SIP NuGet publication is required. Provider libraries retain their existing target frameworks; this demo requires .NET 11 for the managed SIP projects.
+The Web demo consumes the published `Ai.Tlbx.VoiceAssistant.Sip` 11.9.0 NuGet package (with `Ai.Tlbx.Sip` 1.0.0). No sibling SIP checkout is needed. The demo runs on ASP.NET Core 11; the SIP libraries themselves support .NET 10 and .NET 11.
 
 Set `Sip:ConfigFile` (application argument/configuration) or `SIP_CONFIG_FILE` to a server-side `SipClientConfig` JSON file outside Git. It accepts enum names and IP-address strings. Use a dedicated PBX identity; credentials stay on the server.
 
