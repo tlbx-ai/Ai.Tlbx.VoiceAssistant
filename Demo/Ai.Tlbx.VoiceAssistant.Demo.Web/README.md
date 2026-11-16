@@ -31,7 +31,7 @@ the existing `OPENAI_API_KEY` fallback remains available in both demo and librar
 
 ## SIP calls (.NET 11)
 
-The Web demo consumes the published `Ai.Tlbx.VoiceAssistant.Sip` 11.9.0 NuGet package (with `Ai.Tlbx.Sip` 1.0.0). No sibling SIP checkout is needed. The demo runs on ASP.NET Core 11; the SIP libraries themselves support .NET 10 and .NET 11.
+The source build consumes the published `Ai.Tlbx.VoiceAssistant.Sip` 11.11.0 NuGet package (with `Ai.Tlbx.Sip` 11.11.0). No sibling SIP checkout is needed. The demo runs on ASP.NET Core 11; the SIP libraries themselves support .NET 10 and .NET 11.
 
 Set `Sip:ConfigFile` (application argument/configuration) or `SIP_CONFIG_FILE` to a server-side `SipClientConfig` JSON file outside Git. It accepts enum names and IP-address strings. Use a dedicated PBX identity; credentials stay on the server.
 
