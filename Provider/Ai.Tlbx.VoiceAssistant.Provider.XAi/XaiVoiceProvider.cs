@@ -43,6 +43,7 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.XAi
         private readonly StringBuilder _currentAiMessage = new();
         private readonly StringBuilder _currentAudioTranscript = new();
         private string _currentResponseId = string.Empty;
+        private volatile bool _discardOutputAudio;
         private readonly Dictionary<string, PendingFunctionCall> _pendingFunctionCalls = new();
         private int _toolResultsPendingContinuation;
         private long _pendingInputAudioBytes;
@@ -279,6 +280,7 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.XAi
         /// <returns>A task representing the interrupt operation.</returns>
         public async Task SendInterruptAsync()
         {
+            _discardOutputAudio = true;
             if (!IsConnected)
             {
                 return;
@@ -431,6 +433,7 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.XAi
 
         private void ResetResponseState()
         {
+            _discardOutputAudio = false;
             _hasActiveResponse = false;
             _currentAiMessage.Clear();
             _currentAudioTranscript.Clear();
@@ -755,6 +758,8 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.XAi
 
         private async Task HandleAudioResponse(JsonElement root)
         {
+            if (_discardOutputAudio || (root.TryGetProperty("response_id", out var responseId) &&
+                responseId.GetString() != _currentResponseId)) return;
             if (root.TryGetProperty("delta", out var delta))
             {
                 var audioData = delta.GetString();
@@ -1021,6 +1026,7 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.XAi
                 _currentAiMessage.Clear();
                 _currentAudioTranscript.Clear();
                 _currentResponseId = idElement.GetString() ?? "";
+                _discardOutputAudio = false;
                 _hasActiveResponse = true;
                 _logAction(LogLevel.Info, $"New response started: {_currentResponseId}");
             }
@@ -1028,6 +1034,10 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.XAi
 
         private async Task HandleResponseDone(JsonElement root)
         {
+            if (root.TryGetProperty("response", out var completedResponse) &&
+                completedResponse.TryGetProperty("id", out var completedId) &&
+                completedId.GetString() != _currentResponseId) return;
+            _discardOutputAudio = true;
             _hasActiveResponse = false;
             _logAction(LogLevel.Info, "Response completed");
 
@@ -1118,7 +1128,7 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.XAi
             try
             {
                 _logAction(LogLevel.Info, "Speech detected - user interruption");
-
+                _discardOutputAudio = true;
                 OnInterruptDetected?.Invoke();
 
                 if (_hasActiveResponse)

@@ -20,6 +20,24 @@ dotnet add package Ai.Tlbx.VoiceAssistant.Hardware.Web
 
 OpenAI live voice on Blazor Server should use `Ai.Tlbx.VoiceAssistant.Provider.OpenAi.AspNetCore` for direct browser-to-OpenAI WebRTC audio. This package remains the PCM hardware path for Google, xAI, microphone tests, and transcription workflows.
 
+## PCM playback
+
+Chunks are submitted through a single ordered queue. Playback starts when 60 ms
+of PCM is buffered, or after a maximum 60 ms wait for a shorter utterance. The
+same bounded prebuffer applies after a real underrun; contiguous chunks keep
+sample-exact transitions. A drain request flushes short buffered tails.
+
+`WaitForPlaybackDrainAsync` places a fence behind prior submissions and waits for
+acknowledgement from the playback worklet, including its final fade. Browser
+output latency is then allowed for before completion. This confirms rendered
+output, not an acoustic measurement of the speaker. Timeout, interruption or
+failed delivery returns `false`.
+
+Clearing playback changes its generation. Late chunks and late clears cannot
+alter a newer generation. Sequence checks reject duplicate or missing chunks;
+they do not guess a new order for provider audio that has no sequence metadata.
+These PCM controls do not change direct WebRTC playback.
+
 ## Requirements
 
 - Modern browser with Web Audio API support

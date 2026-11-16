@@ -125,6 +125,12 @@ class PlaybackProcessor extends AudioWorkletProcessor {
         this._writeIndex = 0;
         this._readIndex = 0;
         this._bufferFill = 0; // How many samples are currently in the buffer
+        this._prebufferSamples = Math.round(sampleRate * 0.060);
+        this._prebufferRemaining = this._prebufferSamples;
+        this._buffering = true;
+        this._writtenSamples = 0;
+        this._playedSamples = 0;
+        this._drains = [];
         this._isStopping = false; // Flag to indicate stop request
 
         // Upsampling state: linear interpolation from 24kHz to 48kHz
@@ -145,11 +151,22 @@ class PlaybackProcessor extends AudioWorkletProcessor {
         this._enhancementEnabled = false; // Disabled by default for stability
 
         this.port.onmessage = (event) => {
-            if (event.data.command === 'stop') {
+            if (event.data.command === 'drain') {
+                this._drains.push({ requestId: event.data.requestId, target: this._writtenSamples });
+                // A completion fence also flushes short utterances below the prebuffer threshold.
+                this._prebufferRemaining = 0;
+                this._notifyDrains();
+            } else if (event.data.command === 'stop') {
                 console.log('[PlaybackProcessor] Received stop command');
                 this._isStopping = true; // Pause immediately until new audio arrives.
             } else if (event.data.command === 'clear') {
                  console.log('[PlaybackProcessor] Received clear command');
+                 for (const drain of this._drains) this.port.postMessage({ requestId: drain.requestId, drained: false });
+                 this._drains = [];
+                 this._writtenSamples = 0;
+                 this._playedSamples = 0;
+                 this._buffering = true;
+                 this._prebufferRemaining = this._prebufferSamples;
                  this._readIndex = this._writeIndex;
                  this._bufferFill = 0;
                  this._isStopping = false;
@@ -161,15 +178,14 @@ class PlaybackProcessor extends AudioWorkletProcessor {
                  this._prevSample = 0;
                  this._eqHistory.fill(0);
                  this._lastInputSample = 0; // Reset upsampling state
-                 this._buffer.fill(0); // Clear the entire buffer
+                 // Resetting fill/read indices makes old PCM unreachable; avoid zeroing 34 MB on the audio thread.
             } else if (event.data.command === 'setEnhancement') {
                 this._enhancementEnabled = !!event.data.enabled;
                 console.log('[PlaybackProcessor] Audio enhancement:', this._enhancementEnabled ? 'enabled' : 'disabled');
             }
              else if (event.data.audioData) {
                 this._handleAudioData(event.data.audioData);
-                // Realtime speech should reach the speakers on the next render quantum.
-                // Do not add a client-side jitter buffer before starting or resuming.
+                // Start after a small bounded prebuffer; never wait indefinitely for short speech.
                 this._isStopping = false; // Resume playing if stopped
             }
         };
@@ -209,7 +225,22 @@ class PlaybackProcessor extends AudioWorkletProcessor {
 
         // Save last sample for interpolation with next chunk
         this._lastInputSample = inputData[inputData.length - 1];
+        if (this._bufferFill === 0 && this._inUnderrun) {
+            this._buffering = true;
+            this._prebufferRemaining = this._prebufferSamples;
+        }
         this._bufferFill += upsampledLength;
+        this._writtenSamples += upsampledLength;
+    }
+
+    _notifyDrains() {
+        if (this._drains.length === 0) return;
+        this._drains = this._drains.filter(drain => {
+            if (this._playedSamples < drain.target || this._fadeOutRemaining > 0 ||
+                (this._bufferFill === 0 && this._lastOutputSample !== 0)) return true;
+            this.port.postMessage({ requestId: drain.requestId, drained: true });
+            return false;
+        });
     }
 
     // Audio enhancement: Simple interpolation for smoother playback
@@ -275,7 +306,11 @@ class PlaybackProcessor extends AudioWorkletProcessor {
 
         for (let i = 0; i < channel.length; i++) {
             let sample;
-            if (this._bufferFill > 0) {
+            const waiting = this._buffering && this._bufferFill > 0 &&
+                this._bufferFill < this._prebufferSamples && this._prebufferRemaining > 0 && this._drains.length === 0;
+            if (waiting) this._prebufferRemaining--;
+            if (this._bufferFill > 0 && !waiting) {
+                this._buffering = false;
                 if (this._inUnderrun) {
                     // Resume immediately, including during the tail of a short gap.
                     this._transitionStart = this._lastOutputSample;
@@ -286,6 +321,7 @@ class PlaybackProcessor extends AudioWorkletProcessor {
                 sample = this._buffer[this._readIndex];
                 this._readIndex = (this._readIndex + 1) % BUFFER_SIZE;
                 this._bufferFill--;
+                this._playedSamples++;
                 if (this._enhancementEnabled) sample = this._enhanceAudio(sample);
                 if (this._fadeInIndex < this._transitionSamples) {
                     const gain = ++this._fadeInIndex / this._transitionSamples;
@@ -295,6 +331,8 @@ class PlaybackProcessor extends AudioWorkletProcessor {
                 // A gap exists only when a render sample actually has no PCM.
                 if (!this._inUnderrun) {
                     this._inUnderrun = true;
+                    this._buffering = true;
+                    this._prebufferRemaining = this._prebufferSamples;
                     this._transitionStart = this._lastOutputSample;
                     this._fadeOutRemaining = this._transitionSamples;
                    }
@@ -305,6 +343,7 @@ class PlaybackProcessor extends AudioWorkletProcessor {
             channel[i] = sample;
             this._lastOutputSample = channel[i];
         }
+        this._notifyDrains();
         return true;
     }
 }

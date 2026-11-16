@@ -3,15 +3,18 @@ import vm from 'node:vm';
 import fs from 'node:fs/promises';
 
 const source = await fs.readFile(new URL('../../Hardware/Ai.Tlbx.VoiceAssistant.Hardware.Web/wwwroot/js/audio-processor.js', import.meta.url), 'utf8');
-function create(rate = 48000) {
+function create(rate = 48000, buffered = false) {
     let Playback;
     vm.runInNewContext(source, {
         sampleRate: rate, Float32Array, ArrayBuffer,
         console: { log() {}, warn() {} },
-        AudioWorkletProcessor: class { constructor() { this.port = {}; } },
+        AudioWorkletProcessor: class { constructor() { this.messages = []; this.port = { postMessage: message => this.messages.push(message) }; } },
         registerProcessor(name, ctor) { if (name === 'playback-processor') Playback = ctor; }
     });
-    return new Playback();
+    const p = new Playback();
+    // Legacy signal/fade assertions isolate resampling; buffering is tested below.
+    if (!buffered) { p._prebufferSamples = 0; p._prebufferRemaining = 0; }
+    return p;
 }
 function send(p, samples) { p.port.onmessage({ data: { audioData: samples } }); }
 function render(p, count) {
@@ -101,4 +104,104 @@ vm.runInContext("setPlaybackEqPreset('clarity')", eq);
 assert.equal(vm.runInContext('currentEqPreset', eq), 'clarity');
 vm.runInContext("setPlaybackEqPreset('flat')", eq);
 assert.equal(vm.runInContext('currentEqPreset', eq), 'flat');
-console.log('Browser playback: sample-exact chunk continuity, 5 ms underrun/resume, immediate audio, clear/empty packets and Flat/Clarity passed.');
+console.log('Browser playback: sample-exact chunk continuity, 5 ms underrun/resume, unbuffered signal checks, clear/empty packets and Flat/Clarity passed.');
+
+// Real default: 60 ms target and a 60 ms maximum hold for short utterances.
+const buffered = create(48000, true);
+send(buffered, constant(480, .4));
+assert.ok(render(buffered, 960).every(x => x === 0));
+send(buffered, constant(480, .4));
+assert.ok(render(buffered, 960).every(x => x === 0));
+send(buffered, constant(480, .4));
+assert.ok(render(buffered, 128).some(x => x !== 0), 'start as soon as 60 ms is queued');
+const short = create(48000, true); send(short, constant(120, .4));
+assert.ok(render(short, 2880).every(x => x === 0));
+assert.ok(render(short, 128).some(x => x !== 0), 'short audio starts after at most 60 ms');
+
+const fence = create(48000, true); send(fence, constant(24000, .4));
+fence.port.onmessage({ data: { command: 'drain', requestId: 1 } });
+render(fence, 4800);
+assert.equal(fence.messages.length, 0, '100 ms is not a completion acknowledgement for 1 s of PCM');
+render(fence, 43200);
+assert.equal(fence.messages.length, 0, 'wait for the final transition tail');
+render(fence, 256);
+assert.deepEqual(fence.messages.map(x => [x.requestId, x.drained]), [[1, true]]);
+const tiny = create(48000, true); send(tiny, constant(120, .4));
+tiny.port.onmessage({ data: { command: 'drain', requestId: 2 } });
+assert.ok(render(tiny, 128).some(x => x !== 0), 'drain flushes short buffered tails immediately');
+tiny.port.onmessage({ data: { command: 'clear' } });
+assert.deepEqual(tiny.messages.map(x => [x.requestId, x.drained]), [[2, false]], 'clear cancels pending fences');
+
+// Same average input rate, alternating 30/10 ms arrivals: prebuffer absorbs jitter.
+const jitter = create(48000, true);
+let underruns = 0;
+for (let packet = 0; packet < 100; packet++) {
+    send(jitter, constant(480, .4));
+    const frames = packet % 2 === 0 ? 1440 : 480;
+    for (let i = 0; i < frames; i += 128) {
+        const wasPlaying = !jitter._inUnderrun;
+        render(jitter, Math.min(128, frames - i));
+        if (wasPlaying && jitter._inUnderrun) underruns++;
+    }
+}
+assert.equal(underruns, 0, 'bounded arrival jitter does not interrupt continuous speech');
+console.log('Default 60 ms prebuffer, bounded short tails, jitter absorption and rendered drain fences passed.');
+
+// Exercise the public JS delivery functions, including calls suspended in resume().
+function deliveryContext() {
+    const posted = [], node = { port: { postMessage(message) { posted.push(message); } } };
+    const context = vm.createContext({
+        window: { addEventListener() {} }, console: { log() {}, warn() {}, error() {} },
+        setTimeout, clearTimeout, Float32Array, ArrayBuffer, Uint8Array, Int16Array,
+        atob: value => Buffer.from(value, 'base64').toString('binary')
+    });
+    vm.runInContext(eqSource, context);
+    context.testNode = node;
+    vm.runInContext("audioContext = { state: 'running', sampleRate: 48000 }; playbackWorkletNode = testNode; playbackNodeConnected = true;", context);
+    return { context, posted, node, run: code => vm.runInContext(code, context) };
+}
+const d = deliveryContext();
+d.context.packet = Buffer.from(new Int16Array(480).fill(4000).buffer).toString('base64');
+let resume;
+d.context.pause = new Promise(resolve => { resume = resolve; });
+d.run('ensureAudioContextResumed = async () => { await pause; return true; }');
+const first = d.run('playAudio(packet, 24000, 1, 1)');
+const second = d.run('playAudio(packet, 24000, 1, 2)');
+await new Promise(resolve => setImmediate(resolve));
+assert.equal(d.posted.filter(x => x.audioData).length, 0);
+resume();
+assert.deepEqual(await Promise.all([first, second]), [true, true]);
+assert.equal(d.posted.filter(x => x.audioData).length, 2, 'overlapping callers are serialized');
+assert.equal(await d.run('playAudio(packet, 24000, 1, 2)'), false, 'duplicate sequence rejected');
+assert.equal(await d.run('waitForPlaybackDrain(1, 100)'), false, 'sequence failure cannot report success');
+assert.equal(await d.run('playAudio(packet, 24000, 2, 1)'), true);
+const beforeLateStop = d.posted.length;
+await d.run('stopAudioPlayback(2)');
+assert.equal(d.posted.length, beforeLateStop, 'late clear for already activated generation does not erase new audio');
+assert.equal(await d.run('playAudio(packet, 24000, 1, 3)'), false, 'old generation rejected');
+assert.equal(await d.run('playAudio(packet, 24000, 2, 3)'), false, 'missing sequence rejected rather than playing out of order');
+
+let resumeOld;
+d.context.pause = new Promise(resolve => { resumeOld = resolve; });
+const old = d.run('playAudio(packet, 24000, 3, 1)');
+await new Promise(resolve => setImmediate(resolve));
+await d.run('stopAudioPlayback(4)');
+const audioBefore = d.posted.filter(x => x.audioData).length;
+resumeOld();
+assert.equal(await old, false, 'clear invalidates a chunk awaiting AudioContext resume');
+assert.equal(d.posted.filter(x => x.audioData).length, audioBefore);
+assert.equal(await d.run('playAudio(packet, 24000, 4, 1)'), true);
+let completed = false;
+const drained = d.run('waitForPlaybackDrain(4, 1000)').then(value => { completed = true; return value; });
+await new Promise(resolve => setImmediate(resolve));
+assert.equal(completed, false);
+const request = d.posted.at(-1);
+assert.equal(request.command, 'drain');
+d.node.port.onmessage({ data: { requestId: request.requestId, drained: true } });
+assert.equal(await drained, true, 'only the worklet acknowledgement completes drain');
+const cancelled = d.run('waitForPlaybackDrain(4, 1000)');
+await new Promise(resolve => setImmediate(resolve));
+await d.run('stopAudioPlayback(5)');
+assert.equal(await cancelled, false, 'clear cancels drain');
+assert.equal(await d.run('waitForPlaybackDrain(5, 10)'), false, 'unresponsive worklet times out');
+console.log('JS delivery: serialized callers, stale/duplicate/missing sequences, late clear, resume race, drain acknowledgement and timeout passed.');

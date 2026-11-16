@@ -13,7 +13,15 @@ namespace Ai.Tlbx.VoiceAssistant.Hardware.Web
         private IJSObjectReference? _audioModule;
 
         // Channel-based audio queue - eliminates race conditions with Task.Run
-        private readonly Channel<(string Audio, int SampleRate)> _audioChannel;
+        private sealed record PlaybackCommand(string? Audio, int SampleRate, long Generation, long Sequence,
+            TaskCompletionSource<bool>? Drain = null, int TimeoutMs = 0);
+        private readonly Channel<PlaybackCommand> _audioChannel;
+        private readonly object _playbackLock = new();
+        private readonly HashSet<TaskCompletionSource<bool>> _playbackDrains = new();
+        private static long _generationSource = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+        private long _playbackGeneration = Interlocked.Increment(ref _generationSource);
+        private long _playbackSequence;
+        private long _failedPlaybackGeneration = -1;
         private Task? _audioProcessorTask;
         private CancellationTokenSource? _audioProcessorCts;
 
@@ -46,7 +54,7 @@ namespace Ai.Tlbx.VoiceAssistant.Hardware.Web
             _jsRuntime = jsRuntime;
 
             // Unbounded channel ensures we never block on write, single reader for ordering
-            _audioChannel = Channel.CreateUnbounded<(string, int)>(
+            _audioChannel = Channel.CreateUnbounded<PlaybackCommand>(
                 new UnboundedChannelOptions { SingleReader = true });
         }
 
@@ -278,7 +286,9 @@ namespace Ai.Tlbx.VoiceAssistant.Hardware.Web
                 return false;
 
             // Non-blocking write to channel - processor task handles playback
-            return _audioChannel.Writer.TryWrite((base64EncodedPcm16Audio, sampleRate));
+            lock (_playbackLock)
+                return _audioChannel.Writer.TryWrite(new(base64EncodedPcm16Audio, sampleRate,
+                    _playbackGeneration, ++_playbackSequence));
         }
 
         private void StartAudioProcessor()
@@ -295,8 +305,21 @@ namespace Ai.Tlbx.VoiceAssistant.Hardware.Web
         {
             try
             {
-                await foreach (var (audio, sampleRate) in _audioChannel.Reader.ReadAllAsync(ct))
+                await foreach (var command in _audioChannel.Reader.ReadAllAsync(ct))
                 {
+                    if (command.Generation != Volatile.Read(ref _playbackGeneration))
+                    {
+                        command.Drain?.TrySetResult(false);
+                        continue;
+                    }
+                    if (command.Drain != null)
+                    {
+                        if (command.Drain.Task.IsCompleted) continue;
+                        // Send the fence after all earlier submissions, but keep consuming so
+                        // a clear or later audio never waits behind a suspended audio device.
+                        _ = CompletePlaybackDrainAsync(command, ct);
+                        continue;
+                    }
                     if (!_playbackSessionLogged)
                     {
                         Log(LogLevel.Info, "Audio playback session started");
@@ -307,17 +330,21 @@ namespace Ai.Tlbx.VoiceAssistant.Hardware.Web
                     {
                         if (_audioModule != null)
                         {
-                            await _audioModule.InvokeVoidAsync("playAudio", audio, sampleRate);
+                            var accepted = await _audioModule.InvokeAsync<bool>("playAudio", ct,
+                                command.Audio, command.SampleRate, command.Generation, command.Sequence);
+                            if (!accepted && command.Generation == Volatile.Read(ref _playbackGeneration))
+                                throw new InvalidOperationException("Browser rejected an audio chunk.");
                         }
                     }
                     catch (JSDisconnectedException)
                     {
                         // Circuit disconnected - drain remaining items and stop
-                        while (_audioChannel.Reader.TryRead(out _)) { }
+                        while (_audioChannel.Reader.TryRead(out var pending)) pending.Drain?.TrySetResult(false);
                         break;
                     }
                     catch (Exception ex)
                     {
+                        Volatile.Write(ref _failedPlaybackGeneration, command.Generation);
                         Log(LogLevel.Error, $"Error playing audio chunk: {ex.Message}");
                         AudioError?.Invoke(this, $"Error playing audio: {ex.Message}");
                         // Continue processing next chunk
@@ -508,26 +535,25 @@ namespace Ai.Tlbx.VoiceAssistant.Hardware.Web
 
         public async Task ClearAudioQueueAsync()
         {
-            // Drain the channel
-            int queuedItems = 0;
-            while (_audioChannel.Reader.TryRead(out _))
+            long generation;
+            lock (_playbackLock)
             {
-                queuedItems++;
+                generation = Interlocked.Increment(ref _generationSource);
+                Volatile.Write(ref _playbackGeneration, generation);
+                _playbackSequence = 0;
+                foreach (var drain in _playbackDrains) drain.TrySetResult(false);
+                _playbackDrains.Clear();
             }
-
+            // The single consumer discards old-generation commands. Never read from
+            // its channel here: that breaks the SingleReader contract.
             _playbackSessionLogged = false;
-
-            if (queuedItems > 0)
-            {
-                Log(LogLevel.Info, $"Cleared audio queue with {queuedItems} pending items");
-            }
 
             // Stop any current audio playback in JS
             if (_audioModule != null)
             {
                 try
                 {
-                    await _audioModule.InvokeVoidAsync("stopAudioPlayback");
+                    await _audioModule.InvokeVoidAsync("stopAudioPlayback", generation);
                 }
                 catch (JSDisconnectedException)
                 {
@@ -757,28 +783,43 @@ namespace Ai.Tlbx.VoiceAssistant.Hardware.Web
         public async Task<bool> WaitForPlaybackDrainAsync(TimeSpan? timeout = null)
         {
             var maxWait = timeout ?? TimeSpan.FromSeconds(30);
-            var startTime = DateTime.UtcNow;
-
-            // Wait for channel to drain (TryPeek returns false when empty)
-            while (_audioChannel.Reader.TryPeek(out _))
+            if (_audioModule == null || maxWait <= TimeSpan.Zero) return false;
+            var completion = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+            lock (_playbackLock)
             {
-                if (DateTime.UtcNow - startTime > maxWait)
-                {
-                    Log(LogLevel.Warn, "WaitForPlaybackDrain timed out waiting for channel");
-                    return false;
-                }
-                await Task.Delay(50);
+                if (!_audioChannel.Writer.TryWrite(new(null, 0, _playbackGeneration, _playbackSequence,
+                    completion, (int)Math.Min(int.MaxValue, maxWait.TotalMilliseconds)))) return false;
+                _playbackDrains.Add(completion);
             }
+            try { return await completion.Task.WaitAsync(maxWait); }
+            catch (TimeoutException) { completion.TrySetResult(false); return false; }
+            finally { lock (_playbackLock) _playbackDrains.Remove(completion); }
+        }
 
-            // Small grace period for JS audio to finish playing
-            await Task.Delay(100);
-
-            Log(LogLevel.Info, $"Playback drain complete after {(DateTime.UtcNow - startTime).TotalMilliseconds:F0}ms");
-            return true;
+        private async Task CompletePlaybackDrainAsync(PlaybackCommand command, CancellationToken ct)
+        {
+            try
+            {
+                var drained = _audioModule != null && await _audioModule.InvokeAsync<bool>(
+                    "waitForPlaybackDrain", ct, command.Generation, command.TimeoutMs);
+                command.Drain!.TrySetResult(drained && command.Generation == Volatile.Read(ref _playbackGeneration)
+                    && command.Generation != Volatile.Read(ref _failedPlaybackGeneration));
+            }
+            catch (Exception ex)
+            {
+                Log(LogLevel.Warn, $"Playback drain failed: {ex.Message}");
+                command.Drain!.TrySetResult(false);
+            }
         }
 
         async ValueTask IAsyncDisposable.DisposeAsync()
         {
+            lock (_playbackLock)
+            {
+                _audioChannel.Writer.TryComplete();
+                foreach (var drain in _playbackDrains) drain.TrySetResult(false);
+                _playbackDrains.Clear();
+            }
             // Stop the audio processor task
             if (_audioProcessorCts != null)
             {

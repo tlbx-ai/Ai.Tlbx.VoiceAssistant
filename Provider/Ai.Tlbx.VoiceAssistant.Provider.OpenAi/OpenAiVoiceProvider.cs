@@ -891,6 +891,14 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi
 
         private async Task HandleAudioResponse(JsonElement root)
         {
+            // Cancellation can leave already-sent deltas in the socket. Do not
+            // relabel those as a new hardware generation after the queue was cleared.
+            var responseId = TryGetString(root, "response_id");
+            lock (_responseGate)
+            {
+                if (_discardResponseTools || (responseId != null &&
+                    (_completedResponses.Contains(responseId) || responseId != _currentResponseId))) return;
+            }
             // Handle audio response - forward to audio hardware via callback
             if (root.TryGetProperty("delta", out var delta))
             {

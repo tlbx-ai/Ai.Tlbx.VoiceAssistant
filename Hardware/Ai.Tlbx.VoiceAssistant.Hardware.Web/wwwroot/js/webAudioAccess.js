@@ -23,6 +23,62 @@ let playbackEqNodes = [];  // BiquadFilterNode chain for playback EQ
 let currentEqPreset = 'flat'; // Neutral default; Clarity remains available explicitly
 // Note: We properly stop streams when done - don't hog the microphone!
 
+// One ordered submission stream; clear invalidates even calls awaiting resume().
+let playbackGeneration = 0;
+let playbackSequence = 0;
+let playbackFault = false;
+let playbackSubmission = Promise.resolve();
+let playbackRequestId = 0;
+const playbackDrains = new Map();
+
+function attachPlaybackNotifications(node) {
+    node.port.onmessage = ({ data }) => {
+        const pending = playbackDrains.get(data.requestId);
+        if (!pending) return;
+        playbackDrains.delete(data.requestId);
+        clearTimeout(pending.timer);
+        if (data.drained && !playbackFault && pending.generation === playbackGeneration) {
+            // The worklet has rendered the fence. Allow the browser/device output
+            // pipeline to present that final quantum before reporting completion.
+            const latency = (audioContext?.baseLatency || 0) + (audioContext?.outputLatency || 0)
+                + 128 / (audioContext?.sampleRate || 48000);
+            setTimeout(() => pending.resolve(!playbackFault && pending.generation === playbackGeneration), latency * 1000);
+        } else pending.resolve(false);
+    };
+}
+
+function invalidatePlayback(generation) {
+    if (generation < playbackGeneration) return false;
+    playbackGeneration = generation;
+    playbackSequence = 0;
+    playbackFault = false;
+    for (const pending of playbackDrains.values()) {
+        clearTimeout(pending.timer);
+        pending.resolve(false);
+    }
+    playbackDrains.clear();
+    playbackWorkletNode?.port.postMessage({ command: 'clear' });
+    isPlayingAudio = false;
+    return true;
+}
+
+function waitForPlaybackDrain(generation = playbackGeneration, timeoutMs = 30000) {
+    return playbackSubmission.then(() => requestPlaybackDrain(generation, timeoutMs));
+}
+
+function requestPlaybackDrain(generation, timeoutMs) {
+    if (generation !== playbackGeneration || playbackFault || !playbackWorkletNode || audioContext?.state !== 'running')
+        return Promise.resolve(false);
+    const node = playbackWorkletNode;
+    attachPlaybackNotifications(node);
+    const requestId = ++playbackRequestId;
+    return new Promise(resolve => {
+        const timer = setTimeout(() => { playbackDrains.delete(requestId); resolve(false); }, timeoutMs);
+        playbackDrains.set(requestId, { resolve, timer, generation });
+        node.port.postMessage({ command: 'drain', requestId });
+    });
+}
+
 // --- Playback EQ Presets ---
 // Each preset defines an array of BiquadFilterNode configurations.
 // Voice/Audio Engineer presets target specific frequency issues.
@@ -993,7 +1049,15 @@ function getPlaybackEqPresets() {
 }
 
 // Main function to play audio using the worklet
-async function playAudio(base64Audio, sampleRate = 24000) {
+function playAudio(base64Audio, sampleRate = 24000, generation = playbackGeneration, sequence = null) {
+    const submission = playbackSubmission.then(() => submitPlayback(base64Audio, sampleRate, generation, sequence));
+    playbackSubmission = submission.catch(() => false);
+    return submission;
+}
+
+async function submitPlayback(base64Audio, sampleRate, generation, sequence) {
+     if (generation < playbackGeneration) return false;
+     if (generation > playbackGeneration) invalidatePlayback(generation);
      // console.log(`[js] Received playAudio request, sampleRate: ${sampleRate}, data: ${base64Audio.substring(0,30)}...`);
      
      // Mark that we're playing audio (for echo cancellation)
@@ -1006,6 +1070,7 @@ async function playAudio(base64Audio, sampleRate = 24000) {
          isPlayingAudio = false;
          return false; // Indicate failure
      }
+      if (generation !== playbackGeneration) return false;
       if (!playbackWorkletNode) {
          console.error("Cannot play audio: Playback worklet node not initialized.");
          dotNetReference?.invokeMethodAsync('OnAudioError', 'Playback system not initialized.');
@@ -1014,16 +1079,15 @@ async function playAudio(base64Audio, sampleRate = 24000) {
           return false;
      }
 
-     // 2. Validate Sample Rate (Currently handled by assuming 24kHz input matches context)
-     if (sampleRate !== audioContext.sampleRate) {
-         console.warn(`Audio sample rate mismatch: Input is ${sampleRate}Hz, Context is ${audioContext.sampleRate}Hz. Audio quality may be affected. Implement resampling if needed.`);
-         // TODO: Implement resampling here if needed (e.g., using OfflineAudioContext or a library)
-         // For now, we proceed, but quality might be bad if rates differ significantly.
-     }
+     // The worklet currently resamples 24 kHz PCM to the requested 48 kHz context.
+     // Reject unsupported formats rather than silently changing speech duration.
+     if (sampleRate !== 24000 || audioContext.sampleRate !== 48000) { playbackFault = true; return false; }
+     if (sequence !== null && sequence !== playbackSequence + 1) { playbackFault = true; return false; }
 
      // 3. Decode Base64 and Convert PCM16 to Float32
      const float32Audio = pcm16Base64ToFloat32(base64Audio);
      if (!float32Audio) {
+         playbackFault = true;
          console.error("Failed to decode audio data.");
          dotNetReference?.invokeMethodAsync('OnAudioError', 'Failed to decode received audio data.');
          return false;
@@ -1033,8 +1097,10 @@ async function playAudio(base64Audio, sampleRate = 24000) {
      // 4. Send data to the PlaybackProcessor asynchronously to prevent blocking main thread
      try {
          playbackWorkletNode.port.postMessage({ audioData: float32Audio.buffer }, [float32Audio.buffer]);
+         if (sequence !== null) playbackSequence = sequence;
          return true;
      } catch (error) {
+         playbackFault = true;
          console.error("Error sending audio data to PlaybackProcessor:", error);
          dotNetReference?.invokeMethodAsync('OnAudioError', `Error sending audio data for playback: ${error.message}`);
          return false; // Indicate failure
@@ -1042,45 +1108,11 @@ async function playAudio(base64Audio, sampleRate = 24000) {
 }
 
 // Function to stop audio playback and clear buffers
-async function stopAudioPlayback() {
-    console.log("Attempting to stop audio playback.");
-    
-    // Mark that playback has stopped
-    isPlayingAudio = false;
-
-    if (!audioContext || !playbackWorkletNode) {
-        console.warn("Cannot stop playback: Audio context or playback node not initialized.");
-        return;
-    }
-
-    // Send 'clear' message to the worklet to immediately stop and clear its buffer
-    try {
-        console.log("Sending 'clear' command to PlaybackProcessor.");
-        playbackWorkletNode.port.postMessage({ command: 'clear' });
-        
-        // Disconnect EQ chain and worklet to immediately stop any audio in the pipeline
-        disconnectPlaybackChain();
-
-        // Reconnect after a small delay to be ready for next playback
-        setTimeout(() => {
-            if (playbackWorkletNode && audioContext && audioContext.state === 'running') {
-                try {
-                    connectPlaybackChain();
-                    console.log("PlaybackProcessor reconnected after stop.");
-                } catch (e) {
-                    console.error("Error reconnecting playback node:", e);
-                }
-            }
-        }, 50);
-    } catch (error) {
-        console.error("Error sending 'clear' command to PlaybackProcessor:", error);
-    }
-
-    // Note: The PlaybackProcessor should handle stopping itself when it receives 'clear'
-    // or when its buffer runs dry after a 'stop' command (if we used 'stop' instead of 'clear').
-    // We don't need to manage individual AudioBufferSourceNodes anymore.
-
-    console.log("Playback stop requested.");
+async function stopAudioPlayback(generation = playbackGeneration + 1) {
+    if (generation <= playbackGeneration) return;
+    // Keep the node connected: disconnect/reconnect used to discard up to 50 ms
+    // of the next response and could reconnect an obsolete playback chain.
+    invalidatePlayback(generation);
 }
 
 // --- Microphone Testing --- (Optional - Adapt if needed)
@@ -1239,6 +1271,7 @@ window.audioInterop = {
     stopRecording,
     playAudio,
     stopAudioPlayback,
+    waitForPlaybackDrain,
     setDotNetReference,
     startMicTest,
     stopMicTest,
@@ -1268,6 +1301,7 @@ export {
     stopRecording,
     playAudio,
     stopAudioPlayback,
+    waitForPlaybackDrain,
     setDotNetReference,
     startMicTest,
     stopMicTest,

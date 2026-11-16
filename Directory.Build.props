@@ -1,8 +1,8 @@
 <Project>
   <!-- Centralized version management for all projects -->
   <PropertyGroup>
-    <Version>11.10.0</Version>
-    <PackageReleaseNotes>Explicit opt-in first assistant turn via VoiceAssistant.StartConversationAsync and the OpenAI Realtime WebSocket provider. Includes confirmed configuration readiness, single-start reservation, cancellation and session isolation; existing startup remains silent.</PackageReleaseNotes>
+    <Version>11.11.0</Version>
+    <PackageReleaseNotes>Web PCM playback now uses a bounded 60 ms prebuffer and render-confirmed playback completion. Ordered delivery and generation checks prevent stale chunks and late clears from corrupting new playback; OpenAI and xAI reject audio from cancelled or superseded responses. All VoiceAssistant libraries and SIP packages share version 11.11.0.</PackageReleaseNotes>
     <AssemblyVersion>$(Version)</AssemblyVersion>
     <FileVersion>$(Version)</FileVersion>
     
