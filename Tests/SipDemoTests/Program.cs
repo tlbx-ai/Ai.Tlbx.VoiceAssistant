@@ -34,6 +34,72 @@ static async Task<string> WriteConfig(LoopbackPbx pbx)
 }
 static IConfiguration Config(string path) => new ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?> { ["Sip:ConfigFile"] = path }).Build();
 
+// Explicit opt-in: paid OpenAI response, localhost SIP peer only, no real phone number.
+if (args.Contains("--conversation-start-live"))
+{
+    using var deadline = new CancellationTokenSource(TimeSpan.FromSeconds(60));
+    await using var pbx = new LoopbackPbx { SilentInput = true };
+    string path = await WriteConfig(pbx);
+    try
+    {
+        await using var session = new SipDemoSession(Config(path));
+        await session.PrepareAsync("123", deadline.Token); await session.DialAsync(deadline.Token);
+        Require(session.Call!.Status.State == SipCallState.Established, "Call must be accepted first.");
+        var traces = new System.Collections.Concurrent.ConcurrentQueue<Ai.Tlbx.VoiceAssistant.Provider.OpenAi.Models.OpenAiRealtimeResponseTrace>();
+        var usage = new System.Collections.Concurrent.ConcurrentQueue<UsageReport>();
+        var messages = new System.Collections.Concurrent.ConcurrentQueue<ChatMessage>();
+        var done = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var provider = new OpenAiVoiceProvider();
+        await using var assistant = new Ai.Tlbx.VoiceAssistant.VoiceAssistant(session.Hardware!, provider);
+        assistant.OnMessageAdded = messages.Enqueue; assistant.OnUsageReceived = usage.Enqueue;
+        var previousError = provider.OnError;
+        provider.OnError = error => { previousError?.Invoke(error); done.TrySetException(new InvalidOperationException(error)); };
+        provider.OnResponseTraceCompleted = trace => { traces.Enqueue(trace); done.TrySetResult(); };
+        await assistant.StartAsync(new OpenAiVoiceSettings
+        {
+            UseEphemeralKey = false, ClientResponseControl = true, MaxTokens = 200,
+            AppendToolCallPreambleInstructions = false,
+            Instructions = "Du bist ein KI-Assistent. Eröffne das Gespräch auf Deutsch mit einer kurzen Vorstellung als KI-Assistent und frage danach, welches Anliegen die angerufene Person hat. Höchstens zwei kurze Sätze."
+        }, deadline.Token);
+        while (!assistant.IsConversationStartReady) await Task.Delay(20, deadline.Token);
+        await Task.Delay(250, deadline.Token);
+        Require(traces.IsEmpty && messages.IsEmpty, "StartAsync alone generated a response.");
+        pbx.ReceivedPayloads.Clear();
+        var request = await assistant.StartConversationAsync(deadline.Token);
+        await done.Task.WaitAsync(deadline.Token);
+        Require(await session.Hardware!.WaitForPlaybackDrainAsync(TimeSpan.FromSeconds(20)), "Opening playback failed to drain.");
+        await Task.Delay(150, deadline.Token);
+        byte[] received = pbx.ReceivedPayloads.SelectMany(p => p).ToArray();
+        Require(received.Count(b => b is not (0xd5 or 0x55)) > 4000, "No substantial AI audio reached the SIP peer.");
+        Require(traces.Count == 1 && usage.Count > 0 && messages.Any(m => m.Role == ChatMessage.AssistantRole), "Missing normal transcript, response or final usage.");
+        string output = Path.GetFullPath(".artifacts/conversation-start"); Directory.CreateDirectory(output);
+        using (var wav = new BinaryWriter(File.Create(Path.Combine(output, "sip-opening.wav"))))
+        {
+            wav.Write(System.Text.Encoding.ASCII.GetBytes("RIFF")); wav.Write(36 + received.Length * 2);
+            wav.Write(System.Text.Encoding.ASCII.GetBytes("WAVEfmt ")); wav.Write(16); wav.Write((short)1); wav.Write((short)1);
+            wav.Write(8000); wav.Write(16000); wav.Write((short)2); wav.Write((short)16);
+            wav.Write(System.Text.Encoding.ASCII.GetBytes("data")); wav.Write(received.Length * 2);
+            foreach (byte sample in received)
+            {
+                int a = sample ^ 0x55, segment = (a & 0x70) >> 4;
+                int magnitude = ((a & 15) << 4) + (segment == 0 ? 8 : 264);
+                if (segment > 1) magnitude <<= segment - 1;
+                wav.Write((short)((a & 0x80) != 0 ? magnitude : -magnitude));
+            }
+        }
+        await File.WriteAllTextAsync(Path.Combine(output, "live-result.json"), JsonSerializer.Serialize(new
+        {
+            request, responseCount = traces.Count, usageCount = usage.Count, rtpSamples = received.Length,
+            transcript = messages.Where(m => m.Role == ChatMessage.AssistantRole).Select(m => m.Content).ToArray(),
+            responseStatus = traces.Single().Status
+        }), deadline.Token);
+        await assistant.StopAsync(); await session.StopAsync();
+        Console.WriteLine($"PASS real AI opening: {request}; {received.Length} SIP PCMA samples, transcript, final usage and playback drain verified; WAV: {output}");
+    }
+    finally { File.Delete(path); }
+    return;
+}
+
 if (args.Contains("--browser"))
 {
     await using var pbx = new LoopbackPbx { Reject = args.Contains("--reject"), RejectionCode = 404 };

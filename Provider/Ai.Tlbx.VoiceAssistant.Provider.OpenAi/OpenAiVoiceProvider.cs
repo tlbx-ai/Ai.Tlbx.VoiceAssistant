@@ -21,7 +21,7 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi
     /// <summary>
     /// OpenAI voice provider implementation for real-time conversation via WebSocket.
     /// </summary>
-    public sealed partial class OpenAiVoiceProvider : IVoiceProvider, ITextOutputProvider, IVisualInputProvider
+    public sealed partial class OpenAiVoiceProvider : IVoiceProvider, ITextOutputProvider, IVisualInputProvider, IConversationStartProvider
     {
         private const int CONNECTION_TIMEOUT_MS = 10000;
         private const int DISCONNECTION_TIMEOUT_MS = 5000;
@@ -261,6 +261,7 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi
                 _currentResponseId = "";
                 _pendingCreateEventId = null;
                 _pendingCancelEventId = null;
+                ResetConversationStart();
             }
             _hasActiveResponse = false;
             _responseRequested = false;
@@ -315,7 +316,11 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi
         {
             try
             {
-                lock (_responseGate) { _sessionGeneration++; _turnGeneration++; _responseRequested = false; }
+                lock (_responseGate)
+                {
+                    _sessionGeneration++; _turnGeneration++; _responseRequested = false; _sessionConfigured = false;
+                    _conversationStartCancellation.Cancel();
+                }
                 OnStatusChanged?.Invoke("Disconnecting...");
 
                 await StopAudioSenderAsync();
@@ -544,6 +549,7 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi
 
             var jsonMessage = JsonSerializer.Serialize(sessionConfig, OpenAiJsonContextIndented.Default.SessionUpdateMessage);
             var requested = RecordRequestedSession(jsonMessage, "websocket", instructions);
+            lock (_responseGate) { _sessionConfigured = false; _pendingSessionConfigurations++; }
             await SendMessageAsync(jsonMessage);
             RecordSentSession(requested);
             _logAction(LogLevel.Info, "Session configuration sent to OpenAI");
@@ -693,8 +699,13 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi
             await _sendLock.WaitAsync(token);
             try
             {
-                if (generation != _sessionGeneration || (expectedTurn.HasValue && expectedTurn != _turnGeneration) || socket != _webSocket || socket?.State != WebSocketState.Open)
-                    throw new InvalidOperationException("Realtime transport is unavailable or belongs to an expired session.");
+                token.ThrowIfCancellationRequested();
+                lock (_responseGate)
+                {
+                    if (generation != _sessionGeneration || (expectedTurn.HasValue && expectedTurn != _turnGeneration) || socket != _webSocket || socket?.State != WebSocketState.Open)
+                        throw new InvalidOperationException("Realtime transport is unavailable or belongs to an expired session.");
+                    if (createReason == "conversation_start") _conversationStartSendStarted = true;
+                }
                 await socket.SendAsync(new ArraySegment<byte>(Encoding.UTF8.GetBytes(message)), WebSocketMessageType.Text, true, token);
                 ObserveProtocol(message, OpenAiRealtimeProtocolDirection.Sent, createReason);
             }
@@ -765,6 +776,11 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi
                         _logAction(LogLevel.Info, "Session created by OpenAI");
                         break;
                     case "session.updated":
+                        lock (_responseGate)
+                        {
+                            if (_pendingSessionConfigurations > 0)
+                                _sessionConfigured = --_pendingSessionConfigurations == 0;
+                        }
                         _logAction(LogLevel.Info, "Session updated by OpenAI");
                         break;
                     case "response.created":
@@ -794,7 +810,11 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi
                         // Erst response.done beendet die Antwort und enthält sämtliche finalen Toolargumente.
                         break;
                     case "input_audio_buffer.speech_started":
-                        _userSpeaking = true;
+                        lock (_responseGate)
+                        {
+                            _userSpeaking = true;
+                            InvalidateUnsentConversationStart();
+                        }
                         if (!InterruptOnSpeech) break;
                         _logAction(LogLevel.Info, "User started speaking - server detected interruption");
                         lock (_responseGate)
@@ -808,10 +828,18 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi
                         await HandleInterruptionSafeAsync();
                         break;
                     case "input_audio_buffer.speech_stopped":
-                        _userSpeaking = false;
+                        lock (_responseGate) _userSpeaking = false;
                         _logAction(LogLevel.Info, "User stopped speaking");
                         break;
                     case "input_audio_buffer.committed":
+                        lock (_responseGate)
+                        {
+                            if (_settings?.ClientResponseControl != true && _settings?.TurnDetection.CreateResponse == true)
+                            {
+                                _serverResponsePending = true;
+                                InvalidateUnsentConversationStart();
+                            }
+                        }
                         if (_settings?.ClientResponseControl == true)
                         {
                             lock (_responseGate)
@@ -984,6 +1012,8 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi
                 {
                     if (_pendingCreateEventId != null && TryGetString(error, "event_id") == _pendingCreateEventId)
                     { _pendingCreateEventId = null; _hasActiveResponse = false; }
+                    if (_conversationStartRequestId != null && TryGetString(error, "event_id") == _conversationStartRequestId)
+                        _logAction(LogLevel.Info, $"conversation_start rejected session={_sessionGeneration} request={_conversationStartRequestId} code={TryGetString(error, "code")}");
                 }
                 
                 // Don't report cancellation errors when there's no active response
@@ -1060,14 +1090,25 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi
                 var id = idElement.GetString() ?? "";
                 if (_completedResponses.Contains(id) || (_hasActiveResponse && _currentResponseId == id)) return;
                 if (response.TryGetProperty("conversation_id", out var conversation) && conversation.ValueKind == JsonValueKind.Null) return;
-                _pendingCreateEventId = null;
                 lock (_responseGate)
                 {
+                    _serverResponsePending = false;
+                    _conversationHasResponse = true;
+                    var startRequest = response.TryGetProperty("metadata", out var metadata)
+                        ? TryGetString(metadata, "conversation_start_request_id") : null;
+                    if (_conversationStartRequestId != null && startRequest == _conversationStartRequestId)
+                    {
+                        _conversationStartResponseId = id;
+                        _logAction(LogLevel.Info, $"conversation_start accepted session={_sessionGeneration} request={startRequest} response={id}");
+                    }
+                    else if (_pendingCreateEventId != null && _pendingCreateEventId == _conversationStartRequestId)
+                        _turnGeneration++; // An automatic response won the race; invalidate an unsent opening.
+                    _pendingCreateEventId = null;
                     if (_pendingToolBatches > 0) { _turnGeneration++; _pendingToolBatches = 0; _responseRequested = false; }
                     _discardResponseTools = _userSpeaking && InterruptOnSpeech;
+                    _currentResponseId = id;
+                    _hasActiveResponse = true;
                 }
-                _currentResponseId = id;
-                _hasActiveResponse = true;
                 _currentResponseOutputText.Clear();
                 _currentResponseAudioTranscript = null;
                 _currentResponseTrace = new OpenAiRealtimeResponseTrace
@@ -1096,6 +1137,8 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi
                 _pendingCreateEventId = null;
             }
             _logAction(LogLevel.Info, "Response completed");
+            if (doneId == _conversationStartResponseId)
+                _logAction(LogLevel.Info, $"conversation_start {TryGetString(doneResponse, "status")} session={_sessionGeneration} request={_conversationStartRequestId} response={doneId}");
 
             UsageReport? report = null;
             OpenAiRealtimeResponseTrace? trace = _currentResponseTrace;
@@ -1159,21 +1202,7 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi
                 createReason = _responseCreateReason;
                 eventId = _pendingCreateEventId = "create_" + Guid.NewGuid().ToString("N");
             }
-            try
-            {
-                var json = "{\"type\":\"response.create\",\"event_id\":\"" + eventId + "\"}";
-                _logAction(LogLevel.Info, "[Tool] Sending response.create");
-                await SendMessageAsync(json, expectedGeneration: session, createReason: createReason, expectedTurn: turn);
-            }
-            catch
-            {
-                lock (_responseGate)
-                {
-                    if (session == _sessionGeneration && _pendingCreateEventId == eventId)
-                    { _hasActiveResponse = false; _pendingCreateEventId = null; }
-                }
-                throw;
-            }
+            await SendReservedResponseAsync(session, turn, eventId, createReason);
         }
 
         private void PopulateResponseTrace(JsonElement root, OpenAiRealtimeResponseTrace trace, UsageReport? usage)
@@ -1287,7 +1316,7 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi
 
         private static string? TryGetString(JsonElement element, string propertyName)
         {
-            return element.TryGetProperty(propertyName, out var property) && property.ValueKind == JsonValueKind.String
+            return element.ValueKind == JsonValueKind.Object && element.TryGetProperty(propertyName, out var property) && property.ValueKind == JsonValueKind.String
                 ? property.GetString()
                 : null;
         }
@@ -1385,6 +1414,7 @@ namespace Ai.Tlbx.VoiceAssistant.Provider.OpenAi
                 }
 
                 _sendLock.Dispose();
+                _conversationStartCancellation.Dispose();
                 _isDisposed = true;
                 _logAction(LogLevel.Info, "OpenAI voice provider disposed");
             }

@@ -1,5 +1,18 @@
 # AI Voice Assistant Toolkit
 
+## Explicit conversation opening (11.10.0)
+
+`VoiceAssistant.SupportsConversationStart` reports the optional `IConversationStartProvider`
+capability. After application-level call acceptance, media readiness, completed assistant
+startup and `IsConversationStartReady`, call `await assistant.StartConversationAsync(callLifetimeToken)`
+to request one first assistant turn using existing instructions/history. The returned
+string identifies the sent request; it does not confirm server acceptance or playback.
+`StartAsync` remains silent. Omit the action in silent companion mode. Busy/not-ready or
+repeated starts throw `InvalidOperationException`; unsupported providers throw
+`NotSupportedException`. Stop on hangup; never automatically retry an uncertain send.
+The server-side OpenAI Realtime provider implements this capability starting at 11.10.0.
+See the repository README for the readiness example and complete lifecycle contract.
+
 **Real-time voice conversations with AI in .NET — OpenAI, Google Gemini, and xAI Grok in one unified API.**
 
 [![NuGet](https://img.shields.io/nuget/v/Ai.Tlbx.VoiceAssistant.svg?label=nuget&color=blue)](https://www.nuget.org/packages/Ai.Tlbx.VoiceAssistant/)

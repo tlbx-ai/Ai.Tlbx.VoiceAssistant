@@ -2,6 +2,24 @@
 
 OpenAI Realtime and GPT-Live providers for the AI Voice Assistant Toolkit.
 
+## Explicit first turn (11.10.0)
+
+The server-side `OpenAiVoiceProvider` implements `IConversationStartProvider`.
+After `VoiceAssistant.StartAsync`, confirmed call/media readiness and
+`assistant.IsConversationStartReady`, explicitly call
+`await assistant.StartConversationAsync(callLifetimeToken)`. This sends native
+`response.create` through the existing connection/response coordinator and preserves
+session instructions, context, tools, output mode, gateway and authentication.
+The returned request ID means sent, not server-accepted, completed or played.
+An idle, configured connection with no prior response/start attempt is required;
+busy/repeated requests are rejected rather than queued. Cancellation after reservation
+consumes the attempt, and uncertain sends are never retried automatically. Stop on hangup.
+Prefer `ClientResponseControl = true` to coordinate VAD locally. Normal transcripts,
+audio, interruption, tool continuation, traces and final usage include the opening.
+`StartAsync` alone remains silent; omit the action in silent companion mode.
+GPT-Live and direct-browser providers do not implement this capability.
+See the repository README for the full example and lifecycle table.
+
 ## Audio input with text-only responses (11.3)
 
 OpenAI Realtime supports a silent conversation companion on both the WebSocket provider

@@ -44,3 +44,4 @@ nupkg/
 tmpclaude-*
 .logs/
 /artifacts/
+/.artifacts/

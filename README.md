@@ -88,6 +88,67 @@ frame is sent immediately; direct OpenAI WebRTC audio bypasses this relay.
 
 ## Quick Start (Blazor Server)
 
+### Explicit first assistant turn (11.10.0)
+
+Use `Ai.Tlbx.VoiceAssistant` and `Ai.Tlbx.VoiceAssistant.Provider.OpenAi` **11.10.0 or later**.
+The existing SIP adapter 11.9.0 remains compatible; it does not need a new release.
+The optional `IConversationStartProvider` capability is implemented by the server-side
+`OpenAiVoiceProvider` (Realtime WebSocket). Google, xAI, GPT-Live, transcription and
+direct-browser providers currently report `SupportsConversationStart == false`;
+calling the action on them throws `NotSupportedException`, without provider fallback.
+
+```csharp
+// Application code: await the accepted SIP call and confirm its audio output first.
+// settings.Instructions already contains the introduction and conversation guide.
+await assistant.StartAsync(settings, callLifetimeToken);
+if (!silentCompanionMode)
+{
+    if (!assistant.SupportsConversationStart)
+        throw new NotSupportedException("Explicit opening is unavailable for this provider.");
+    using var ready = CancellationTokenSource.CreateLinkedTokenSource(callLifetimeToken);
+    ready.CancelAfter(TimeSpan.FromSeconds(10));
+    while (!assistant.IsConversationStartReady)
+        await Task.Delay(20, ready.Token); // Includes OpenAI session.updated confirmation.
+    string requestId = await assistant.StartConversationAsync(callLifetimeToken);
+}
+// Normal incoming speech, tool calls and barge-in continue through the same session.
+```
+
+Neither `StartAsync` nor `ConnectProviderAsync` requests an opening automatically.
+The explicit action uses the current instructions/history without a fabricated user
+utterance, image, extra session or overridden gateway. Formulation remains a model task.
+It preserves the configured output mode: text-only remains text-only. In a silent
+companion application, omit the action entirely if no first turn is desired.
+
+| Situation | Result |
+|---|---|
+| Before completed startup/configuration, during speech, a pending/active response or tool work | `InvalidOperationException`; no queued greeting |
+| Two starts, or a start after any previous response | `InvalidOperationException`; at most one opening attempt per connection |
+| Cancelled before reservation | Cancellation; the opening remains available |
+| Cancellation/stop/disconnect after reservation, or a send failure | No automatic retry; the attempt is consumed until a new connection |
+| Speech or an automatic response wins before the reserved send | Unsent opening is rejected; the existing response is preserved |
+| Speech after sending | Existing interruption settings apply; no special cancellation to force an opening |
+| Reconnect | Fresh start allowance; requests from the old connection cannot be sent into it |
+
+Success returns the **sent transport request ID**, not server acceptance, generated
+completion or SIP playback. A server-side VAD race may still reject a sent request;
+observe normal errors and never retry an uncertain outcome automatically. Prefer
+`ClientResponseControl = true` for library-coordinated VAD/response creation.
+Cancellation after sending does not retract the turn; use normal interrupt/stop.
+Bind the call lifetime to hangup and call `StopAsync` immediately when a call ends.
+
+`OnMessageAdded`, audio playback, `OnUsageReceived`, response traces and playback drain
+use the existing paths. OpenAI `OnProtocolEvent` records reason `conversation_start`;
+routine logs correlate session generation, request and response IDs with requested,
+accepted, rejected, aborted/uncertain and final states without logging the guide.
+
+Deterministic contracts run with `--conversation-start-only`. The opt-in paid audio
+acceptance `dotnet run --project Tests/SipDemoTests -c Release -- --conversation-start-live`
+uses `OPENAI_API_KEY`, a silent localhost SIP peer (no real phone number), and saves
+decoded **received RTP audio** to `.artifacts/conversation-start/sip-opening.wav`.
+
+### Blazor setup
+
 **1. Install packages:**
 ```bash
 dotnet add package Ai.Tlbx.VoiceAssistant

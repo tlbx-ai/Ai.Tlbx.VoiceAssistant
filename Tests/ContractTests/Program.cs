@@ -18,6 +18,8 @@ using Ai.Tlbx.VoiceAssistant.Provider.XAi;
 using Ai.Tlbx.VoiceAssistant.Provider.XAi.Models;
 using Ai.Tlbx.VoiceAssistant.Provider.XAi.Protocol;
 
+if (args.Contains("--conversation-start-only")) { await ConversationStartTests.RunAsync(); return; }
+
 if (args.Contains("--live-contracts-only")) { await OpenAiLiveTests.RunAsync(); await OpenAiDirectLiveTests.RunAsync(); return; }
 if (args.Contains("--voice-catalog-only")) { OpenAiVoiceCatalogTests.Run(); await OpenAiVoiceCatalogTests.VerifyPreflightAsync(); return; }
 if (args.Contains("--hybrid-only")) { await OpenAiLiveTests.RunHybridAsync(); await DemoHandoffTests.RunAsync(); return; }
@@ -85,6 +87,7 @@ if (args.Contains("--live-gpt-live-smoke", StringComparer.Ordinal))
 await ConversationSupportTests.RunAsync();
 await OpenAiRealtimeToolContinuationTests.RunAsync();
 await OpenAiRealtimeResponseControlTests.RunAsync();
+await ConversationStartTests.RunAsync();
 if (args.Contains("--realtime-tools-only", StringComparer.Ordinal)) return;
 await OpenAiLiveTests.RunAsync();
 await OpenAiDirectLiveTests.RunAsync();
@@ -812,6 +815,7 @@ sealed class CaptureHttpMessageHandler : HttpMessageHandler
 
 sealed class ContractAudioHardware : IAudioHardwareAccess
 {
+    public int PlayedAudioCount { get; private set; }
     public int StopRecordingCalls { get; private set; }
 
     public event EventHandler<string>? AudioError
@@ -824,7 +828,7 @@ sealed class ContractAudioHardware : IAudioHardwareAccess
     public Task<bool> StartRecordingAudio(
         MicrophoneAudioReceivedEventHandler audioDataReceivedHandler,
         AudioSampleRate targetSampleRate = AudioSampleRate.Rate24000) => Task.FromResult(true);
-    public bool PlayAudio(string base64EncodedPcm16Audio, int sampleRate) => true;
+    public bool PlayAudio(string base64EncodedPcm16Audio, int sampleRate) { PlayedAudioCount++; return true; }
     public Task<bool> StopRecordingAudio()
     {
         StopRecordingCalls++;

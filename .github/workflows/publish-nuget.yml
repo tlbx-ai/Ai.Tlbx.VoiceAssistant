@@ -7,6 +7,10 @@ on:
         description: Exact version already committed in Directory.Build.props
         required: true
         type: string
+      packages:
+        description: Comma-separated package IDs to publish (empty publishes the full toolkit)
+        required: false
+        type: string
 
 permissions:
   contents: read
@@ -56,8 +60,20 @@ jobs:
         run: ./verify-release.ps1
 
       - name: Pack toolkit packages
+        env:
+          RELEASE_PACKAGES: ${{ inputs.packages }}
         run: |
           $projects = @(Get-ChildItem Provider,Hardware,Telephony,WebUi -Recurse -Filter '*.csproj')
+          if (-not [string]::IsNullOrWhiteSpace($env:RELEASE_PACKAGES)) {
+            $requested = @($env:RELEASE_PACKAGES.Split(',') | ForEach-Object { $_.Trim() } | Select-Object -Unique)
+            $projects = @($projects | Where-Object {
+              [xml]$projectXml = Get-Content $_.FullName
+              $id = @($projectXml.Project.PropertyGroup.PackageId | Where-Object { $_ }) | Select-Object -First 1
+              if (-not $id) { $id = $_.BaseName }
+              $id -in $requested
+            })
+            if ($projects.Count -ne $requested.Count) { throw 'Every requested package ID must match one toolkit project.' }
+          }
           foreach ($project in $projects) {
             dotnet pack $project.FullName -c Release --no-build --output artifacts/nuget
             if ($LASTEXITCODE -ne 0) { throw "Packing failed: $($project.Name)" }

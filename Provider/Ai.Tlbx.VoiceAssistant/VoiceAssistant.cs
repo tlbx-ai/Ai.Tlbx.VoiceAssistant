@@ -27,6 +27,63 @@ namespace Ai.Tlbx.VoiceAssistant
         private readonly ChatHistoryManager _chatHistory;
         private readonly UsageManager _usageManager;
         private readonly Action<LogLevel, string> _logAction;
+        private readonly object _conversationStartGate = new();
+        private CancellationTokenSource _conversationStartLifetime = new();
+        private bool _conversationStartReady;
+        private long _conversationStartEpoch;
+
+        /// <summary>Whether this provider implements the opt-in first-turn capability.</summary>
+        public bool SupportsConversationStart => _provider is IConversationStartProvider;
+
+        /// <summary>A readiness snapshot; the application must also confirm call acceptance and audio-output readiness.</summary>
+        public bool IsConversationStartReady
+        {
+            get { lock (_conversationStartGate) return _conversationStartReady &&
+                _provider is IConversationStartProvider { IsConversationStartReady: true }; }
+        }
+
+        /// <summary>
+        /// Explicitly requests the first assistant turn from the existing instructions and history.
+        /// Call only after StartAsync/ConnectProviderAsync and application-level media readiness.
+        /// Returns a sent request ID, not a playback or server-acceptance confirmation.
+        /// Unsupported providers throw NotSupportedException; busy/not-ready/repeated starts throw InvalidOperationException.
+        /// </summary>
+        public async Task<string> StartConversationAsync(CancellationToken cancellationToken = default)
+        {
+            if (_provider is not IConversationStartProvider starter)
+                throw new NotSupportedException("The selected voice provider does not support explicit conversation start.");
+            CancellationTokenSource linked;
+            lock (_conversationStartGate)
+            {
+                ObjectDisposedException.ThrowIf(_isDisposed, this);
+                if (!_conversationStartReady || !IsProviderConnected)
+                    throw new InvalidOperationException("Complete assistant startup and confirm media readiness before starting a conversation.");
+                linked = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken, _conversationStartLifetime.Token);
+            }
+            using (linked) return await starter.StartConversationAsync(linked.Token).ConfigureAwait(false);
+        }
+
+        private long SuspendConversationStart()
+        {
+            lock (_conversationStartGate)
+            {
+                _conversationStartReady = false;
+                _conversationStartLifetime.Cancel();
+                return ++_conversationStartEpoch;
+            }
+        }
+
+        private void EnableConversationStart(long startupEpoch)
+        {
+            lock (_conversationStartGate)
+            {
+                if (startupEpoch != _conversationStartEpoch)
+                    throw new OperationCanceledException("Assistant startup was superseded or stopped.");
+                _conversationStartLifetime.Dispose();
+                _conversationStartLifetime = new CancellationTokenSource();
+                _conversationStartReady = true;
+            }
+        }
         
         // Pre-connect audio buffer
         private ConcurrentQueue<string>? _preConnectBuffer;
@@ -222,6 +279,7 @@ namespace Ai.Tlbx.VoiceAssistant
         /// <returns>A task representing the start operation.</returns>
         public async Task StartAsync(IVoiceSettings settings, CancellationToken cancellationToken)
         {
+            var startupEpoch = SuspendConversationStart();
             if (_provider == null)
             {
                 throw new InvalidOperationException("Cannot start voice assistant: no provider configured. VoiceAssistant was created for mic testing only.");
@@ -320,6 +378,8 @@ namespace Ai.Tlbx.VoiceAssistant
                 _lastUsageUpdateTime = DateTime.UtcNow;
 
                 ReportStatus("Voice assistant started and recording");
+                cancellationToken.ThrowIfCancellationRequested();
+                EnableConversationStart(startupEpoch);
                 _logAction(LogLevel.Info, "Voice assistant started successfully");
             }
             catch (Exception ex)
@@ -335,6 +395,7 @@ namespace Ai.Tlbx.VoiceAssistant
 
         private async Task CleanupFailedStartAsync()
         {
+            SuspendConversationStart();
             var shouldStopRecording = IsRecording || _preConnectBuffer != null;
             _preConnectBuffer = null;
             _droppedPreConnectAudioChunks = 0;
@@ -453,6 +514,7 @@ namespace Ai.Tlbx.VoiceAssistant
         /// <returns>A task representing the stop operation.</returns>
         public async Task StopAsync()
         {
+            SuspendConversationStart();
             try
             {
                 if (IsDirectBrowserProvider)
@@ -503,6 +565,7 @@ namespace Ai.Tlbx.VoiceAssistant
         /// </summary>
         public async Task ConnectProviderAsync(IVoiceSettings settings)
         {
+            var startupEpoch = SuspendConversationStart();
             if (_provider == null)
                 throw new InvalidOperationException("Cannot connect: no provider configured.");
 
@@ -527,6 +590,12 @@ namespace Ai.Tlbx.VoiceAssistant
                     _isInitialized = true;
                     _isConnecting = false;
                     ReportStatus("Connected (idle)");
+                    if (_provider is IConversationStartProvider and not IStartupHistoryVoiceProvider)
+                    {
+                        var history = _chatHistory.GetMessages();
+                        var count = history.Count > 0 && history[^1].Role == ChatMessage.AssistantRole ? history.Count - 1 : history.Count;
+                        if (count > 0) await _provider.InjectConversationHistoryAsync(history.Take(count));
+                    }
                     _logAction(LogLevel.Info, "Provider connected (idle, not recording)");
                 }
                 else
@@ -534,6 +603,7 @@ namespace Ai.Tlbx.VoiceAssistant
                     await _provider.UpdateSettingsAsync(settings);
                     _logAction(LogLevel.Info, "Provider settings updated");
                 }
+                EnableConversationStart(startupEpoch);
             }
             catch (Exception ex)
             {
@@ -1069,6 +1139,8 @@ namespace Ai.Tlbx.VoiceAssistant
             if (_isDisposed)
                 return;
 
+            SuspendConversationStart();
+
             try
             {
                 if (_isInitialized)
@@ -1097,6 +1169,7 @@ namespace Ai.Tlbx.VoiceAssistant
                 await _hardwareAccess.DisposeAsync();
                 
                 _isDisposed = true;
+                _conversationStartLifetime.Dispose();
                 _logAction(LogLevel.Info, "Voice assistant disposed");
             }
             catch (Exception ex)

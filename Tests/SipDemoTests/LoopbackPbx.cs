@@ -14,6 +14,7 @@ internal sealed class LoopbackPbx : IAsyncDisposable
     private IPEndPoint? _peer;
     private Dictionary<string, string>? _invite;
     public bool HoldAnswer { get; init; }
+    public bool SilentInput { get; init; }
     public bool Reject { get; init; }
     public int RejectionCode { get; init; } = 486;
     public int Port => ((IPEndPoint)_sip.Client.LocalEndPoint!).Port;
@@ -44,7 +45,15 @@ internal sealed class LoopbackPbx : IAsyncDisposable
         {
             while (!_stop.IsCancellationRequested)
             {
-                var packet = await _sip.ReceiveAsync(_stop.Token); _peer = packet.RemoteEndPoint;
+                UdpReceiveResult packet;
+                try { packet = await _sip.ReceiveAsync(_stop.Token); }
+                catch (SocketException error) when (error.SocketErrorCode is SocketError.ConnectionReset or SocketError.ConnectionRefused)
+                {
+                    // Windows reports a prior peer teardown's ICMP on the next UDP receive.
+                    // The fake PBX must keep serving the remaining local test clients.
+                    continue;
+                }
+                _peer = packet.RemoteEndPoint;
                 string text = Encoding.UTF8.GetString(packet.Buffer);
                 var lines = text.Split("\r\n");
                 if (lines[0].StartsWith("SIP/")) continue;
@@ -71,7 +80,7 @@ internal sealed class LoopbackPbx : IAsyncDisposable
                         byte[] audio = new byte[172]; audio[0] = 0x80; audio[1] = 8;
                         BinaryPrimitives.WriteUInt16BigEndian(audio.AsSpan(2), i);
                         BinaryPrimitives.WriteUInt32BigEndian(audio.AsSpan(4), (uint)i * 160);
-                        BinaryPrimitives.WriteUInt32BigEndian(audio.AsSpan(8), 42); audio.AsSpan(12).Fill(0x80);
+                        BinaryPrimitives.WriteUInt32BigEndian(audio.AsSpan(8), 42); audio.AsSpan(12).Fill(SilentInput ? (byte)0xd5 : (byte)0x80);
                         await _rtp.SendAsync(audio, new IPEndPoint(IPAddress.Loopback, peerRtp), _stop.Token);
                         await Task.Delay(20, _stop.Token);
                     }
