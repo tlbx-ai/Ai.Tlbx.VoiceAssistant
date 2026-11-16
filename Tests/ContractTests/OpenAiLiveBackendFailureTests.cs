@@ -58,9 +58,14 @@ internal static partial class OpenAiLiveTests
         var errors = new ConcurrentQueue<string>();
         var received = new List<JsonObject>();
         var failed = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        var finalUsageObserved = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         var tool = new BudgetTool(outputs, earlyRejection ? failed.Task : null);
         await using var provider = new OpenAiLiveProvider("test-key");
         provider.OnError = error => { errors.Enqueue(error); failed.TrySetResult(); };
+        provider.OnEventReceived = message =>
+        {
+            if (message["type"]?.GetValue<string>() == "session.closed") finalUsageObserved.TrySetResult();
+        };
 
         var batchIndex = 0;
         async Task BatchAsync(WebSocket socket)
@@ -102,6 +107,9 @@ internal static partial class OpenAiLiveTests
                 if (type == "session.close")
                 {
                     await WriteAsync(socket, """{"type":"session.closed","reason":"close_requested","usage":{"seconds":1}}""", timeout.Token);
+                    // Disposing the server WebSocket immediately can reset the connection before the
+                    // final frame reaches the client on Windows. Wait for actual protocol consumption.
+                    await finalUsageObserved.Task.WaitAsync(timeout.Token);
                     return;
                 }
             }
