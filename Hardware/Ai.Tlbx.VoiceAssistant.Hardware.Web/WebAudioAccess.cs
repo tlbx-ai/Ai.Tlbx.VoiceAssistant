@@ -27,6 +27,7 @@ namespace Ai.Tlbx.VoiceAssistant.Hardware.Web
 
         private bool _isRecording = false;
         private bool _playbackSessionLogged = false;
+        private bool _playbackSmoothingEnabled = true;
         
         // Add these fields for recording        
         private MicrophoneAudioReceivedEventHandler? _audioDataReceivedHandler;
@@ -116,6 +117,8 @@ namespace Ai.Tlbx.VoiceAssistant.Hardware.Web
                 {
                     var objRef = DotNetObjectReference.Create(this);
                     await _audioModule.InvokeVoidAsync("setDotNetReference", objRef);
+                    if (!await SetPlaybackSmoothingEnabledAsync(_playbackSmoothingEnabled))
+                        throw new InvalidOperationException("Could not initialize playback smoothing.");
                     Log(LogLevel.Info, "Successfully set DotNet reference");
                 }
             }
@@ -726,6 +729,30 @@ namespace Ai.Tlbx.VoiceAssistant.Hardware.Web
         {
             await Task.CompletedTask;
             return _diagnosticLevel;
+        }
+
+        /// <summary>Whether 5 ms playback start/resume and underrun transitions are enabled (default: true).</summary>
+        public bool PlaybackSmoothingEnabled => _playbackSmoothingEnabled;
+
+        /// <summary>
+        /// Enables or bypasses the 5 ms PCM playback transitions. May be set before initialization
+        /// or during playback. Preserves queued PCM, resampling state and the 60 ms prebuffer.
+        /// Does not affect browser-direct WebRTC providers.
+        /// </summary>
+        public async Task<bool> SetPlaybackSmoothingEnabledAsync(bool enabled)
+        {
+            try
+            {
+                if (_audioModule != null && !await _audioModule.InvokeAsync<bool>("setPlaybackSmoothingEnabled", enabled))
+                    return false;
+                _playbackSmoothingEnabled = enabled;
+                return true;
+            }
+            catch (Exception ex)
+            {
+                Log(LogLevel.Error, $"Could not change playback smoothing: {ex.Message}");
+                return false;
+            }
         }
 
         /// <summary>

@@ -1,6 +1,9 @@
+import { normalizeWebRtcAudioOptions, webRtcMicrophoneConstraints, webRtcPeerConfiguration, createWebRtcAudioController } from './webrtc-audio.js';
+
 export function createOpenAiDirectLiveClient(configuration, dotNet) {
     const options = typeof configuration === "string" ? JSON.parse(configuration) : configuration;
-    let peer, events, microphone, playback, disconnectTimer;
+    let peer, events, microphone, playback, disconnectTimer, browserAudio;
+    const audioOptions = normalizeWebRtcAudioOptions(options.browserAudio);
     let disposed = false, finalized = false;
     let translationEvents = Promise.resolve(), translationClosing = false;
     const abort = new AbortController();
@@ -20,6 +23,7 @@ export function createOpenAiDirectLiveClient(configuration, dotNet) {
     function dispose() {
         if (disposed) return;
         disposed = true;
+        browserAudio?.stop();
         abort.abort();
         for (const timer of timers) clearTimeout(timer);
         timers.clear();
@@ -41,7 +45,9 @@ export function createOpenAiDirectLiveClient(configuration, dotNet) {
         // Attach the rejection handler before WebRTC can deliver an early error.
         started.catch(() => {});
         try {
-            peer = new RTCPeerConnection();
+            peer = new RTCPeerConnection(webRtcPeerConfiguration(audioOptions));
+            browserAudio = createWebRtcAudioController(peer, audioOptions,
+                snapshot => dotNet?.invokeMethodAsync('OnWebRtcDiagnosticsReceived', JSON.stringify(snapshot)));
             playback = document.createElement("audio");
             playback.autoplay = true;
             playback.controls = true; // Allows the caller to resume playback if autoplay is blocked.
@@ -49,16 +55,18 @@ export function createOpenAiDirectLiveClient(configuration, dotNet) {
             document.body.appendChild(playback);
             peer.ontrack = event => {
                 if (disposed) return;
+                browserAudio.remoteTrack(event);
                 playback.srcObject = event.streams[0] || new MediaStream([event.track]);
                 void playback.play().catch(() => { /* Native playback controls remain available. */ });
             };
             peer.onconnectionstatechange = () => {
+                browserAudio.connectionStateChanged();
                 clearTimeout(disconnectTimer);
                 if (peer.connectionState === "failed") fail("Live WebRTC media connection failed");
                 if (peer.connectionState === "disconnected") disconnectTimer = setTimeout(() => fail("Live WebRTC media connection lost"), 5000);
             };
             const capture = navigator.mediaDevices.getUserMedia({ audio: {
-                echoCancellation: true, noiseSuppression: true, autoGainControl: true,
+                ...webRtcMicrophoneConstraints(audioOptions),
                 ...(options.microphoneId ? { deviceId: { exact: options.microphoneId } } : {})
             } });
             // getUserMedia cannot be cancelled; stop a stream that arrives after disposal.

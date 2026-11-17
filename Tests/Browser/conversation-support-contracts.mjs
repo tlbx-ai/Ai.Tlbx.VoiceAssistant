@@ -100,3 +100,6 @@ send('input_audio_buffer.committed');
 assert.equal(controlledSent.at(-1).type, 'response.create');
 await controlled.stop();
 console.log('Voice-to-voice regression contracts: default audio/tool behavior, status, cancel reservation and tool/speech overlap passed.');
+
+// Shared WebRTC audio acceptance is part of the existing release gate.
+await import('./webrtc-audio-contracts.mjs');

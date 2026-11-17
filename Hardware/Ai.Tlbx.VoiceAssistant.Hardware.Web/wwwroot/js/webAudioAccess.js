@@ -20,6 +20,7 @@ let deEsserNode = null;    // High-shelf EQ to tame sibilance before compression
 let compressorNode = null; // Audio compressor for voice enhancement
 let makeupGainNode = null; // Input gain before compression
 let playbackEqNodes = [];  // BiquadFilterNode chain for playback EQ
+let playbackSmoothingEnabled = true;
 let currentEqPreset = 'flat'; // Neutral default; Clarity remains available explicitly
 // Note: We properly stop streams when done - don't hog the microphone!
 
@@ -77,6 +78,12 @@ function requestPlaybackDrain(generation, timeoutMs) {
         playbackDrains.set(requestId, { resolve, timer, generation });
         node.port.postMessage({ command: 'drain', requestId });
     });
+}
+
+function setPlaybackSmoothingEnabled(enabled) {
+    playbackSmoothingEnabled = !!enabled;
+    playbackWorkletNode?.port.postMessage({ command: 'setPlaybackSmoothing', enabled: playbackSmoothingEnabled });
+    return true;
 }
 
 // --- Playback EQ Presets ---
@@ -384,7 +391,7 @@ async function initAudioWithUserInteraction() {
         }
          try {
              console.log("Creating PlaybackProcessor node");
-             playbackWorkletNode = new AudioWorkletNode(audioContext, 'playback-processor');
+             playbackWorkletNode = new AudioWorkletNode(audioContext, 'playback-processor', { processorOptions: { smoothingEnabled: playbackSmoothingEnabled } });
              playbackWorkletNode.onprocessorerror = (event) => {
                  console.error('PlaybackProcessor error:', event);
                  dotNetReference?.invokeMethodAsync('OnAudioError', 'Playback processor error occurred.');
@@ -525,7 +532,7 @@ async function ensureAudioContextResumed() {
              await loadAudioWorkletModules(); // Need modules loaded too
              // Setup playback node again if missing
               if (!playbackWorkletNode && audioContext.state !== 'closed') {
-                   playbackWorkletNode = new AudioWorkletNode(audioContext, 'playback-processor');
+                   playbackWorkletNode = new AudioWorkletNode(audioContext, 'playback-processor', { processorOptions: { smoothingEnabled: playbackSmoothingEnabled } });
                    connectPlaybackChain();
               }
               logVerbose('AudioContext created/reinitialized in ensure function', {
@@ -1278,6 +1285,7 @@ window.audioInterop = {
     cleanupAudio,
     getDiagnostics,
     setDiagnosticLevel,
+    setPlaybackSmoothingEnabled,
     setPlaybackEqPreset,
     getPlaybackEqPresets
 };
@@ -1308,6 +1316,7 @@ export {
     cleanupAudio,
     getDiagnostics,
     setDiagnosticLevel,
+    setPlaybackSmoothingEnabled,
     setPlaybackEqPreset,
     getPlaybackEqPresets
 };

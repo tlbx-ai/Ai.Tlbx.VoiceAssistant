@@ -138,6 +138,7 @@ class PlaybackProcessor extends AudioWorkletProcessor {
 
         // Transition state tracks rendered output, never queue emptiness at arrival.
         this._transitionSamples = Math.max(1, Math.round(sampleRate * TRANSITION_SECONDS));
+        this._smoothingEnabled = options?.processorOptions?.smoothingEnabled !== false;
         this._lastOutputSample = 0;
         this._inUnderrun = true;
         this._fadeOutRemaining = 0;
@@ -151,7 +152,13 @@ class PlaybackProcessor extends AudioWorkletProcessor {
         this._enhancementEnabled = false; // Disabled by default for stability
 
         this.port.onmessage = (event) => {
-            if (event.data.command === 'drain') {
+            if (event.data.command === 'setPlaybackSmoothing') {
+                this._smoothingEnabled = !!event.data.enabled;
+                if (!this._smoothingEnabled) {
+                    this._fadeOutRemaining = 0;
+                    this._fadeInIndex = this._transitionSamples;
+                }
+            } else if (event.data.command === 'drain') {
                 this._drains.push({ requestId: event.data.requestId, target: this._writtenSamples });
                 // A completion fence also flushes short utterances below the prebuffer threshold.
                 this._prebufferRemaining = 0;
@@ -314,7 +321,7 @@ class PlaybackProcessor extends AudioWorkletProcessor {
                 if (this._inUnderrun) {
                     // Resume immediately, including during the tail of a short gap.
                     this._transitionStart = this._lastOutputSample;
-                    this._fadeInIndex = 0;
+                    this._fadeInIndex = this._smoothingEnabled ? 0 : this._transitionSamples;
                     this._fadeOutRemaining = 0;
                     this._inUnderrun = false;
                 }
@@ -334,8 +341,8 @@ class PlaybackProcessor extends AudioWorkletProcessor {
                     this._buffering = true;
                     this._prebufferRemaining = this._prebufferSamples;
                     this._transitionStart = this._lastOutputSample;
-                    this._fadeOutRemaining = this._transitionSamples;
-                   }
+                    this._fadeOutRemaining = this._smoothingEnabled ? this._transitionSamples : 0;
+                }
                 sample = this._fadeOutRemaining > 0
                     ? this._transitionStart * (--this._fadeOutRemaining / this._transitionSamples)
                     : 0;

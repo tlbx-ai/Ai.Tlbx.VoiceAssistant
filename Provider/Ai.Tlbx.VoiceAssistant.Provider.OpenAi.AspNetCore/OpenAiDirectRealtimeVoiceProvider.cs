@@ -45,6 +45,13 @@ public sealed class OpenAiDirectRealtimeVoiceProvider : IDirectBrowserVoiceProvi
         _browserOptions = browserOptions ?? new OpenAiDirectRealtimeBrowserOptions();
     }
 
+    private string? _webRtcDiagnosticSessionId;
+    /// <summary>Native browser audio preferences shared with the other Direct provider. Configure before start; reconnect to apply changes.</summary>
+    public OpenAiWebRtcAudioOptions BrowserAudioOptions { get; set; } = new();
+    /// <summary>Privacy-filtered native WebRTC observations. Keep handlers short; exceptions are isolated from media and tools.
+    /// Set StatisticsInterval to opt in to periodic counters. Missing browser support is reported as capability data.</summary>
+    public Action<OpenAiWebRtcDiagnosticSnapshot>? OnWebRtcDiagnostics { get; set; }
+
     public bool IsConnected => _isConnected;
 
     public AudioSampleRate RequiredInputSampleRate => AudioSampleRate.Rate24000;
@@ -85,7 +92,11 @@ public sealed class OpenAiDirectRealtimeVoiceProvider : IDirectBrowserVoiceProvi
             throw new ArgumentException("Settings must be of type OpenAiVoiceSettings for OpenAI direct realtime provider", nameof(settings));
         }
 
+        ArgumentNullException.ThrowIfNull(BrowserAudioOptions);
+        var diagnosticId = Guid.NewGuid().ToString("N");
+        var browserAudio = BrowserAudioOptions.ToBrowserJson(diagnosticId, OnWebRtcDiagnostics != null);
         openAiSettings.ValidateVoice();
+        _webRtcDiagnosticSessionId = diagnosticId;
         _settings = openAiSettings;
         ReportStatus("Preparing OpenAI browser session...");
 
@@ -101,6 +112,7 @@ public sealed class OpenAiDirectRealtimeVoiceProvider : IDirectBrowserVoiceProvi
 
         var startConfig = new DirectRealtimeBrowserStartConfig
         {
+            BrowserAudioJson = browserAudio.ToJsonString(),
             PreparedSessionId = preparedSessionId,
             MicrophoneId = string.IsNullOrWhiteSpace(microphoneDeviceId) ? null : microphoneDeviceId,
             Provider = "OpenAI",
@@ -111,7 +123,8 @@ public sealed class OpenAiDirectRealtimeVoiceProvider : IDirectBrowserVoiceProvi
             ClientResponseControl = openAiSettings.ClientResponseControl
         };
 
-        await _client!.InvokeVoidAsync("start", cancellationToken, startConfig);
+        try { await _client!.InvokeVoidAsync("start", cancellationToken, startConfig); }
+        catch { _webRtcDiagnosticSessionId = null; throw; }
         _isConnected = true;
 
         if (conversationHistory is not null)
@@ -137,6 +150,7 @@ public sealed class OpenAiDirectRealtimeVoiceProvider : IDirectBrowserVoiceProvi
 
     public async Task DisconnectAsync()
     {
+        _webRtcDiagnosticSessionId = null;
         if (_client is null)
         {
             _isConnected = false;
@@ -329,6 +343,21 @@ public sealed class OpenAiDirectRealtimeVoiceProvider : IDirectBrowserVoiceProvi
         return Task.CompletedTask;
     }
 
+    [JSInvokable]
+    public Task OnWebRtcDiagnosticsReceived(string snapshotJson)
+    {
+        try
+        {
+            var snapshot = OpenAiWebRtcDiagnosticSnapshot.Read(snapshotJson, _webRtcDiagnosticSessionId);
+            if (snapshot != null) OnWebRtcDiagnostics?.Invoke(snapshot);
+        }
+        catch (Exception ex)
+        {
+            _logAction.Invoke(LogLevel.Warn, $"WebRTC diagnostic ignored ({ex.GetType().Name}).");
+        }
+        return Task.CompletedTask;
+    }
+
     public async ValueTask DisposeAsync()
     {
         if (_isDisposed)
@@ -415,6 +444,7 @@ public sealed class OpenAiDirectRealtimeVoiceProvider : IDirectBrowserVoiceProvi
 
     private sealed class DirectRealtimeBrowserStartConfig
     {
+        public string BrowserAudioJson { get; init; } = "{}";
         public bool TextOnly { get; init; }
         public bool InterruptResponse { get; init; } = true;
         public bool ClientResponseControl { get; init; }

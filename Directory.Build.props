@@ -1,8 +1,8 @@
 <Project>
   <!-- Centralized version management for all projects -->
   <PropertyGroup>
-    <Version>11.11.0</Version>
-    <PackageReleaseNotes>Web PCM playback now uses a bounded 60 ms prebuffer and render-confirmed playback completion. Ordered delivery and generation checks prevent stale chunks and late clears from corrupting new playback; OpenAI and xAI reject audio from cancelled or superseded responses. All VoiceAssistant libraries and SIP packages share version 11.11.0.</PackageReleaseNotes>
+    <Version>11.12.0</Version>
+    <PackageReleaseNotes>Optional native WebRTC audio settings and typed RTP/playout diagnostics for Direct Realtime and GPT-Live, including Agent-Handoff. Adds receiver jitter-buffer hints, microphone processing preferences, bounded peer configuration, privacy-filtered statistics, lifecycle/backpressure safeguards and XML API documentation. Also includes the optional Web PCM 5 ms smoothing switch.</PackageReleaseNotes>
     <AssemblyVersion>$(Version)</AssemblyVersion>
     <FileVersion>$(Version)</FileVersion>
     

@@ -13,6 +13,7 @@
 @using Ai.Tlbx.VoiceAssistant.Demo.Web
 @using Ai.Tlbx.VoiceAssistant.Demo.Web.Services
 @using Ai.Tlbx.VoiceAssistant.Models
+@using Ai.Tlbx.VoiceAssistant.Hardware.Web
 @using Ai.Tlbx.VoiceAssistant.Interfaces
 @using Ai.Tlbx.VoiceAssistant.Managers
 @using System.Diagnostics
@@ -120,6 +121,15 @@
                                     else
                                     {
                                         <AiTalkControl OnStartTalking="StartSession" OnStopTalking="StopSession" IsTalking="voiceAssistant?.IsRecording ?? false" Loading="(voiceAssistant?.IsConnecting ?? false) || (voiceAssistant?.IsRecording ?? false)" />
+                                    }
+
+                                    @if (!IsSipMode && !IsConversationSupport && _selectedProviderString != "OpenAI" && HardwareAccess is WebAudioAccess)
+                                    {
+                                        <label for="playback-smoothing" class="flex items-center gap-2 text-xs text-gray-600">
+                                            <input id="playback-smoothing" type="checkbox" checked="@((HardwareAccess as WebAudioAccess)!.PlaybackSmoothingEnabled)"
+                                                   @onchange="OnPlaybackSmoothingChanged" />
+                                            5 ms playback smoothing
+                                        </label>
                                     }
 
                                     <!-- Provider Selection -->
@@ -741,6 +751,15 @@
     private string _currentModelString = OpenAiRealtimeModel.GptRealtime21.ToApiString();
     private List<ModelOption> availableModels = GetOpenAiModelOptions();
     private static List<ModelOption> GetOpenAiModelOptions() => OpenAiVoiceCatalog.GetModels().Select(model => new ModelOption(model.Id, model.Name + " (" + model.Id + ")")).ToList();
+    private async Task OnPlaybackSmoothingChanged(ChangeEventArgs args)
+    {
+        if (HardwareAccess is WebAudioAccess web && args.Value is bool enabled)
+        {
+            if (!await web.SetPlaybackSmoothingEnabledAsync(enabled))
+                Log(LogLevel.Error, "Could not update playback smoothing.");
+        }
+    }
+
     private bool IsLiveModel => _selectedProviderString == "OpenAI" && _currentModelString == "gpt-live-1";
     private string _liveBackendMode = "client";
     private bool IsAgentHandoff => IsLiveModel && _liveBackendMode == "agent";

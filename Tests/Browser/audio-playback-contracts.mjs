@@ -3,7 +3,7 @@ import vm from 'node:vm';
 import fs from 'node:fs/promises';
 
 const source = await fs.readFile(new URL('../../Hardware/Ai.Tlbx.VoiceAssistant.Hardware.Web/wwwroot/js/audio-processor.js', import.meta.url), 'utf8');
-function create(rate = 48000, buffered = false) {
+function create(rate = 48000, buffered = false, smoothing = true) {
     let Playback;
     vm.runInNewContext(source, {
         sampleRate: rate, Float32Array, ArrayBuffer,
@@ -11,7 +11,7 @@ function create(rate = 48000, buffered = false) {
         AudioWorkletProcessor: class { constructor() { this.messages = []; this.port = { postMessage: message => this.messages.push(message) }; } },
         registerProcessor(name, ctor) { if (name === 'playback-processor') Playback = ctor; }
     });
-    const p = new Playback();
+    const p = new Playback({ processorOptions: { smoothingEnabled: smoothing } });
     // Legacy signal/fade assertions isolate resampling; buffering is tested below.
     if (!buffered) { p._prebufferSamples = 0; p._prebufferRemaining = 0; }
     return p;
@@ -205,3 +205,47 @@ await d.run('stopAudioPlayback(5)');
 assert.equal(await cancelled, false, 'clear cancels drain');
 assert.equal(await d.run('waitForPlaybackDrain(5, 10)'), false, 'unresponsive worklet times out');
 console.log('JS delivery: serialized callers, stale/duplicate/missing sequences, late clear, resume race, drain acknowledgement and timeout passed.');
+
+// Bypass removes only the 5 ms transitions, including after clear/rebuffer.
+const raw = create(48000, false, false);
+send(raw, constant(480, .4));
+const rawStart = render(raw, 960);
+near(rawStart[0], .2, 'bypass retains the original interpolated first sample');
+near(rawStart[1], .4, 'bypass does not fade in PCM');
+assert.ok(render(raw, 300).every(x => x === 0), 'bypass adds no synthetic fade-out tail');
+send(raw, constant(480, -.4));
+near(render(raw, 960)[1], -.4, 'resume is not attenuated');
+raw.port.onmessage({ data: { command: 'clear' } });
+send(raw, constant(480, -.2));
+near(render(raw, 960)[0], -.1, 'clear preserves the disabled setting');
+
+const liveToggle = create(); send(liveToggle, constant(480, .4));
+render(liveToggle, 960); render(liveToggle, 64);
+liveToggle.port.onmessage({ data: { command: 'setPlaybackSmoothing', enabled: false } });
+assert.ok(render(liveToggle, 256).every(x => x === 0), 'disabling stops an active synthetic tail');
+send(liveToggle, constant(480, -.4));
+near(render(liveToggle, 960)[1], -.4, 'disabled resume preserves PCM');
+render(liveToggle, 64);
+liveToggle.port.onmessage({ data: { command: 'setPlaybackSmoothing', enabled: true } });
+send(liveToggle, constant(480, .4));
+assert.ok(Math.abs(render(liveToggle, 128)[1]) < .01, 're-enabling restores soft resume');
+const rawBuffered = create(48000, true, false); send(rawBuffered, constant(480, .4));
+assert.ok(render(rawBuffered, 2880).every(x => x === 0), 'bypass preserves the 60 ms prebuffer');
+rawBuffered.port.onmessage({ data: { command: 'drain', requestId: 9 } });
+render(rawBuffered, 960);
+assert.equal(rawBuffered.messages.length, 0, 'last nonzero sample must be rendered before drain');
+render(rawBuffered, 128);
+assert.deepEqual(rawBuffered.messages.map(x => [x.requestId, x.drained]), [[9, true]], 'bypass drain completes without a 5 ms tail');
+
+const queuedA = create(48000, false, false), queuedB = create();
+for (const p of [queuedA, queuedB]) send(p, signal);
+queuedB.port.onmessage({ data: { command: 'setPlaybackSmoothing', enabled: false } });
+assert.deepEqual(render(queuedA, signal.length * 2), render(queuedB, signal.length * 2), 'live toggle retains every queued PCM sample');
+const setting = deliveryContext();
+assert.equal(setting.run('playbackSmoothingEnabled'), true);
+assert.equal(setting.run('setPlaybackSmoothingEnabled(false)'), true);
+assert.deepEqual(JSON.parse(JSON.stringify(setting.posted.at(-1))), { command: 'setPlaybackSmoothing', enabled: false });
+setting.run('stopAudioPlayback(1)');
+assert.equal(setting.run('playbackSmoothingEnabled'), false, 'clear does not change the module preference');
+assert.equal(setting.run('window.audioInterop.setPlaybackSmoothingEnabled(true)'), true, 'global and module callers share the setter');
+console.log('Smoothing switch: constructor, live on/off, clear persistence, unchanged queued PCM/prebuffer and bypass drain passed.');

@@ -1,3 +1,5 @@
+import { normalizeWebRtcAudioOptions, webRtcMicrophoneConstraints, webRtcPeerConfiguration, createWebRtcAudioController } from './webrtc-audio.js';
+
 const TOOL_CALL_TIMEOUT_MS = 120000;
 const RESPONSE_WATCHDOG_MS = 120000;
 
@@ -32,6 +34,8 @@ export class OpenAiDirectRealtimeClient
         this.textOnly = false;
         this.responseWatchdog = null;
         this.closed = false;
+        this.browserAudio = null;
+        this.browserAudioOptions = normalizeWebRtcAudioOptions(options.browserAudio);
     }
 
     registerClientAction(action, handler)
@@ -41,6 +45,7 @@ export class OpenAiDirectRealtimeClient
 
     async start(config)
     {
+        const audioOptions = normalizeWebRtcAudioOptions(config?.browserAudioJson ?? this.options.browserAudio);
         this.textOnly = config?.textOnly === true;
         this.interruptResponse = config?.interruptResponse !== false;
         this.clientResponseControl = config?.clientResponseControl === true;
@@ -49,6 +54,7 @@ export class OpenAiDirectRealtimeClient
             await this.stop();
         }
 
+        this.browserAudioOptions = audioOptions;
         this.pendingRealtimeEvents = [];
         this.cancelRequested = false;
         this.userSpeaking = false;
@@ -96,6 +102,8 @@ export class OpenAiDirectRealtimeClient
 
     async stop()
     {
+        this.browserAudio?.stop();
+        this.browserAudio = null;
         this.sessionGeneration++;
         this.responseRequested = false;
         this.cancelRequested = false;
@@ -252,11 +260,14 @@ export class OpenAiDirectRealtimeClient
             document.body.appendChild(audioElement);
         }
 
-        this.peerConnection = new RTCPeerConnection(this.options.rtcConfiguration);
+        this.peerConnection = new RTCPeerConnection(webRtcPeerConfiguration(this.browserAudioOptions, this.options.rtcConfiguration));
+        this.browserAudio = createWebRtcAudioController(this.peerConnection, this.browserAudioOptions,
+            snapshot => this.options.onWebRtcDiagnostics?.(snapshot));
         this.peerConnection.ontrack = event =>
         {
+            this.browserAudio?.remoteTrack(event);
             if (this.textOnly) return;
-            audioElement.srcObject = event.streams[0];
+            audioElement.srcObject = event.streams[0] || new MediaStream([event.track]);
             void audioElement.play().catch(error =>
             {
                 this.emitDiagnostic('remote_audio.play_failed', {
@@ -267,6 +278,7 @@ export class OpenAiDirectRealtimeClient
         };
         this.peerConnection.onconnectionstatechange = () =>
         {
+            this.browserAudio?.connectionStateChanged();
             const state = this.peerConnection?.connectionState;
             this.emitDiagnostic('peer_connection.state', {
                 connectionState: state,
@@ -279,6 +291,7 @@ export class OpenAiDirectRealtimeClient
         };
         this.peerConnection.oniceconnectionstatechange = () =>
         {
+            this.browserAudio?.connectionStateChanged();
             const state = this.peerConnection?.iceConnectionState;
             this.emitDiagnostic('peer_connection.ice_state', {
                 iceConnectionState: state
@@ -436,9 +449,7 @@ export class OpenAiDirectRealtimeClient
         const audio = {
             channelCount: { ideal: 1 },
             sampleRate: { ideal: 48000 },
-            echoCancellation: true,
-            noiseSuppression: true,
-            autoGainControl: true
+            ...webRtcMicrophoneConstraints(this.browserAudioOptions)
         };
 
         if (deviceId)
@@ -1024,6 +1035,8 @@ export class OpenAiDirectRealtimeClient
             return;
         }
 
+        this.browserAudio?.stop();
+        this.browserAudio = null;
         this.activeResponse = false;
         this.clearResponseWatchdog();
         this.pendingRealtimeEvents = [];
@@ -1170,6 +1183,8 @@ export function createOpenAiDirectRealtimeClient(options, dotNetReference)
         sessionUrl: options?.sessionUrl ?? '/api/voice/direct/session',
         credentials: options?.credentials ?? 'include',
         rtcConfiguration: options?.rtcConfiguration,
+        browserAudio: options?.browserAudio,
+        onWebRtcDiagnostics: snapshot => dotNetReference?.invokeMethodAsync('OnWebRtcDiagnosticsReceived', JSON.stringify(snapshot)),
         emitMicrophoneLevelDiagnostics: options?.emitMicrophoneLevelDiagnostics === true,
         headers: () => options?.headers ?? {},
         onStatus: status => invokeDotNet(dotNetReference, 'OnDirectRealtimeStatus', status),

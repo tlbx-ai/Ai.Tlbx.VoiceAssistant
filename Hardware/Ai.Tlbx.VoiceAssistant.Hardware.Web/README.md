@@ -27,6 +27,14 @@ of PCM is buffered, or after a maximum 60 ms wait for a shorter utterance. The
 same bounded prebuffer applies after a real underrun; contiguous chunks keep
 sample-exact transitions. A drain request flushes short buffered tails.
 
+The 5 ms start/resume and underrun smoothing is enabled by default. For an A/B
+comparison, call `await webAudioAccess.SetPlaybackSmoothingEnabledAsync(false)`;
+pass `true` to enable it again. This works before initialization and during
+playback. `PlaybackSmoothingEnabled` reports the applied preference. It preserves
+queued PCM, resampling and the 60 ms prebuffer, and survives clear/reinitialization.
+The Web demo exposes this toggle for Google, xAI and Mistral PCM playback. It does
+not apply to SIP or OpenAI's direct WebRTC output.
+
 `WaitForPlaybackDrainAsync` places a fence behind prior submissions and waits for
 acknowledgement from the playback worklet, including its final fade. Browser
 output latency is then allowed for before completion. This confirms rendered

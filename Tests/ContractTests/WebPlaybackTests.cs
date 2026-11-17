@@ -23,6 +23,17 @@ static class WebPlaybackTests
 
     public static async Task RunAsync()
     {
+        var settingsModule = new Module();
+        var settingsHardware = new WebAudioAccess(settingsModule);
+        await using var settingsLifetime = (IAsyncDisposable)settingsHardware;
+        Require(settingsHardware.PlaybackSmoothingEnabled, "smoothing defaults to enabled");
+        Require(await settingsHardware.SetPlaybackSmoothingEnabledAsync(false), "setting before initialization");
+        Require(!settingsHardware.PlaybackSmoothingEnabled && settingsModule.Smoothing.Count == 0, "pre-init setting stores preference without opening audio");
+        await (Task)typeof(WebAudioAccess).GetMethod("LoadJavaScriptModule", BindingFlags.Instance | BindingFlags.NonPublic)!.Invoke(settingsHardware, null)!;
+        Require(settingsModule.Smoothing.SequenceEqual(new[] { false }), "module loading applies stored preference");
+        Require(await settingsHardware.SetPlaybackSmoothingEnabledAsync(true) && settingsHardware.PlaybackSmoothingEnabled, "live setting is applied");
+        settingsModule.RejectSmoothing = true;
+        Require(!await settingsHardware.SetPlaybackSmoothingEnabledAsync(false) && settingsHardware.PlaybackSmoothingEnabled, "failed interop does not change preference");
         await VerifyProviderOrderingAsync(new OpenAiVoiceProvider("contract-test"));
         await VerifyProviderOrderingAsync(new XaiVoiceProvider("contract-test"));
         var module = new Module { HoldFirstAudio = true };
@@ -112,7 +123,8 @@ static class WebPlaybackTests
 
     sealed class Module : IJSRuntime, IJSObjectReference
     {
-        public bool HoldFirstAudio, RejectAudio;
+        public bool HoldFirstAudio, RejectAudio, RejectSmoothing;
+        public ConcurrentQueue<bool> Smoothing = new();
         public int DrainCalls, ClearCalls;
         public ConcurrentQueue<(string Audio, long Generation, long Sequence)> Audio = new();
         public TaskCompletionSource<bool> AudioStarted = new(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -125,6 +137,12 @@ static class WebPlaybackTests
         #pragma warning restore BL0016
         private async ValueTask<T> InvokeCoreAsync<T>(string name, CancellationToken ct, object?[]? args)
         {
+            if (name == "import") return (T)(object)this;
+            if (name == "setPlaybackSmoothingEnabled")
+            {
+                Smoothing.Enqueue((bool)args![0]!);
+                return (T)(object)!RejectSmoothing;
+            }
             if (name == "playAudio")
             {
                 Audio.Enqueue(((string)args![0]!, (long)args[2]!, (long)args[3]!));

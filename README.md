@@ -24,6 +24,34 @@ For a ready-to-run browser demo, download the [Web demo ZIP](https://github.com/
 | Voxtral STT → application backend → TTS | [Mistral configuration](Provider/Ai.Tlbx.VoiceAssistant.Provider.Mistral/README.md) |
 | Company gateways and custom model IDs | [Gateway configuration](tools/gateway-configuration.md) |
 
+## Direct WebRTC audio controls and diagnostics (11.12.0)
+
+OpenAI's Direct Realtime and GPT-Live providers expose the same
+`BrowserAudioOptions` and typed `OnWebRtcDiagnostics` callback:
+
+```csharp
+provider.BrowserAudioOptions = new OpenAiWebRtcAudioOptions
+{
+    JitterBufferTargetMilliseconds = 125, // Optional 0–4000 ms browser hint.
+    StatisticsInterval = TimeSpan.FromSeconds(1) // Optional; off by default.
+};
+provider.OnWebRtcDiagnostics = snapshot => RecordWebRtcObservation(snapshot);
+```
+
+Configure before starting, and reconnect to apply changes. This also works with
+GPT-Live Agent-Handoff: audio remains native WebRTC while backend/tool work stays
+on its existing server-side path. Microphone filters are optional capture
+preferences; they do not repair received audio.
+
+Diagnostics distinguish native inbound RTP concealment, jitter-buffer behavior
+and optional local playout synthesis. Missing fields remain null; no audio, SDP,
+secrets or candidate addresses are forwarded. Defaults remain unchanged, missing
+browser capabilities do not terminate sessions, and diagnostic timers stop with
+the session.
+
+See the [full options table, both-provider setup, units, lifecycle and diagnostic
+interpretation](Provider/Ai.Tlbx.VoiceAssistant.Provider.OpenAi.AspNetCore/README.md#native-webrtc-audio-controls-and-diagnostics-11120).
+
 ## Native speaker output in 11.7.2
 
 `TranscriptSegment.Speaker` and `TranscriptWord.Speaker` retain the exact provider labels.

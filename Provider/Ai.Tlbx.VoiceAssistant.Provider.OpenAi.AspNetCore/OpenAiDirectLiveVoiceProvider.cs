@@ -22,6 +22,13 @@ public sealed class OpenAiDirectLiveVoiceProvider : IDirectBrowserVoiceProvider,
     private readonly SemaphoreSlim _lifecycle = new(1, 1);
     private bool _browserReady;
     private bool _disposed;
+    private string? _webRtcDiagnosticSessionId;
+    /// <summary>Native browser audio preferences shared with the other Direct provider. Configure before start; reconnect to apply changes.</summary>
+    public OpenAiWebRtcAudioOptions BrowserAudioOptions { get; set; } = new();
+    /// <summary>Privacy-filtered native WebRTC observations. Keep handlers short; exceptions are isolated from media and tools.
+    /// Set StatisticsInterval to opt in to periodic counters. Missing browser support is reported as capability data.</summary>
+    public Action<OpenAiWebRtcDiagnosticSnapshot>? OnWebRtcDiagnostics { get; set; }
+
     public bool IsConnected => _browserReady && _live.IsConnected;
     public bool FinalUsageConfirmed => _live.FinalUsageConfirmed;
     public string? SessionId => _live.SessionId;
@@ -77,6 +84,10 @@ public sealed class OpenAiDirectLiveVoiceProvider : IDirectBrowserVoiceProvider,
             ObjectDisposedException.ThrowIf(_disposed, this);
             if (_client != null) throw new InvalidOperationException("Stop the existing browser session first.");
             if (settings is not OpenAiLiveSettings liveSettings) throw new ArgumentException("Use OpenAiLiveSettings.", nameof(settings));
+            ArgumentNullException.ThrowIfNull(BrowserAudioOptions);
+            var diagnosticId = Guid.NewGuid().ToString("N");
+            var browserAudio = BrowserAudioOptions.ToBrowserJson(diagnosticId, OnWebRtcDiagnostics != null);
+            _webRtcDiagnosticSessionId = diagnosticId;
             starting = true;
             _live.SetStartupHistory(conversationHistory ?? Array.Empty<ChatMessage>());
             startup = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
@@ -94,7 +105,7 @@ public sealed class OpenAiDirectLiveVoiceProvider : IDirectBrowserVoiceProvider,
             // JSON strings keep this boundary explicit and Native AOT friendly.
             var config = new JsonObject { ["sessionUrl"] = _options.RoutePrefix + "/session", ["preparedSessionId"] = token,
                 ["microphoneId"] = microphoneDeviceId, ["timeoutMs"] = liveSettings.ConnectionTimeout.TotalMilliseconds,
-                ["closeTimeoutMs"] = liveSettings.CloseTimeout.TotalMilliseconds };
+                ["closeTimeoutMs"] = liveSettings.CloseTimeout.TotalMilliseconds, ["browserAudio"] = browserAudio };
             _client = await _module.InvokeAsync<IJSObjectReference>("createOpenAiDirectLiveClient", startupToken, config.ToJsonString(), _reference);
             await _client.InvokeVoidAsync("start", startupToken);
             _browserReady = true;
@@ -124,6 +135,7 @@ public sealed class OpenAiDirectLiveVoiceProvider : IDirectBrowserVoiceProvider,
     private async Task CleanupAsync()
     {
         _browserReady = false;
+        _webRtcDiagnosticSessionId = null;
         try { await _live.DisconnectAsync(); } // Keep browser media/data alive until the trusted terminal event arrives.
         finally
         {
@@ -188,6 +200,21 @@ public sealed class OpenAiDirectLiveVoiceProvider : IDirectBrowserVoiceProvider,
         _ = CleanupAfterFailureAsync();
         return Task.CompletedTask;
     }
+    [JSInvokable]
+    public Task OnWebRtcDiagnosticsReceived(string snapshotJson)
+    {
+        try
+        {
+            var snapshot = OpenAiWebRtcDiagnosticSnapshot.Read(snapshotJson, _webRtcDiagnosticSessionId);
+            if (snapshot != null) OnWebRtcDiagnostics?.Invoke(snapshot);
+        }
+        catch (Exception ex)
+        {
+            _options.Log?.Invoke(LogLevel.Warn, $"WebRTC diagnostic ignored ({ex.GetType().Name}).");
+        }
+        return Task.CompletedTask;
+    }
+
     public async ValueTask DisposeAsync()
     {
         if (_disposed) return;
