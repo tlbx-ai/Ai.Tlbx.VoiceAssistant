@@ -8,7 +8,7 @@
 
   <ItemGroup>
     <InternalsVisibleTo Include="SipDemoTests" />
-    <PackageReference Include="Ai.Tlbx.VoiceAssistant.Sip" Version="11.11.0" />
+    <PackageReference Include="Ai.Tlbx.VoiceAssistant.Sip" Version="11.12.0" />
     <ProjectReference Include="../../Provider/Ai.Tlbx.VoiceAssistant.Provider.Mistral/Ai.Tlbx.VoiceAssistant.Provider.Mistral.csproj" />
     <PackageReference Include="Ai.Tlbx.Inference" Version="2.6.0" />
     <ProjectReference Include="..\..\Hardware\Ai.Tlbx.VoiceAssistant.Hardware.Web\Ai.Tlbx.VoiceAssistant.Hardware.Web.csproj" />

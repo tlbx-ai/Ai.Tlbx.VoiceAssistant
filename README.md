@@ -30,6 +30,9 @@ OpenAI's Direct Realtime and GPT-Live providers expose the same
 `BrowserAudioOptions` and typed `OnWebRtcDiagnostics` callback:
 
 ```csharp
+using Ai.Tlbx.VoiceAssistant.Provider.OpenAi.AspNetCore;
+
+var provider = serviceProvider.GetRequiredService<OpenAiDirectLiveVoiceProvider>();
 provider.BrowserAudioOptions = new OpenAiWebRtcAudioOptions
 {
     JitterBufferTargetMilliseconds = 125, // Optional 0–4000 ms browser hint.
