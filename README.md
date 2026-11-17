@@ -24,6 +24,10 @@ For a ready-to-run browser demo, download the [Web demo ZIP](https://github.com/
 | Voxtral STT → application backend → TTS | [Mistral configuration](Provider/Ai.Tlbx.VoiceAssistant.Provider.Mistral/README.md) |
 | Company gateways and custom model IDs | [Gateway configuration](tools/gateway-configuration.md) |
 
+## SIP call control (11.13.0)
+
+The aligned [managed SIP core and VoiceAssistant adapter](https://github.com/tlbx-ai/Ai.Tlbx.Sip) add hold/resume, in-dialog media refresh, blind and attended REFER transfers, and caller/diversion identities. Both libraries support Windows and Linux on .NET 10/11. The call-control contribution by [AlexanderKuntze](https://github.com/tlbx-ai/Ai.Tlbx.Sip/pull/1) includes easybell PBX results; automated regressions additionally cover SRTP replay-window retention and REFER subscription correlation.
+
 ## Direct WebRTC audio controls and diagnostics (11.12.0)
 
 OpenAI's Direct Realtime and GPT-Live providers expose the same

@@ -1,8 +1,8 @@
 <Project>
   <!-- Centralized version management for all projects -->
   <PropertyGroup>
-    <Version>11.12.0</Version>
-    <PackageReleaseNotes>Optional native WebRTC audio settings and typed RTP/playout diagnostics for Direct Realtime and GPT-Live, including Agent-Handoff. Adds receiver jitter-buffer hints, microphone processing preferences, bounded peer configuration, privacy-filtered statistics, lifecycle/backpressure safeguards and XML API documentation. Also includes the optional Web PCM 5 ms smoothing switch.</PackageReleaseNotes>
+    <Version>11.13.0</Version>
+    <PackageReleaseNotes>Aligned 11.13.0 toolkit release accompanying SIP call control: hold/resume, in-dialog media refresh, blind and attended REFER transfer, caller and diversion identities. SIP core and adapter are published separately at the same version, with retained SRTP replay windows and REFER subscription correlation verified on Windows and Linux.</PackageReleaseNotes>
     <AssemblyVersion>$(Version)</AssemblyVersion>
     <FileVersion>$(Version)</FileVersion>
     
